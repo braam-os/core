@@ -4,14 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-Pre-implementation. The repo contains `LICENSE`, this file, and [doc/Concept.md](doc/Concept.md).
-There is no source code, no build system, and no tests yet; M0 has not been started.
+M0 (nucleus) is done: CMake build, the coroutine shim, the allocator, `Str`/`Span`/`Vec`/
+`Result`/`Option`, `host_log`, a Node test harness, and CI with a size budget. M1 (scheduler)
+is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification and the working plan.** Read it before
-doing anything substantive — it carries decisions and their rationale that are not recoverable
-from the code, because there is no code. It is also a workbook: §6 holds milestones M0–M9 with
-checkbox acceptance criteria. Tick them as work lands, and when a design decision changes,
-amend Concept.md in the same commit that changes the code.
+doing anything substantive — it carries decisions whose rationale is not recoverable from the
+code. It is also a workbook: §6 holds milestones M0–M9 with checkbox acceptance criteria. Tick
+them as work lands, and when a design decision changes, amend Concept.md in the same commit
+that changes the code.
+
+**[doc/Release_Notes.md](doc/Release_Notes.md) records why the code is the way it is**, per
+milestone. Comments in the source stay terse and say *what*; the *why* goes here. Read the M0
+section before touching the allocator, the coroutine shim, or the build flags — each departs
+from an obvious approach for a reason stated there and nowhere else.
 
 ## What this project is
 
@@ -21,26 +27,35 @@ deployable as a static site with no server and no special HTTP headers.
 
 ## Build
 
-No build system exists yet; creating one is part of M0. The compile command line below is
-verified working on this machine and is the starting point (Concept.md Appendix C):
+CMake with a toolchain file; Ninja is the tested generator.
 
 ```
-/opt/wasi-sdk-33.0/bin/clang++ \
-    --target=wasm32-unknown-unknown \
-    -std=c++20 -Os \
-    -nostdlib -nostdinc++ \
-    -fno-exceptions -fno-rtti -fno-threadsafe-statics \
-    -Wl,--no-entry -Wl,--export-dynamic -Wl,--allow-undefined
+cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --build build --target serve      # http://localhost:8080/
 ```
+
+`-DBRAAM_WASI_SDK=<path>` relocates the SDK (default `/opt/wasi-sdk-33.0`); `-DBRAAM_WERROR=ON`
+is what CI uses. The build produces `build/kernel.wasm`, a separate `build/test/tests.wasm`,
+and a ready-to-serve `build/web/`.
 
 `/opt/wasi-sdk-33.0` is used as a clang distribution only. **Nothing from its runtime or its
-headers is linked or included** — `-nostdinc++` is not optional. libc++'s `<coroutine>` in this
-SDK cannot be used freestanding (it pulls in `<cstring>`/`<cmath>`, which need a sysroot the
-bare `wasm32-unknown-unknown` target does not have). A hand-written shim over the
-`__builtin_coro_*` intrinsics replaces it, at `src/kernel/coroutine.h`.
+headers is linked or included** — `-nostdinc++` is not optional, and `--no-default-config`
+keeps its config file from injecting a sysroot. libc++'s `<coroutine>` in this SDK cannot be
+used freestanding (it pulls in `<cstring>`/`<cmath>`, which need a sysroot the bare
+`wasm32-unknown-unknown` target does not have). A hand-written shim over the `__builtin_coro_*`
+intrinsics replaces it, at [src/kernel/coroutine.h](src/kernel/coroutine.h).
 
-Verification is currently per-milestone: each milestone in Concept.md §6 states its own
-acceptance criterion. A test harness does not exist yet.
+Two link flags from the original Appendix C line are deliberately **absent**, and adding either
+back would be a regression: `--export-dynamic` (unreliable — exports are named individually
+with `BRAAM_EXPORT`) and `--allow-undefined` (without it, an accidental libc dependency is a
+link error rather than a runtime trap). See Concept.md §C.3.
+
+Verification is per-milestone — each milestone in Concept.md §6 states its own acceptance
+criterion — plus three CTest cases that run on every build: `smoke` asserts `kernel.wasm`'s
+exact import/export surface and that it boots, `unit` runs `tests.wasm` under Node, and `size`
+checks `tools/size_budget.txt`. New core code gets a case in [test/unit/](test/unit/).
 
 ## Architecture invariants
 
@@ -89,5 +104,10 @@ built, so that M0–M7 work does not have to be unpicked later. Do not design ar
   [doc/Release_Notes.md](doc/Release_Notes.md) or another document, where they can be read as
   prose and revised in one place.
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
-- Layout proposed for M0: `src/kernel/`, `src/fs/`, `src/prog/` (one self-registering file per
-  program), `src/user/`, `web/`, `tools/`. See Concept.md §7.
+- Layout: `src/kernel/`, `test/unit/`, `web/`, `tools/`, `cmake/`; `src/fs/`, `src/prog/` (one
+  self-registering file per program) and `src/user/` arrive with their milestones. Concept.md §7.
+- Exports are declared with `BRAAM_EXPORT("name")`, imports with `BRAAM_IMPORT("name")` — never
+  by linker flag. Either one changes the ABI, so update the expected surface in
+  [test/run.mjs](test/run.mjs) in the same commit.
+- `.clang-format` at the root is authoritative: 4-space indent, 100 columns. Types are
+  `PascalCase`, functions and variables `snake_case`, constants `SCREAMING_SNAKE`.

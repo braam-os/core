@@ -1,0 +1,3 @@
+# Binary size budgets, in bytes. One "name = limit" per line; the name is the
+# binary's file name. Raising a number is a deliberate act — see Concept.md §6.
+kernel.wasm = 32768

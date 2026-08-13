@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  WASI_SDK_VERSION: "33.0"
+  WASI_SDK_DIR: /opt/wasi-sdk-33.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Cache wasi-sdk
+        id: wasi-sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WASI_SDK_DIR }}
+          key: wasi-sdk-${{ env.WASI_SDK_VERSION }}-x86_64-linux
+
+      - name: Install wasi-sdk
+        if: steps.wasi-sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          tag="wasi-sdk-${WASI_SDK_VERSION%%.*}"
+          url="https://github.com/WebAssembly/wasi-sdk/releases/download/${tag}/wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "$url" -o /tmp/wasi-sdk.tar.gz
+          sudo mkdir -p /opt
+          sudo tar -xzf /tmp/wasi-sdk.tar.gz -C /opt
+          "$WASI_SDK_DIR/bin/clang++" --version
+
+      - name: Check formatting
+        run: |
+          "$WASI_SDK_DIR/bin/clang-format" --dry-run -Werror \
+            $(find src test -name '*.cpp' -o -name '*.h')
+
+      - uses: lukka/get-cmake@latest
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake \
+            -DBRAAM_WASI_SDK="$WASI_SDK_DIR" \
+            -DBRAAM_WERROR=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Report size
+        run: |
+          echo '### Binary size' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/size_budget.py --budgets tools/size_budget.txt build/kernel.wasm \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: braam-web
+          path: build/web/

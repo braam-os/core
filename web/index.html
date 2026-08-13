@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>braam</title>
+<style>
+    html { color-scheme: dark; }
+    body {
+        margin: 0;
+        padding: 2rem;
+        background: #12131a;
+        color: #c8cbd6;
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    h1 { margin: 0 0 1.5rem; font-size: 14px; font-weight: 600; color: #6f7488; }
+    #console { margin: 0; white-space: pre-wrap; }
+    .error { color: #e5687a; }
+</style>
+</head>
+<body>
+<h1>braam — M0 nucleus</h1>
+<pre id="console"></pre>
+<script type="module">
+const out = document.getElementById("console");
+
+function append(text, cls) {
+    const line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = text;
+    out.appendChild(line);
+}
+
+const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+
+worker.onmessage = ({ data }) => {
+    if (data.kind === "error") {
+        console.error(data.text);
+        append(data.text, "error");
+    } else {
+        console.log(data.text);
+        append(data.text);
+    }
+};
+
+worker.onerror = (e) => {
+    console.error(e.message);
+    append(`worker error: ${e.message}`, "error");
+};
+</script>
+</body>
+</html>

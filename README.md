@@ -22,17 +22,31 @@ something else:
 
 ## Status
 
-Early. The design is settled and written up; implementation has not started.
+Early. Milestone M0 — the nucleus — is done: a freestanding wasm build, a hand-written
+`<coroutine>` shim, an allocator built for coroutine frames, the base core types, and a page
+that boots the kernel in a Web Worker and prints a line. `kernel.wasm` is 4 KB. M1, the
+scheduler, is next.
 
 [doc/Concept.md](doc/Concept.md) is the specification and the development plan, including the
 milestone sequence M0–M9 and the reasoning behind each decision. Read it first.
+[doc/Release_Notes.md](doc/Release_Notes.md) explains why the code that exists looks the way it
+does.
 
 ## Building
 
 Requires [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) — used as a clang distribution
-only, since none of its runtime or headers are linked. There is no build system yet; it
-arrives with milestone M0. See Appendix C of the concept document for the verified compiler
-invocation.
+only, since none of its runtime or headers are linked — plus CMake, Ninja and Node.
+
+```
+cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --build build --target serve      # then open http://localhost:8080/
+```
+
+Pass `-DBRAAM_WASI_SDK=<path>` if the SDK is not at `/opt/wasi-sdk-33.0`. The build leaves a
+self-contained static site in `build/web/`; it needs no server and no special headers, so
+copying that directory anywhere is a deployment.
 
 ## License
 

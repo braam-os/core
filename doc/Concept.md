@@ -394,13 +394,18 @@ works everywhere and covers "get my data out."
 
 Each milestone has one objective and one acceptance criterion. Tick them off as we go.
 
-### M0 — Nucleus
+### M0 — Nucleus — **done**
 Freestanding build, the coroutine shim, the allocator, `Str`/`Vec`, `host_log`.
 Set a binary-size budget now and track it in CI from the first commit.
 
-- [ ] `make` produces a wasm binary with the Appendix C command line
-- [ ] A static page loads a ~30 KB wasm and logs a line to the console
-- [ ] Size budget recorded and enforced by CI
+- [x] `cmake --build` produces a wasm binary with the Appendix C command line
+- [x] A static page loads a 4 KB wasm and logs a line to the console
+- [x] Size budget recorded (32 KiB) and enforced by CI
+
+CMake replaces `make`. `Span<T>`, `Result<T, E>` and `Option<T>` came along with `Str`/`Vec`,
+since M1 needs them immediately; `String` and `HashMap` wait for M1, where the wake-token table
+will shape the latter. Appendix C's command line changed in three ways — see §C.3, and
+[Release_Notes.md](Release_Notes.md) for the reasoning behind each.
 
 ### M1 — Scheduler
 `Task<T>`, ready queue, wake tokens, `tick()`, `sleep_ms`.
@@ -467,15 +472,20 @@ Optionally, fuel injection as a metering alternative.
 
 ## 7. Repository layout
 
-Proposed, to be created in M0:
+As created in M0; the `src/fs`, `src/prog` and `src/user` directories arrive with their
+milestones.
 
 ```
 doc/Concept.md          this document
+doc/Release_Notes.md    reasoning behind the code, milestone by milestone
+CMakeLists.txt          the build
+cmake/                  the wasm32-unknown-unknown toolchain file
 src/kernel/             allocator, core types, Task, scheduler, Channel, Process
 src/kernel/coroutine.h  the freestanding <coroutine> shim (Appendix C)
 src/fs/                 Fs interface, MemFs, BundleFs, OpfsFs, HostFs, mount table
 src/prog/               one file per program; self-registering
 src/user/               LineEditor, shell, widget layer
+test/                   in-wasm unit tests and the Node driver
 web/                    index.html, worker.js, host shim, renderer
 tools/                  build scripts, bundle packer, size-budget check
 ```
@@ -609,7 +619,41 @@ the project's premise of owning its own foundation: the shim is a deliberate par
 a workaround. It lives in `src/kernel/coroutine.h`.
 
 The intrinsics the shim needs: `__builtin_coro_resume`, `__builtin_coro_destroy`,
-`__builtin_coro_done`, `__builtin_coro_promise`.
+`__builtin_coro_done`, `__builtin_coro_promise`, and `__builtin_coro_noop` for
+`noop_coroutine()`.
+
+Note that `std::coroutine_traits` must be *defined*, not merely declared: a forward declaration
+compiles until the first coroutine, which then fails to instantiate it.
+
+### C.3 Amended in M0
+
+Building the nucleus corrected three flags. The command line as used is:
+
+```
+/opt/wasi-sdk-33.0/bin/clang++ \
+    --no-default-config \
+    --target=wasm32-unknown-unknown \
+    -std=gnu++20 -Os \
+    -nostdlib -nostdinc++ \
+    -fno-exceptions -fno-rtti -fno-threadsafe-statics \
+    -ffunction-sections -fdata-sections \
+    -Wl,--no-entry -Wl,--gc-sections \
+    -Wl,--stack-first -Wl,-z,stack-size=131072
+```
+
+- **`--export-dynamic` is gone.** It is not a reliable way to export: it dropped a plain
+  `extern "C"` function while exporting `operator new`. Exports are named individually with
+  `__attribute__((export_name(...), used))`.
+- **`--allow-undefined` is gone.** Imports carry `__attribute__((import_module("host"),
+  import_name(...)))`, so nothing is left to resolve — and without the flag, an accidental libc
+  dependency is a link error instead of a runtime trap. `memcpy`/`memset` do not leak in:
+  bulk-memory is on by default and LLVM lowers them inline.
+- **`--no-default-config` and `--stack-first` are new.** The first suppresses the SDK's config
+  file, which injects a wasi sysroot. The second puts the shadow stack below the data segment,
+  so overflow traps rather than corrupting globals (§8.4).
+- `gnu++20` rather than `c++20`, because `TRY()` is a statement expression.
+
+Full reasoning in [Release_Notes.md](Release_Notes.md).
 
 ---
 
