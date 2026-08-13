@@ -4,7 +4,9 @@
 BUILD     ?= build
 GENERATOR ?= Unix Makefiles
 TOOLCHAIN := cmake/wasm32-unknown-unknown.cmake
-PORT      := 8080          # must match the serve target in CMakeLists.txt
+# No trailing comment here: make keeps the space before a `#`, and the port
+# would end up padded. Must match the serve target in CMakeLists.txt.
+PORT      := 8080
 
 # make's own -jN cannot reach the generated build: its jobserver descriptors do
 # not survive the cmake process in between. Pass a count explicitly instead.
@@ -25,7 +27,7 @@ serve: all
 ifeq ($(BROWSER),)
 	@echo "no browser opener found; visit http://localhost:$(PORT)/ yourself"
 else
-	@( sleep 1; $(BROWSER) http://localhost:$(PORT)/ ) &
+	@( sleep 1; $(BROWSER) "http://localhost:$(PORT)/" ) &
 endif
 	@cmake --build $(BUILD) --target serve
 
