@@ -1,6 +1,6 @@
 // The shell's grammar: a pipeline of commands, each with redirections.
 //
-//   pipeline := command ('|' command)*
+//   pipeline := command ('|' command)* ['&']
 //   command  := (word | redirect)+
 //   redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
 //
@@ -50,9 +50,14 @@ struct Pipeline {
 
     Result<void> freeze();
 
+    // `&`: the shell starts it and does not wait for it.
+    void set_background() { background_ = true; }
+
     // ---- after freeze() ----
 
     bool frozen() const { return frozen_; }
+
+    bool background() const { return background_; }
 
     usize size() const { return cmds_.size(); }
 
@@ -78,9 +83,10 @@ private:
     Vec<Command> cmds_;
     Vec<Str> word_view_;   // built by freeze() over the final store_
     Vec<Str> target_view_; //
-    usize argv0_  = 0;     // where the command being built starts
-    usize redir0_ = 0;
-    bool frozen_  = false;
+    usize argv0_     = 0;  // where the command being built starts
+    usize redir0_    = 0;
+    bool frozen_     = false;
+    bool background_ = false;
 };
 
 // Parses one line. An empty line yields a frozen pipeline with no commands.

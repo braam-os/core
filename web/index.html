@@ -31,13 +31,10 @@
 <body>
 <canvas id="screen" tabindex="0"></canvas>
 <pre id="status"></pre>
-<input id="picker" type="file" multiple hidden>
 <script type="module">
-import { normalise, consumes } from "./keys.js";
+import { mount } from "./braam.js";
 
-const canvas = document.getElementById("screen");
 const status = document.getElementById("status");
-const picker = document.getElementById("picker");
 
 function note(text, cls) {
     const line = document.createElement("div");
@@ -46,177 +43,22 @@ function note(text, cls) {
     status.appendChild(line);
 }
 
-// Without SharedArrayBuffer the main thread cannot see the kernel's memory, so
-// there is no main-thread rendering to fall back to (Concept.md §1).
-if (!canvas.transferControlToOffscreen) {
-    note("this browser has no OffscreenCanvas, so there is nothing to draw on", "error");
-    throw new Error("no OffscreenCanvas");
-}
-
-const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-
-// navigator.storage.persist() exists only on the main thread (Concept.md §A.2),
-// and asking for it is what keeps files from being evicted without warning. The
-// worker blocks its boot on the answer, so it is posted before anything else.
-(async () => {
-    let granted = false;
-    try {
-        if (navigator.storage && navigator.storage.persist)
-            granted = await navigator.storage.persist();
-    } catch {
-        granted = false;
-    }
-    worker.postMessage({ kind: "persisted", value: granted });
-})();
-
-// Only once per element: a future "reset kernel" button must replace the
-// <canvas>, not reuse it.
-const offscreen = canvas.transferControlToOffscreen();
-worker.postMessage({ kind: "canvas", canvas: offscreen }, [offscreen]);
-
-// The page owns the pixel box; the worker owns the font and therefore the
-// geometry. devicePixelContentBoxSize is the exact device-pixel box, and is
-// already right under fractional zoom.
-function viewport(entry) {
-    const dpr = window.devicePixelRatio || 1;
-    let width, height;
-    if (entry && entry.devicePixelContentBoxSize && entry.devicePixelContentBoxSize.length) {
-        const box = entry.devicePixelContentBoxSize[0];
-        width = box.inlineSize;
-        height = box.blockSize;
-    } else {
-        const rect = canvas.getBoundingClientRect();
-        width = Math.round(rect.width * dpr);
-        height = Math.round(rect.height * dpr);
-    }
-    worker.postMessage({ kind: "viewport", width, height, dpr });
-}
-
-new ResizeObserver((entries) => viewport(entries[0])).observe(canvas);
-
-// devicePixelRatio changes when the window moves to another monitor or the
-// browser zooms; the query has to be re-armed at the new ratio each time.
-function watchRatio() {
-    matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener(
-        "change",
-        () => {
-            viewport(null);
-            watchRatio();
+// Everything this page does is in braam.js now; what is left here is a canvas,
+// a place to put diagnostics, and the one browser check that has to happen
+// before anything is mounted. See embed.html for two of them on one page.
+try {
+    const term = mount({
+        canvas: document.getElementById("screen"),
+        onLog: (text) => console.log(text),
+        onError: (text) => {
+            console.error(text);
+            note(text, "error");
         },
-        { once: true });
-}
-watchRatio();
-
-addEventListener("keydown", (event) => {
-    const key = normalise(event);
-    if (consumes(event, key))
-        event.preventDefault();
-    if (key)
-        worker.postMessage({ kind: "key", code: key.code, mods: key.mods });
-});
-
-canvas.focus();
-
-// The three host services a worker cannot perform itself: navigator.clipboard,
-// <input type="file"> and a download all need the DOM (Concept.md §5.4). The
-// worker asks by id and the answer goes straight back.
-const E_PERM = 7, E_IO = 8;
-
-function pick() {
-    return new Promise((resolve) => {
-        const done = async () => {
-            const files = [...picker.files];
-            picker.value = "";
-            resolve(await Promise.all(files.map(async (f) => ({
-                name: f.name,
-                bytes: new Uint8Array(await f.arrayBuffer()),
-            }))));
-        };
-        picker.addEventListener("change", done, { once: true });
-        picker.addEventListener("cancel", () => {
-            picker.removeEventListener("change", done);
-            resolve([]);
-        }, { once: true });
-        // The keystroke that ran the command is still the current activation,
-        // which is what lets this open without a click of its own.
-        picker.click();
     });
+    term.focus();
+} catch (e) {
+    note(e.message, "error");
 }
-
-function save(name, bytes) {
-    const url = URL.createObjectURL(new Blob([bytes]));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-}
-
-// Reading the clipboard is only allowed from inside a user-gesture handler, and
-// a command reaches this page long after its keystroke returned — so the async
-// API is refused by design in some browsers. A paste is itself the gesture, and
-// needs no permission at all, so a refused read waits for one.
-let pasteWaiter = null;
-
-addEventListener("paste", (event) => {
-    if (!pasteWaiter)
-        return;
-    const resolve = pasteWaiter;
-    pasteWaiter = null;
-    event.preventDefault();
-    resolve(event.clipboardData ? event.clipboardData.getData("text") : "");
-});
-
-function awaitPaste() {
-    return new Promise((resolve) => {
-        if (pasteWaiter)
-            pasteWaiter(""); // a superseded wait answers empty rather than hanging
-        pasteWaiter = resolve;
-    });
-}
-
-async function service(data) {
-    switch (data.svc) {
-    case "clipRead":
-        return await navigator.clipboard.readText();
-    case "clipWait":
-        return await awaitPaste();
-    case "clipWrite":
-        await navigator.clipboard.writeText(data.text);
-        return null;
-    case "pick":
-        return await pick();
-    case "save":
-        save(data.name, data.bytes);
-        return null;
-    }
-    throw new Error(`unknown service ${data.svc}`);
-}
-
-worker.onmessage = ({ data }) => {
-    if (data.kind === "svc") {
-        service(data)
-            .then((value) => worker.postMessage({ kind: "svc-reply", id: data.id, value }))
-            .catch((e) => worker.postMessage({
-                kind: "svc-reply",
-                id: data.id,
-                error: (e && (e.name === "NotAllowedError" || e.name === "SecurityError"))
-                    ? E_PERM : E_IO,
-            }));
-        return;
-    }
-    if (data.kind === "error") {
-        console.error(data.text);
-        note(data.text, "error");
-    } else {
-        console.log(data.text);
-    }
-};
-
-worker.onerror = (e) => {
-    console.error(e.message);
-    note(`worker error: ${e.message}`, "error");
-};
 </script>
 </body>
 </html>

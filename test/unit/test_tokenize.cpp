@@ -34,6 +34,9 @@ Str lex(Str line, char *out, usize cap)
         case Tok::Pipe:
             put("|");
             break;
+        case Tok::Amp:
+            put("&");
+            break;
         case Tok::Less:
             put("<");
             break;
@@ -96,6 +99,8 @@ void test_tokenize()
     CHECK(lexed("a>b") == "{a}>{b}");
     CHECK(lexed("a>>b") == "{a}>>{b}");
     CHECK(lexed("a<b") == "{a}<{b}");
+    CHECK(lexed("sleep 5&") == "{sleep}{5}&");
+    CHECK(lexed("echo '&'") == "{echo}{&}");
 
     // A file descriptor binds only as a whole prefix.
     CHECK(lexed("cmd 2>f") == "{cmd}2>{f}");

@@ -107,6 +107,34 @@ struct String {
         n_--;
     }
 
+    // Splices `s` in at `at`, which is clamped to the end. In place, because
+    // an editor does this on every keystroke and a rebuild would churn the
+    // heap for a line that is nearly always shorter than its capacity.
+    bool insert(usize at, Str s)
+    {
+        if (at > n_)
+            at = n_;
+        if (!reserve(n_ + s.size()))
+            return false;
+        for (usize i = n_; i > at; i--)
+            p_[i - 1 + s.size()] = p_[i - 1];
+        __builtin_memcpy(p_ + at, s.data(), s.size());
+        n_ += s.size();
+        return true;
+    }
+
+    // Removes up to `n` bytes at `at`. Out of range is a no-op.
+    void erase(usize at, usize n = 1)
+    {
+        if (at >= n_)
+            return;
+        if (n > n_ - at)
+            n = n_ - at;
+        for (usize i = at; i + n < n_; i++)
+            p_[i] = p_[i + n];
+        n_ -= n;
+    }
+
     void clear() { n_ = 0; }
 
     // Drops everything past `n`. Never grows, and never touches the capacity.

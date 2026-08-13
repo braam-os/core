@@ -21,7 +21,12 @@ twenty programs. M6 (host services) is done: the `externref` table and `JsRef` i
 `src/kernel/jsref.h`, the generic request record in `src/kernel/hostcall.h` shared by both
 asynchronous imports, the `host_svc` ABI and `src/svc/` (fetch, WebSocket, clipboard, file
 transfer, wall clock), the `ref` export, the page-side relay in `web/`, `tools/wsd.mjs`, and
-twenty-seven programs. M7 (depth) is next.
+twenty-seven programs. M7 (depth) is done: the layout layer in `src/ui/` (`Pane`, `FullScreen`,
+`TextBuf`, `TextView`) with `screen_touch` under it, the keyboard claims in `src/user/tty.h`
+routed by the tty pump, `less` and `edit`, `&` with the job table in `src/user/job.{h,cpp}` and
+`jobs`/`fg`/`kill`, `ProcFs` on `/proc` with `sched_procs` under it, the `web/braam.js`
+embedding API, and thirty-two programs — all with no change to the wasm ABI. M8 (isolated
+processes) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -58,6 +63,9 @@ make clean      # rm -rf build
 
 Overrides: `JOBS=1` for a serial build (the default is the CPU count), `GENERATOR=Ninja` if it
 is installed and you want the ~30% faster build, `BUILD=<dir>` for the build tree.
+
+`build/web/` is assembled by its own always-run `web` target, not by the kernel's `POST_BUILD`,
+so editing a file under `web/` and running `make` refreshes what `make serve` serves.
 
 `CMAKE_ARGS` passes flags to the configure step, which only happens on a fresh tree or after
 `make clean` — so `make CMAKE_ARGS="-DBRAAM_WERROR=ON"` on an already-configured tree does
@@ -150,6 +158,11 @@ Further constraints that are easy to violate by habit:
   and receives an object as an argument of `host_svc`. Do not try to hand the table to JS.
 - **Never `new` anything.** `operator new` returns null on failure and `-fno-exceptions` means
   the expression would construct at address zero. Use `heap_new`/`heap_delete` from `alloc.h`.
+- **One receiver per `Channel`, and the keyboard's is the tty pump.** A full-screen program
+  claims a route through it (`KeyInput`, `InputClaim` in `src/user/tty.h`) rather than receiving
+  on `keys()`, which would displace the pump silently and lose `^C`. `^C` is never routed to a
+  claimant. And since `CancelState::waiting` is one slot, no task can be parked on a pipe and on
+  the keyboard at once — which is why `less` reads its input to the end before it paints.
 - **Every awaiter deregisters in its destructor.** `sched_unwait` from `~Awaiter` is what makes
   destroying a suspended frame safe rather than a dangling `Waiter *` in the wake table. An
   awaitable that parks and has no destructor is a use-after-free waiting to happen.
@@ -196,12 +209,13 @@ quietly.
   prose and revised in one place.
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
 - Layout: `src/kernel/`, `src/fs/` (paths, the VFS, the filesystems, the host storage ABI),
-  `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock), `src/user/` (line editor,
-  grammar, job runtime, shell, `BinFs`, boot), `src/prog/` (one self-registering file per
-  program), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`. Concept.md §7. `braam_fs` and
-  `braam_svc` are siblings above the kernel and below userland, and must not depend upwards or
-  on each other: anything needing the program registry belongs in `src/user/`, which is why
-  `BinFs` lives there.
+  `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock), `src/ui/` (the layout
+  layer: `Pane`, `FullScreen`, `TextBuf`, `TextView`), `src/user/` (line editor, grammar, job
+  runtime and job table, shell, `BinFs`, `ProcFs`, boot), `src/prog/` (one self-registering file
+  per program), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`. Concept.md §7. `braam_fs`,
+  `braam_svc` and `braam_ui` are siblings above the kernel and below userland, and must not
+  depend upwards or on each other: anything needing the program registry belongs in `src/user/`,
+  which is why `BinFs` and `ProcFs` live there, and `braam_ui` must stay clear of the VFS.
 - **`src/prog/` is an `OBJECT` library, not `STATIC`.** Nothing references those translation
   units by name — they reach the link only through their static-init registrars, and
   `--gc-sections` never extracts an unreferenced archive member. As an archive it would link

@@ -33,13 +33,21 @@ const PALETTE = [
 
 const FONT_STACK = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
+const FONT_PX = 15;
+
 export class Renderer {
-    constructor(canvas, mem) {
+    // `options` is an embedder's: {palette, fontFamily, fontSize}. The defaults
+    // above are what index.html gets, and a host page that wants its own theme
+    // passes them through braam.js rather than editing this file.
+    constructor(canvas, mem, options = {}) {
         this.canvas = canvas;
         this.ctx = canvas.getContext("2d", { alpha: false });
         this.mem = mem;
+        this.palette = options.palette || PALETTE;
+        this.fontFamily = options.fontFamily || FONT_STACK;
+        this.fontSize = options.fontSize || FONT_PX;
         this.info = 0; // descriptor address; 0 until the first resize
-        this.fontPx = 15;
+        this.fontPx = this.fontSize;
         this.dpr = 1;
         this.cellW = 8;
         this.cellH = 16;
@@ -59,7 +67,7 @@ export class Renderer {
         this.dpr = dpr;
         this.canvas.width = Math.max(1, Math.floor(width));
         this.canvas.height = Math.max(1, Math.floor(height));
-        this.fontPx = Math.max(8, Math.round(15 * dpr));
+        this.fontPx = Math.max(8, Math.round(this.fontSize * dpr));
         this.measure();
         return {
             cols: Math.max(1, Math.floor(this.canvas.width / this.cellW)),
@@ -69,7 +77,7 @@ export class Renderer {
 
     measure() {
         const ctx = this.ctx;
-        ctx.font = `${this.fontPx}px ${FONT_STACK}`;
+        ctx.font = `${this.fontPx}px ${this.fontFamily}`;
         ctx.textBaseline = "alphabetic";
 
         const m = ctx.measureText("M");
@@ -117,7 +125,7 @@ export class Renderer {
         const cursor = u32[base + S_CURSOR_ON] !== 0;
 
         const ctx = this.ctx;
-        ctx.font = `${this.fontPx}px ${FONT_STACK}`;
+        ctx.font = `${this.fontPx}px ${this.fontFamily}`;
         ctx.textBaseline = "alphabetic";
 
         for (let row = y; row < y1; row++) {
@@ -143,13 +151,13 @@ export class Renderer {
         const py = row * this.cellH;
 
         const ctx = this.ctx;
-        ctx.fillStyle = PALETTE[bg & 0x0f];
+        ctx.fillStyle = this.palette[bg & 0x0f];
         ctx.fillRect(px, py, this.cellW, this.cellH);
 
         if (ch === 0 || ch === 32)
             return;
 
-        ctx.fillStyle = PALETTE[(attrs & ATTR_BOLD ? fg | 8 : fg) & 0x0f];
+        ctx.fillStyle = this.palette[(attrs & ATTR_BOLD ? fg | 8 : fg) & 0x0f];
         ctx.fillText(String.fromCodePoint(ch), px, py + this.baseline);
 
         if (attrs & ATTR_UNDERLINE)

@@ -24,6 +24,13 @@ Task<i32> shell()
         co_await t;
 
     for (;;) {
+        // A background job that has finished is announced here rather than
+        // wherever it happened to end, which would land in the middle of a
+        // line being typed. In a coroutine of its own, like the boot mounting,
+        // so that its locals stay out of this frame.
+        if (Task<void> t = jobs_report(io.out))
+            co_await t;
+
         // The prompt lives in this frame, because read_line only holds a view
         // of it. A nonzero status shows up here rather than in a diagnostic
         // line: it costs nothing when everything works, and a pipeline's

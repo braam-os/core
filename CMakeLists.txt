@@ -44,6 +44,7 @@ target_include_directories(braam_flags INTERFACE ${CMAKE_SOURCE_DIR}/src)
 add_subdirectory(src/kernel)
 add_subdirectory(src/fs)
 add_subdirectory(src/svc)
+add_subdirectory(src/ui)
 add_subdirectory(src/user)
 add_subdirectory(src/prog)
 
@@ -51,7 +52,8 @@ add_subdirectory(src/prog)
 # directly; --gc-sections would not pull it out of an archive. The same is true
 # of src/prog, which is why it is an OBJECT library.
 add_executable(kernel src/kernel/main.cpp)
-target_link_libraries(kernel PRIVATE braam_prog braam_user braam_fs braam_svc braam_core braam_flags)
+target_link_libraries(kernel PRIVATE
+    braam_prog braam_user braam_fs braam_svc braam_ui braam_core braam_flags)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(BRAAM_SIZE_BUDGET_CHECK
@@ -67,16 +69,23 @@ set(BRAAM_PACK_BUNDLE
 
 add_custom_command(TARGET kernel POST_BUILD
     COMMAND ${BRAAM_SIZE_BUDGET_CHECK}
+    VERBATIM)
+
+# Assembling build/web/ is its own target, and it always runs: hanging it off
+# the kernel's POST_BUILD meant that editing only a file under web/ left the
+# served copy stale, since the kernel had nothing to relink.
+add_custom_target(web ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/web ${CMAKE_BINARY_DIR}/web
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:kernel> ${CMAKE_BINARY_DIR}/web/kernel.wasm
     COMMAND ${BRAAM_PACK_BUNDLE}
+    DEPENDS kernel
     VERBATIM)
 
 add_custom_target(serve
     COMMAND ${Python3_EXECUTABLE} -m http.server --directory ${CMAKE_BINARY_DIR}/web 8080
-    DEPENDS kernel
+    DEPENDS web
     USES_TERMINAL
     COMMENT "Serving ${CMAKE_BINARY_DIR}/web at http://localhost:8080/")
 

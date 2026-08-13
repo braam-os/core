@@ -125,8 +125,9 @@ void test_shell()
     run("true");
     CHECK(row(screen().cursor_y) == "$"); // back to a bare prompt
 
-    // help lists the registered programs, and there are twenty of them.
-    boot(80, 24);
+    // help lists the registered programs, and there are more of them than an
+    // ordinary grid has rows.
+    boot(80, 40);
     run("help");
     CHECK(some_row_starts("  echo"));
     CHECK(some_row_starts("  help"));
@@ -179,8 +180,9 @@ void test_shell()
     // Three stages at once.
     boot(60, 16);
     run("ls /bin | grep e | wc");
-    // clear date echo export false grep head help pbpaste sleep true version
-    CHECK(some_row_starts("12 12 "));
+    // clear date echo edit export false grep head help less pbpaste sleep
+    // true version
+    CHECK(some_row_starts("14 14 "));
     run("echo 'a");
     CHECK(some_row_starts("braam: unterminated quote"));
     CHECK(has_row("[2] $"));

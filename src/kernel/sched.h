@@ -4,6 +4,7 @@
 
 #include "coroutine.h"
 #include "result.h"
+#include "str.h"
 #include "task.h"
 #include "types.h"
 
@@ -42,9 +43,23 @@ struct Payload {
     u32 len = 0;
 };
 
-u32 sched_spawn(Task<i32> t);
+// One line of /proc: what the scheduler knows about a task.
+struct ProcInfo {
+    u32 pid;
+    Str name;
+    bool waiting;   // suspended on an awaitable
+    bool cancelled; // signalled, but not yet unwound
+};
+
+// `name` is stored as a view, so it must outlive the task: a literal, or a
+// Program's own name — never a local.
+u32 sched_spawn(Task<i32> t, Str name = {});
 void sched_cancel(u32 pid);
 bool sched_alive(u32 pid);
+
+// A snapshot of the live tasks, up to `cap`. Empty while the scheduler is being
+// torn down, when jobs[] holds freed pointers.
+usize sched_procs(ProcInfo *out, usize cap);
 i32 sched_tick(f64 now_ms);
 
 // False when nothing was waiting on the token: a late or cancelled event, which

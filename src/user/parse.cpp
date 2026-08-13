@@ -136,6 +136,22 @@ Result<void> parse(Str line, Pipeline &out, Str &message)
             continue;
         }
 
+        // `&` ends the line, and there is no list grammar for it to separate:
+        // `a & b` would need one, and M7 does not need `a & b`.
+        if (tok == Tok::Amp) {
+            if (!any_word) {
+                message = "syntax error near '&'";
+                return Err(Error::Invalid);
+            }
+            Result<Tok> after = lx.next(w);
+            if (after.is_err() || after.value() != Tok::End) {
+                message = "syntax error: '&' must end the line";
+                return Err(Error::Invalid);
+            }
+            out.set_background();
+            break;
+        }
+
         if (tok == Tok::Pipe) {
             if (!any_word) {
                 message = "syntax error near '|'";

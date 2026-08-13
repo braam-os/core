@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>braam — embedded</title>
+<style>
+    html { color-scheme: dark; }
+    body {
+        margin: 0;
+        height: 100vh;
+        box-sizing: border-box;
+        padding: 0.6rem;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 0.6rem;
+        background: #0e0f14;
+        color: #c8cbd6;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    header { color: #6f7488; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; min-height: 0; }
+    .term { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+    .term h2 { margin: 0 0 0.3rem; font-size: 13px; font-weight: normal; color: #6f7488; }
+    canvas { display: block; width: 100%; height: 100%; min-height: 0; border: 1px solid #242632; }
+    canvas:focus { border-color: #4a5a8a; outline: none; }
+    button { font: inherit; color: inherit; background: #1a1c26; border: 1px solid #242632; }
+</style>
+</head>
+<body>
+<header>
+    Two kernels on one page — one worker each, sharing nothing but the origin's storage.
+    Click a terminal to type in it. <button id="stop">dispose the right one</button>
+</header>
+<div class="pair">
+    <div class="term"><h2>left</h2><canvas id="left"></canvas></div>
+    <div class="term"><h2>right — amber</h2><canvas id="right"></canvas></div>
+</div>
+<script type="module">
+import { mount } from "./braam.js";
+
+// A palette is an embedder's choice, so the right-hand terminal takes one of
+// its own; everything else about the two is identical.
+const amber = [
+    "#1a1206", "#c2410c", "#a3a30c", "#d19a15", "#8a6a2a", "#a06a3a", "#c08a4a", "#e8c07a",
+    "#4a3a1a", "#f97316", "#eab308", "#fbbf24", "#c9a05a", "#d99a6a", "#f0c68a", "#fff2d0",
+];
+
+const left = mount({ canvas: document.getElementById("left") });
+const right = mount({ canvas: document.getElementById("right"), palette: amber });
+left.focus();
+
+document.getElementById("stop").addEventListener("click", (event) => {
+    right.dispose();
+    event.target.disabled = true;
+    left.focus();
+});
+</script>
+</body>
+</html>

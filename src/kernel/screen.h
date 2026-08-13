@@ -85,6 +85,10 @@ struct Rect {
 // own move is folded in by screen_flush, so it is not counted here.
 Rect screen_damage();
 
+// Marks a rectangle damaged, clipped to the grid. For a writer that fills cells
+// through screen_cells() rather than through screen_put — the layout layer.
+void screen_touch(u32 x, u32 y, u32 w, u32 h);
+
 // Sends the accumulated damage to the host, once, and forgets it.
 void screen_flush();
 

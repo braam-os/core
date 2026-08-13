@@ -6,7 +6,7 @@ namespace {
 
 bool is_operator(char c)
 {
-    return c == '|' || c == '<' || c == '>';
+    return c == '|' || c == '&' || c == '<' || c == '>';
 }
 
 } // namespace
@@ -24,6 +24,10 @@ Result<Tok> Lexer::next(String &word)
     if (c == '|') {
         i_++;
         return Tok::Pipe;
+    }
+    if (c == '&') {
+        i_++;
+        return Tok::Amp;
     }
     if (c == '<') {
         i_++;

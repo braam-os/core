@@ -7,6 +7,181 @@ of the two needs amending.
 
 ---
 
+## M7 — Depth
+
+A program can take the whole screen and give it back, a job can outlive the prompt that started
+it, the scheduler can be read as files, and a host page can put a terminal on itself in six
+lines. Five new commands, one new library, and — the part worth stating first — **no ABI
+change at all**: no new import, no new export, and `test/run.mjs`'s exact-surface assertion is
+untouched. 225,784 bytes of `kernel.wasm`, against an unchanged 256 KiB budget.
+
+`Concept.md` is amended in four places: §3.5 (the layout layer, the keyboard claim, the saved
+screen, and re-wrap deferred), §3.6 (the job table, and the scheduler's names), §5.1 (`/proc`)
+and §7 (`src/ui/`).
+
+### One receiver, so the pump routes rather than yields
+
+`Channel` has one receiver and a second suspended receiver silently displaces the first. While
+a pipeline runs, that receiver is `tty_pump`, and the shell's handshake at the end of
+`run_line` — cancel the pump, wait for its report — depends on it. An editor that simply did
+`co_await keys().recv()` would displace the pump, take `^C` with it, and race that handshake.
+The bug would not look like a bug; it would look like the keyboard occasionally going dead.
+
+So a full-screen program does not receive keys, it **claims a route through the pump**:
+`KeyInput` gives it raw keys with the echo and the line discipline turned off, and the pump
+`try_send`s into its ring. One mechanism covers three cases that looked unrelated at the start
+of the milestone — the editor, the pager, and `fg`, which needs the *cooked* bytes to go to a
+different job's stdin and gets `InputClaim` for it.
+
+`^C` is deliberately not routed. An editor could reasonably want it, but a program that has
+taken the entire screen and stopped answering must stay killable by the key that kills
+everything, and that is M4's acceptance criterion as much as it is a safety rule. `edit` quits
+with `^Q` for the same reason, and ^C throws the buffer away.
+
+The claim is RAII and restores whatever was in force before, so claims nest — which is what
+lets `edit` run as a stage of a pipeline whose pump is already routing for something else.
+
+### The single waiting slot decides the shape of `less` and of `fg`
+
+`CancelState::waiting` is one slot, so a task cannot be parked on a pipe and on the keyboard at
+once. This is the same constraint that pushed pipelines into independent scheduler jobs in M4,
+and it shows up twice more here.
+
+`less` therefore reads its input to end-of-input *before* it paints anything. A real pager is
+lazy, and this one cannot be without becoming two coroutines and a refcounted shared block —
+the `chat` pattern, which is 100 lines and a class of lifetime bugs to buy laziness nobody
+asked for in a tab. It does claim the keyboard first, before reading, so that what is typed
+while a slow pipe fills is queued for the pager instead of being echoed at the shell.
+
+`fg` never awaits keys at all. It parks on the adopted job's completion token and lets the pump
+do the routing, which means ^C cancels *`fg`* — and `fg`'s destructor passes that on to the job
+it adopted. Cancellation propagating through a destructor rather than a branch is the same
+trick `run_line` and `chat` use, for the third time.
+
+### A background job is the same `Job`, with the reaper in the shell's place
+
+`Job` was already a refcounted heap block, already outliving the frames that point at it,
+already carrying its own `done` channel — M4 built it that way for a different reason, and
+backgrounding needed almost none of it changed. What a background job needs is somebody to
+stand where `run_line` stands: collect the reports, record the status, drop the last reference.
+That is `reaper`, forty lines.
+
+Three details are not obvious. `CancelAll` gained an `armed` flag rather than a branch around
+it, because it must still fire when setup fails partway. The command text is *copied* into the
+table entry — `run_line` receives a `Str` into the shell frame's line buffer, which is gone
+before `jobs` ever runs. And the entry holds a reference of its own, because `fg` and `kill`
+reach the pipes and the pids through it long after the shell moved on.
+
+A background job gets no pump and its stdin is closed at once. Giving it the keyboard would
+mean deciding which of several running jobs a keystroke belongs to, which is what a foreground
+group is for; end-of-input is what a shell does with `&` anyway.
+
+There is no `bg` and no `^Z`. Suspending a running coroutine at an arbitrary point is the
+resume-side twin of `CancelToken`: every awaitable would have to consult a stop flag and every
+awaitable would have to be resumable without an event. That is a milestone, not a command, and
+a stub that only ever printed "not supported" would be worse than its absence.
+
+Finished jobs are announced by the shell before the next prompt rather than wherever they
+happen to end, which would otherwise land in the middle of a line being typed. It is a
+coroutine of its own so that its locals stay out of `shell()`'s frame, which has a size class
+to fit inside — the same reason `boot_filesystem` is one.
+
+### `Pane` writes cells, so the kernel grew `screen_touch`
+
+`screen_cells()` has been public since M2 and writing through it marked nothing damaged, so the
+renderer would not have repainted what a pane wrote. The alternative was to route every pane
+write through `screen_put`, which moves the global cursor, defers wrapping, and scrolls the
+whole grid when it reaches the bottom — three behaviours a clipped rectangle must not have. One
+new function is the smaller change, and `screen_touch(x, y, w, h)` is what any later direct
+writer will want too.
+
+A pane fills with blank cells — codepoint 0 — rather than spaces, since 0 is what the grid means
+by empty and it still carries the pane's colours; that is what makes a reversed status line one
+`fill_row` rather than a loop of spaces.
+
+`FullScreen` copies the grid to a heap block and copies it back from its destructor. If the
+geometry changed while the program ran, it clears instead: the snapshot describes a grid that no
+longer exists, and pasting it back would be worse than blanking. That path is tested, because it
+is exactly what a window resize during `edit` does.
+
+### `/proc` is flat, and generated at open
+
+`BinFs` set the pattern in M5 and `ProcFs` follows it: a generated read-only filesystem, so
+`cat` and `grep` are the introspection tools and there is no second interface to keep in step
+with the first.
+
+Two departures from Linux. The tree is flat — `/proc/42` is a file, not a directory — because a
+process here has one line of state and a directory level would hold exactly one file; if a
+process ever grows `cmdline`, `cwd` and `fds`, that is the moment to add the level. And content
+is produced at `open` into a heap block that the descriptor owns, so a file read in two blocks
+cannot describe two different moments. `BinFs` could regenerate per read because a usage line
+never changes; `meminfo` changes on every allocation, including the ones `cat` itself makes.
+
+The scheduler had to give up a little: a `Str name` on its private job record, set at
+`sched_spawn`, and a `sched_procs` snapshot. The name is a view, so it must outlive the task —
+a literal or a `Program::name`, never a local — and the header says so. `sched_procs` returns
+nothing while `tearing_down` is set, for the reason `find_job` does: `jobs[]` holds freed
+pointers while `~Sched` walks it.
+
+### The embedding API is an extraction, not an invention
+
+`index.html` had 190 lines of module in it and nothing there could be imported. Everything below
+it was already dependency-injected — `makeFsImports`, `makeSvcImport`, `makeImports` all take
+their backends as arguments, which is what the test fakes have been proving since M5 — so the
+page was the only layer that was not.
+
+`web/braam.js` exports one function, `mount({canvas, ...})`, returning a handle with `focus()`
+and `dispose()`. The keyboard listener moved from `window` to the canvas, which is the one
+behavioural change: an embedded terminal shares its page, and two of them must not both read
+the same keystroke. `dispose()` exists because a host that swaps views has to be able to let go
+— it terminates the worker and drops every listener and observer.
+
+The worker stays one kernel per worker. That is not a limitation to fix later; it is the
+isolation model M8 builds on, and two terminals on a page are two workers that share nothing
+but the origin's storage. `web/embed.html` runs exactly that, with a different palette on the
+right-hand one to show that a theme is an embedder's choice.
+
+`E_PERM`/`E_IO`, which the page had been re-declaring as literals, now come from `abi.js` like
+everything else on the wire.
+
+### What the browser found, that no test could
+
+The unit cases and the smoke test drive `kernel.wasm`; nothing drives the shipping page. So the
+embedding API was checked in a real browser — headless Firefox, a page reporting back through
+the HTTP log, and a screenshot taken after a deliberately slow subresource delayed the load
+event. Two defects came out of it, both older than M7 and neither reachable from Node.
+
+**Boot waited on `navigator.storage.persist()`, which is not always quick.** M6 chose to block
+on it, reasoning that reporting the wrong durability is worse than a tick of delay. That is
+right about the trade and wrong about the number: Firefox took over five seconds to answer, and
+boot waited the whole time behind a blank canvas. The page now sends a provisional best-effort
+answer after a 250 ms grace period and the real answer when it arrives, and the late one
+corrects `OpfsStore.persisted` rather than boot — so `df` is right from the moment the browser
+decides. With two terminals on a page it was worse than slow: a second `persist()` issued while
+the first is outstanding did not settle until the first had, so the second kernel never booted
+at all. Persistence belongs to the origin, so the request is now made once per page.
+
+**`build/web/` went stale on a web-only edit.** Assembling it was a `POST_BUILD` step of the
+`kernel` target, so changing nothing but a `.js` file left `make serve` serving the previous
+copy — which is exactly how the first defect was nearly missed, since the fix under test was not
+the code being served. It is its own always-run target now.
+
+### Two things that did not land
+
+**Re-wrapping logical lines on resize.** §3.5 promised it to "the layout layer in M7", and the
+layout layer is the wrong place for it: re-wrapping needs to know which rows are continuations
+of the row above, which is a bit `screen_put` must set as it writes — inside the grid, below
+everything a pane can see. It also collides with `LineEditor`'s anchor arithmetic, which infers
+scrolls by comparing where a write should have ended against `cursor_y`. Doing it properly is
+scrollback's problem and it will arrive with scrollback.
+
+**A pane of `chat`'s own.** M6's notes said the layout layer is where an interactive program
+gets one. It is, but only for a program that owns the foreground: `chat`'s receiver is a
+detached task that outlives its parent, and painting into a pane whose owner is gone is the same
+use-after-free as writing into a pipe whose `Job` is gone. It still writes to the screen.
+
+---
+
 ## M6 — Host services
 
 The tab reaches outside itself: HTTP, WebSocket, the clipboard, the user's own disk, and a

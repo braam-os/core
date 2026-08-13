@@ -153,12 +153,48 @@ Programs added: `chat`, `curl`, `date`, `export`, `import`, `pbcopy`, `pbpaste`,
 twenty-seven. `kernel.wasm` went from 137,867 to 181,545 bytes against an unchanged 256 KiB
 budget. See [Release_Notes.md](Release_Notes.md).
 
-## M7 — Depth
+## M7 — Depth — **done**
 A layout/widget layer over the cell grid (panes, a `less`, an editor), job control,
 `/proc`-style introspection, an embedding API for host pages.
 
-- [ ] A full-screen editor opens, edits, and saves a file
-- [ ] Jobs can be backgrounded and listed
+- [x] A full-screen editor opens, edits, and saves a file
+- [x] Jobs can be backgrounded and listed
+
+Nothing here touched the ABI: no new import, no new export, and the exact-surface assertion in
+`test/run.mjs` is unchanged — which is the clearest statement that §2.2 and §3.4 are load
+bearing rather than decorative. Two functions were added inside the kernel: `screen_touch`,
+because the layout layer fills cells through `screen_cells()` and nothing marked them damaged,
+and `sched_procs`, because a task had no name and the scheduler had nothing enumerable.
+
+The layout layer is `src/ui/`, a fourth library beside `braam_fs` and `braam_svc`, holding
+`Pane`, `FullScreen`, `TextBuf` and `TextView` and depending on the kernel alone. A pane is a
+primitive an application composes its own screen out of, not a multiplexer: two jobs visible at
+once needs per-pane output routing and a window manager in the shell, which is a milestone of
+its own. `chat` still writes to the screen rather than into a pane, since it has no foreground
+to draw in.
+
+A full-screen program does not take the keyboard — it claims a route through the tty pump
+(`KeyInput`, `InputClaim`), because `keys()` has one receiver and that receiver is the pump.
+`^C` is never routed to a claimant. `less` reads its input to the end before it paints, since
+`CancelState::waiting` is a single slot and no task can be parked on a pipe and the keyboard at
+the same time; that same constraint is why `fg` never awaits keys at all.
+
+Job control is `&`, a job table beside the job runtime, and `jobs`/`fg`/`kill`. There is no
+`bg` and no `^Z`: stopping a running coroutine at an arbitrary point is the resume-side twin of
+`CancelToken`, and it would have to reach every awaitable. `/proc` is flat — `/proc/42` is a
+file, not a directory. `web/braam.js` is the embedding API, `web/embed.html` runs two kernels
+on one page, and `index.html` is now sixty lines that mount one. Re-wrapping logical lines on
+resize, which §3.5 had promised to this milestone, is deferred with a reason.
+
+The embedding API was checked in a real browser rather than only in Node, which turned up two
+defects older than this milestone: boot blocked on `navigator.storage.persist()`, which took
+over five seconds in Firefox and never settled at all for a second instance asking concurrently;
+and `build/web/` was assembled by the kernel's `POST_BUILD`, so a web-only edit left `make serve`
+serving the previous copy. Both are fixed here, and Concept.md §5.3 is amended for the first.
+
+Programs added: `edit`, `fg`, `jobs`, `kill`, `less`, for thirty-two. `kernel.wasm` went from
+181,545 to 225,784 bytes against an unchanged 256 KiB budget.
+See [Release_Notes.md](Release_Notes.md).
 
 ## M8 — Isolated processes
 The Concept.md §4.3 ABI, per-process `WebAssembly.Instance`, per-PID import closures,

@@ -96,6 +96,34 @@ void test_parse()
     CHECK(shape("echo 'a") == "!unterminated quote");
     CHECK(shape("a|b|c|d|e|f|g|h|i") == "!too many commands in a pipeline");
 
+    // `&` ends the line, and it is the pipeline that carries the flag rather
+    // than a command, since a pipeline is what runs in the background.
+    {
+        Pipeline pl;
+        Str message;
+        CHECK(parse("sleep 5 &", pl, message).is_ok());
+        CHECK(pl.background());
+        CHECK_EQ(pl.size(), 1);
+        CHECK_EQ(pl.args(0).size(), 2);
+        CHECK(pl.args(0)[1] == "5");
+    }
+    {
+        Pipeline pl;
+        Str message;
+        CHECK(parse("ls | wc &", pl, message).is_ok());
+        CHECK(pl.background());
+        CHECK_EQ(pl.size(), 2);
+    }
+    {
+        Pipeline pl;
+        Str message;
+        CHECK(parse("ls", pl, message).is_ok());
+        CHECK(!pl.background());
+    }
+    CHECK(shape("& ls") == "!syntax error near '&'");
+    CHECK(shape("ls & wc") == "!syntax error: '&' must end the line");
+    CHECK(shape("echo '&'") == "{echo}{&}");
+
     // Stage boundaries, checked apart from the rendering above.
     {
         Pipeline pl;

@@ -24,6 +24,10 @@ void test_io();
 void test_screen();
 void test_text();
 void test_prog();
+void test_procfs();
+void test_pane();
+void test_textbuf();
+void test_jobs();
 void test_edit();
 void test_tokenize();
 void test_parse();
@@ -76,6 +80,8 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_io();
     test_screen();
     test_text(); // after screen: it round-trips through the grid
+    test_pane();
+    test_textbuf();
     test_path();
     test_jsref();
     test_hostfs();
@@ -88,6 +94,8 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_tokenize();
     test_parse();
     test_shell();
+    test_jobs();
+    test_procfs();
 
     u32 failures = test_failures();
     HeapStats s  = heap_stats();

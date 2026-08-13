@@ -3,12 +3,14 @@
 #include "fs/vfs.h"
 #include "io.h"
 #include "kernel/alloc.h"
+#include "kernel/fmt.h"
 #include "kernel/key.h"
 #include "kernel/screen.h"
 #include "kernel/text.h"
 #include "kernel/traits.h"
 #include "kernel/vec.h"
 #include "parse.h"
+#include "tty.h"
 
 namespace {
 
@@ -58,6 +60,65 @@ void job_release(Job *j)
     if (--j->refs == 0) {
         j->~Job();
         heap_free(j);
+    }
+}
+
+// One line of the job table. It outlives the shell frame that started the job,
+// so the command text is copied rather than viewed.
+struct JobEntry {
+    u32 id  = 0;
+    u32 pid = 0;
+    String cmd;
+    Job *job     = nullptr; // holds a reference of its own
+    bool running = true;
+    i32 status   = 0;
+    u32 wait     = 0; // fg's wake token, while one is parked
+};
+
+struct Table {
+    Vec<JobEntry *> jobs;
+    u32 next_id = 1;
+    u32 current = 0;
+};
+
+// A pointer built on first use: a namespace-scope Vec has a destructor, and
+// nothing provides __cxa_atexit (CLAUDE.md).
+Table *g_table = nullptr;
+
+Table &table()
+{
+    if (!g_table) {
+        g_table = static_cast<Table *>(heap_alloc(sizeof(Table)));
+        if (!g_table)
+            panic("jobs: out of memory");
+        new (g_table) Table();
+    }
+    return *g_table;
+}
+
+JobEntry *find_entry(u32 id)
+{
+    for (JobEntry *e : table().jobs)
+        if (e->id == id)
+            return e;
+    return nullptr;
+}
+
+// The entry holds a reference of its own — `fg` and `kill` reach the job
+// through it long after run_line's frame is gone.
+void drop_entry(u32 id)
+{
+    Table &t = table();
+    for (usize i = 0; i < t.jobs.size(); i++) {
+        if (t.jobs[i]->id != id)
+            continue;
+        if (t.current == id)
+            t.current = 0;
+        if (t.jobs[i]->job)
+            job_release(t.jobs[i]->job);
+        heap_delete(t.jobs[i]);
+        t.jobs.erase(i);
+        return;
     }
 }
 
@@ -168,6 +229,8 @@ struct PumpEnd {
 
 // The only receiver on keys() while a pipeline runs, which is what keeps
 // Channel's one-receiver rule true: the shell is parked on `done`, not here.
+// A full-screen program does not displace it — it claims a route through it
+// (tty.h), which is why the two lookups below come before everything else.
 //
 // It never parks on the input pipe. A pipeline whose head ignores stdin —
 // `ls | grep foo` — would otherwise fill the ring after a few keystrokes,
@@ -187,17 +250,32 @@ Task<i32> tty_pump(Job *j)
         }
 
         Key k = r.value();
+
+        // ^C reaches the pipeline whatever is claimed: a program that has
+        // taken the screen and stopped answering must still be killable, and
+        // that is also M4's acceptance criterion.
+        if ((k.mods & MOD_CTRL) && k.code == 'c') {
+            screen_write("^C");
+            screen_newline();
+            for (u32 pid : j->pids)
+                sched_cancel(pid);
+            status = 130;
+            co_return status;
+        }
+
+        // Raw: no echo and no line discipline, since the claimant is painting
+        // the screen itself.
+        if (KeyRing *raw = tty_raw()) {
+            raw->try_send(k);
+            continue;
+        }
+
+        // Cooked, to whichever job's stdin is claimed — `fg`'s, or our own.
+        Pipe &to = tty_cooked() ? *tty_cooked() : j->input;
+
         if (k.mods & MOD_CTRL) {
-            if (k.code == 'c') {
-                screen_write("^C");
-                screen_newline();
-                for (u32 pid : j->pids)
-                    sched_cancel(pid);
-                status = 130;
-                co_return status;
-            }
             if (k.code == 'd')
-                j->input.close(); // end of input, not end of the pipeline
+                to.close(); // end of input, not end of the pipeline
             continue;
         }
 
@@ -215,11 +293,169 @@ Task<i32> tty_pump(Job *j)
 
         String chunk;
         if (chunk.assign(Str(utf8, n)))
-            j->input.try_send(move(chunk));
+            to.try_send(move(chunk));
     }
 }
 
+// A background job's join loop. It stands where run_line stands for a
+// foreground pipeline: nobody is waiting, so somebody has to collect the
+// reports, drop the job's last reference and record the status for `jobs`.
+Task<i32> reaper(Job *j, JobEntry *e, usize want, u8 last)
+{
+    i32 status = 0;
+
+    struct End {
+        ~End()
+        {
+            e->running = false;
+            e->status  = *status;
+            if (e->wait)
+                sched_wake(e->wait, 0, 0);
+            job_release(j);
+        }
+
+        Job *j;
+        JobEntry *e;
+        i32 *status;
+    } end{ j, e, &status };
+
+    for (usize got = 0; got < want;) {
+        Result<Report> r = co_await j->done.recv();
+        if (r.is_err()) {
+            if (r.error() == Error::Again)
+                continue;
+            for (u32 pid : j->pids)
+                sched_cancel(pid);
+            co_return 130;
+        }
+        got++;
+        if (r.value().index == last)
+            status = r.value().status;
+    }
+    co_return status;
+}
+
 } // namespace
+
+usize jobs_count()
+{
+    return table().jobs.size();
+}
+
+bool jobs_at(usize i, JobInfo &out)
+{
+    Table &t = table();
+    if (i >= t.jobs.size())
+        return false;
+    const JobEntry *e = t.jobs[i];
+    out               = JobInfo{ e->id, e->pid, e->cmd.str(), e->running, e->status };
+    return true;
+}
+
+bool jobs_find(u32 id, JobInfo &out)
+{
+    const JobEntry *e = find_entry(id);
+    if (!e)
+        return false;
+    out = JobInfo{ e->id, e->pid, e->cmd.str(), e->running, e->status };
+    return true;
+}
+
+u32 jobs_current()
+{
+    return table().current;
+}
+
+bool jobs_kill(u32 id)
+{
+    JobEntry *e = find_entry(id);
+    if (!e)
+        return false;
+    if (e->running && e->job)
+        for (u32 pid : e->job->pids)
+            sched_cancel(pid);
+    return true;
+}
+
+Pipe *jobs_input(u32 id)
+{
+    JobEntry *e = find_entry(id);
+    return e && e->job ? &e->job->input : nullptr;
+}
+
+Task<Result<i32>> jobs_wait(u32 id)
+{
+    JobEntry *e = find_entry(id);
+    if (!e)
+        co_return Err(Error::Invalid);
+    if (!e->running) {
+        i32 s = e->status;
+        drop_entry(id);
+        co_return s;
+    }
+
+    // The entry cannot be dropped under us: only jobs_report drops one, and it
+    // runs in the shell, which is parked on this job's pipeline while we wait.
+    Wake w;
+    struct Clear {
+        ~Clear()
+        {
+            if (e->wait == token)
+                e->wait = 0;
+        }
+
+        JobEntry *e;
+        u32 token;
+    } clear{ e, w.token() };
+
+    e->wait = w.token();
+    if (Result<Payload> r = co_await w; r.is_err())
+        co_return Err(r.error());
+
+    i32 s = e->status;
+    drop_entry(id);
+    co_return s;
+}
+
+Task<void> jobs_report(Stream out)
+{
+    Table &t = table();
+    for (usize i = 0; i < t.jobs.size();) {
+        JobEntry *e = t.jobs[i];
+        if (e->running) {
+            i++;
+            continue;
+        }
+
+        Buf<96> line;
+        line.put('[').put(e->id).put("] ");
+        if (e->status == 0)
+            line.put("done      ");
+        else if (e->status == 130)
+            line.put("interrupt ");
+        else
+            line.put("exit ").put(e->status).put("    ");
+        line.put(e->cmd.str()).put('\n');
+
+        u32 id = e->id;
+        co_await write_all(out, line.str());
+        drop_entry(id);
+    }
+}
+
+void jobs_reset()
+{
+    if (!g_table)
+        return;
+    for (JobEntry *e : g_table->jobs) {
+        if (e->job)
+            job_release(e->job);
+        heap_delete(e);
+    }
+    g_table->~Table();
+    heap_free(g_table);
+    g_table = nullptr;
+}
 
 Task<i32> run_line(Str line, Stdio io)
 {
@@ -301,6 +537,8 @@ Task<i32> run_line(Str line, Stdio io)
     struct CancelAll {
         ~CancelAll()
         {
+            if (!armed)
+                return;
             for (u32 pid : j->pids)
                 sched_cancel(pid);
             if (j->pump_pid)
@@ -308,6 +546,7 @@ Task<i32> run_line(Str line, Stdio io)
         }
 
         Job *j;
+        bool armed = true;
     } cancel_all{ j };
 
     usize launched = 0;
@@ -326,7 +565,8 @@ Task<i32> run_line(Str line, Stdio io)
         sio.err = f->err.fd >= 0 ? file_sink(f->err) : io.err;
 
         j->refs++; // the stage's own reference, dropped by StageEnd
-        u32 pid = sched_spawn(stage(j, u8(i), progs[i], j->pl.args(i), sio, in, out));
+        u32 pid =
+            sched_spawn(stage(j, u8(i), progs[i], j->pl.args(i), sio, in, out), progs[i]->name);
         if (!pid || !j->pids.push(pid)) {
             j->refs--;
             if (pid)
@@ -339,8 +579,41 @@ Task<i32> run_line(Str line, Stdio io)
     if (launched < n)
         co_await io.err.write("braam: out of memory\n");
 
+    // Backgrounded: nobody waits, so the job goes in the table with a reaper
+    // of its own and the shell comes straight back to the prompt. It gets no
+    // pump — the keyboard belongs to whatever runs in the foreground — and its
+    // stdin is therefore at end of input from the start.
+    if (j->pl.background() && launched == n) {
+        j->input.close();
+
+        JobEntry *e = heap_new<JobEntry>();
+        Table &t    = table();
+        if (e && e->cmd.assign(line) && t.jobs.push(e)) {
+            e->id  = t.next_id++;
+            e->pid = j->pids[0];
+            e->job = j;
+            j->refs++; // the entry's, dropped by drop_entry
+            t.current = e->id;
+
+            j->refs++; // the reaper's, dropped by its End
+            if (sched_spawn(reaper(j, e, launched, u8(n - 1)), "reap")) {
+                cancel_all.armed = false;
+
+                Buf<32> note;
+                note.put('[').put(e->id).put("] ").put(e->pid).put('\n');
+                co_await io.err.write(note.str());
+                co_return 0;
+            }
+            j->refs -= 2;
+            t.jobs.pop();
+        }
+        heap_delete(e);
+        co_await io.err.write("braam: out of memory\n");
+        co_return 1;
+    }
+
     j->refs++;
-    j->pump_pid = sched_spawn(tty_pump(j));
+    j->pump_pid = sched_spawn(tty_pump(j), "tty");
     if (!j->pump_pid)
         j->refs--;
 

@@ -11,13 +11,29 @@ const mem = new Memory();
 let renderer = null;
 let pending = null; // a canvas or viewport that arrived before the kernel did
 
+// What an embedder may choose: where the module and the bundle live, and how
+// the renderer draws. The defaults are the files beside this one, so a page
+// that wants none of this posts nothing (web/braam.js).
+let options = {};
+
 // navigator.storage.persist() is main-thread only (Concept.md §A.2), so the
 // page calls it and posts the answer down. Boot waits for it rather than
 // guessing, since `df` reporting the wrong durability is worse than a tick of
-// delay.
+// delay — but only briefly: the page sends a provisional answer when the
+// browser is slow to decide, and the real one after it. The second answer
+// corrects the store rather than boot.
 let persisted = null;
 const persistedKnown = new Promise((resolve) => {
     persisted = resolve;
+});
+
+let store = null;
+
+// The same handshake for the embedder's options, which decide where the module
+// is fetched from and therefore cannot be applied after boot has started.
+let configured = null;
+const configuredKnown = new Promise((resolve) => {
+    configured = resolve;
 });
 
 function emit(kind, text) {
@@ -38,9 +54,9 @@ function relay(msg) {
 }
 
 async function boot() {
-    const url = new URL("./kernel.wasm", import.meta.url);
-    const bundle = new URL("./bundle.bin", import.meta.url);
-    const store = await openStore(bundle, await persistedKnown);
+    const url = new URL(options.wasmUrl || "./kernel.wasm", import.meta.url);
+    const bundle = new URL(options.bundleUrl || "./bundle.bin", import.meta.url);
+    store = await openStore(bundle, await persistedKnown);
 
     // A reply arrives on a promise, so it is never on the stack of the tick
     // that issued the request; pumping from here is what gets the resumed task
@@ -94,7 +110,7 @@ async function boot() {
 }
 
 function attach(canvas) {
-    renderer = new Renderer(canvas, mem);
+    renderer = new Renderer(canvas, mem, options);
 }
 
 // The worker owns the font, so it owns the geometry: the page reports a box in
@@ -132,9 +148,18 @@ self.onmessage = ({ data }) => {
     if (!data)
         return;
 
-    // Boot itself waits on this one, so it is answered before the kernel exists.
+    // Boot itself waits on these two, so they are answered before the kernel
+    // exists. `options` must arrive first of all, since boot reads it.
+    if (data.kind === "options") {
+        options = data.options || {};
+        configured(true);
+        return;
+    }
+
     if (data.kind === "persisted") {
         persisted(!!data.value);
+        if (store)
+            store.persisted = !!data.value;
         return;
     }
 
@@ -178,4 +203,8 @@ self.onmessage = ({ data }) => {
     }
 };
 
-boot().catch((e) => emit("error", `boot failed: ${e && e.message ? e.message : e}`));
+// Nothing is fetched until the embedder's options arrive, since they say what
+// to fetch. web/braam.js posts them before anything else.
+configuredKnown
+    .then(boot)
+    .catch((e) => emit("error", `boot failed: ${e && e.message ? e.message : e}`));

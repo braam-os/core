@@ -50,7 +50,7 @@ BRAAM_EXPORT("init") void init(u32 heap_base)
     screen_write(line.str());
     screen_newline();
 
-    if (!sched_spawn(shell()))
+    if (!sched_spawn(shell(), "shell"))
         panic("braam: the shell would not spawn");
 }
 

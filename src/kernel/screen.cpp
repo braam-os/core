@@ -239,6 +239,16 @@ Rect screen_damage()
     return Rect{ g_x0, g_y0, g_x1 - g_x0, g_y1 - g_y0 };
 }
 
+void screen_touch(u32 x, u32 y, u32 w, u32 h)
+{
+    if (!sized() || !w || !h || x >= g.cols || y >= g.rows)
+        return;
+    u32 x1 = min(x + w, g.cols);
+    u32 y1 = min(y + h, g.rows);
+    damage(x, y);
+    damage(x1 - 1, y1 - 1);
+}
+
 void screen_flush()
 {
     // The cursor is drawn, not stored, so moving it dirties two cells.

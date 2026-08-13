@@ -99,7 +99,12 @@ function rows(s) {
 
 // Named keys, from the enum in src/kernel/key.h — keep the two in step.
 const NAMED = 0x110000;
-const KEY = { ENTER: NAMED, BACKSPACE: NAMED + 1, UP: NAMED + 6, HOME: NAMED + 10 };
+const KEY = {
+    ENTER: NAMED, BACKSPACE: NAMED + 1, TAB: NAMED + 2, ESCAPE: NAMED + 3,
+    DELETE: NAMED + 4, UP: NAMED + 6, DOWN: NAMED + 7, LEFT: NAMED + 8,
+    RIGHT: NAMED + 9, HOME: NAMED + 10, END: NAMED + 11, PAGE_UP: NAMED + 12,
+    PAGE_DOWN: NAMED + 13,
+};
 const CTRL = 2;
 
 const module = new WebAssembly.Module(readFileSync(file));
@@ -196,14 +201,14 @@ if (mode === "--kernel") {
         fail(`the prompt after a success is ${row(s, s.cursor_y)}, expected $`);
 
     submit("clear", 1045); // the programs need more than the whole grid
-    addr = instance.exports.resize(60, 40);
+    addr = instance.exports.resize(100, 48);
     if (addr === 0)
         fail("the resize before help failed");
     s = submit("help", 1050);
-    for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "export",
-                        "false", "grep", "head", "help", "import", "ls", "mkdir", "mount",
-                        "pbcopy", "pbpaste", "pwd", "rm", "sleep", "tail", "touch", "true",
-                        "version", "wc"])
+    for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "edit",
+                        "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
+                        "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "pwd", "rm", "sleep",
+                        "tail", "touch", "true", "version", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
 
@@ -557,6 +562,103 @@ if (mode === "--kernel") {
     s = submit("date -u", 3054);
     if (!rows(s).some((line) => /^\w\w\w \w\w\w \d\d \d\d:\d\d:\d\d \+0000 \d{4}$/.test(line)))
         fail(`date printed ${JSON.stringify(rows(s))}`);
+
+    // M7, first criterion: a full-screen editor opens a file, edits it, saves
+    // it, and gives the shell's screen back on the way out.
+    s = submit("clear", 3070);
+    s = submit("edit /home/m7.txt", 3071);
+    if (!rows(s).some((line) => line.startsWith(" /home/m7.txt")))
+        fail(`edit drew no status line: ${JSON.stringify(rows(s))}`);
+    if (row(s, 0) !== "")
+        fail(`edit did not take the screen: ${JSON.stringify(rows(s))}`);
+
+    type("hello");
+    press(KEY.ENTER);
+    type("editor");
+    instance.exports.tick(3072);
+    s = descriptor(addr);
+    if (row(s, 0) !== "hello" || row(s, 1) !== "editor")
+        fail(`typing did not reach the buffer: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith(" /home/m7.txt *")))
+        fail(`the modified flag never showed: ${JSON.stringify(rows(s))}`);
+
+    // Editing what is already there: back to the start of the line, and a
+    // character in the middle of it.
+    press(KEY.HOME);
+    press(KEY.UP);
+    press(KEY.RIGHT);
+    type("X");
+    press("s".codePointAt(0), CTRL); // save
+    instance.exports.tick(3073);
+    s = descriptor(addr);
+    if (row(s, 0) !== "hXello")
+        fail(`the edit did not land: ${JSON.stringify(rows(s))}`);
+    if (rows(s).some((line) => line.startsWith(" /home/m7.txt *")))
+        fail(`the buffer is still modified after a save: ${JSON.stringify(rows(s))}`);
+
+    press("q".codePointAt(0), CTRL); // quit
+    instance.exports.tick(3074);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`edit did not give the screen back: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3075);
+    s = submit("cat /home/m7.txt", 3076);
+    const saved = rows(s).filter((line) => line && !line.includes("$"));
+    if (saved.join(",") !== "hXello,editor")
+        fail(`the editor saved ${JSON.stringify(saved)}`);
+
+    // A pager over a pipe: it reads its input to the end, then takes the keys.
+    s = submit("clear", 3077);
+    s = submit("ls /bin | less", 3078);
+    if (!rows(s).some((line) => line.startsWith(" stdin ")))
+        fail(`less drew no status line: ${JSON.stringify(rows(s))}`);
+    if (row(s, 0) !== "cat")
+        fail(`less painted ${JSON.stringify(rows(s))}`);
+    press(KEY.PAGE_DOWN);
+    instance.exports.tick(3079);
+    s = descriptor(addr);
+    if (row(s, 0) === "cat")
+        fail("PgDn did not scroll the pager");
+    press("q".codePointAt(0));
+    instance.exports.tick(3080);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`less did not give the screen back: ${JSON.stringify(rows(s))}`);
+
+    // M7, second criterion: a job is backgrounded and listed, and its finish
+    // is announced at the next prompt.
+    s = submit("clear", 3081);
+    s = submit("sleep 5000 &", 3082);
+    if (!rows(s).some((line) => line.startsWith("[1] ")))
+        fail(`& said nothing: ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`& did not come back to a prompt: ${JSON.stringify(rows(s))}`);
+
+    s = submit("jobs", 3083);
+    if (!rows(s).some((line) => line.startsWith("[1]+ running sleep 5000 &")))
+        fail(`jobs listed nothing: ${JSON.stringify(rows(s))}`);
+
+    // The shell is at a prompt while it runs, so /proc can be read from there.
+    s = submit("clear", 3084);
+    s = submit("cat /proc/jobs", 3085);
+    if (!rows(s).some((line) => line.startsWith("1 ") && line.includes("running")))
+        fail(`/proc/jobs said nothing: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3086);
+    s = submit("cat /proc/meminfo", 3087);
+    if (!rows(s).some((line) => line.startsWith("reserved ")))
+        fail(`/proc/meminfo said nothing: ${JSON.stringify(rows(s))}`);
+
+    // The timer finally fires, and the job is reported and dropped.
+    instance.exports.tick(9000);
+    s = submit("", 9001);
+    if (!rows(s).some((line) => line.startsWith("[1] done")))
+        fail(`the finished job was never announced: ${JSON.stringify(rows(s))}`);
+    s = submit("clear", 9002);
+    s = submit("jobs", 9003);
+    if (rows(s).some((line) => line.startsWith("[1]")))
+        fail(`the finished job is still listed: ${JSON.stringify(rows(s))}`);
 
     console.log(`smoke ok: ${got_imports.length} imports, ${got_exports.length} exports`);
 } else {

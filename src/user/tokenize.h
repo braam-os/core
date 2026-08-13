@@ -13,6 +13,7 @@ enum class Tok : u8 {
     End,       // the line is exhausted
     Word,      //
     Pipe,      // |
+    Amp,       // &, and only at the end of a line
     Less,      // <
     Great,     // >
     DGreat,    // >>

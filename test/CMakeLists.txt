@@ -11,9 +11,12 @@ add_executable(tests
     unit/test_hostfs.cpp
     unit/test_jsref.cpp
     unit/test_io.cpp
+    unit/test_jobs.cpp
     unit/test_memfs.cpp
+    unit/test_pane.cpp
     unit/test_path.cpp
     unit/test_parse.cpp
+    unit/test_procfs.cpp
     unit/test_prog.cpp
     unit/test_result.cpp
     unit/test_sched.cpp
@@ -25,10 +28,12 @@ add_executable(tests
     unit/test_svc.cpp
     unit/test_task.cpp
     unit/test_text.cpp
+    unit/test_textbuf.cpp
     unit/test_vec.cpp
     unit/test_vfs.cpp)
 
-target_link_libraries(tests PRIVATE braam_prog braam_user braam_fs braam_svc braam_core braam_flags)
+target_link_libraries(tests PRIVATE
+    braam_prog braam_user braam_fs braam_svc braam_ui braam_core braam_flags)
 
 find_program(BRAAM_NODE node REQUIRED)
 

@@ -15,6 +15,7 @@ struct Timer {
 
 struct Job {
     u32 pid = 0;
+    Str name; // a view: the caller's literal, or a Program's own name
     Task<i32> root;
     CancelState cancel;
 };
@@ -120,7 +121,7 @@ Job *find_job(u32 pid)
 
 } // namespace
 
-u32 sched_spawn(Task<i32> t)
+u32 sched_spawn(Task<i32> t, Str name)
 {
     if (!t)
         return 0;
@@ -132,6 +133,7 @@ u32 sched_spawn(Task<i32> t)
     new (j) Job();
 
     j->pid                            = s.next_pid++;
+    j->name                           = name;
     j->root                           = move(t);
     j->root.handle().promise().cancel = &j->cancel;
     if (!s.jobs.push(j)) {
@@ -163,6 +165,25 @@ void sched_cancel(u32 pid)
 bool sched_alive(u32 pid)
 {
     return find_job(pid) != nullptr;
+}
+
+usize sched_procs(ProcInfo *out, usize cap)
+{
+    if (tearing_down)
+        return 0;
+
+    Sched &s = sched();
+    usize n  = 0;
+    for (Job *j : s.jobs) {
+        if (n == cap)
+            break;
+        out[n].pid       = j->pid;
+        out[n].name      = j->name;
+        out[n].waiting   = j->cancel.waiting != nullptr;
+        out[n].cancelled = j->cancel.cancelled;
+        n++;
+    }
+    return n;
 }
 
 i32 sched_tick(f64 now_ms)

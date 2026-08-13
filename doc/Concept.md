@@ -258,7 +258,21 @@ struct Screen {
 The wrap is deferred, so filling the last column does not scroll the screen on its own. A
 resize keeps the rows in use — `0..cursor_y` — dropping from the top when they no longer fit,
 and lands them at the top of the new grid. Re-wrapping logical lines needs a line model the
-grid does not have, and belongs with the layout layer in M7.
+grid does not have; M7 built the layout layer and left the promise unkept, because the model
+belongs *in* the grid rather than above it — a per-row continuation bit written by
+`screen_put` — and it lands with whichever milestone needs scrollback.
+
+The layout layer over the grid arrived with M7, in `src/ui/`, and it is three small things
+rather than a widget toolkit:
+
+- **`Pane`** — a rectangle with its own coordinates, style and cursor. Every write is clipped
+  to it, so a status line cannot scribble on the text above it. A pane writes cells directly
+  and marks them with `screen_touch`; it never scrolls, because scrolling moves the whole grid.
+- **`FullScreen`** — the alternate screen as RAII. The grid is copied to a heap block, blanked,
+  and copied back by the destructor, which is what gives the shell's screen back when a program
+  is cancelled while suspended.
+- **`TextBuf` and `TextView`** — logical lines and a window onto them. `less` and `edit` differ
+  in what they do with keys, not in how they scroll.
 
 Input is symmetric: a normalised `KeyboardEvent` becomes `{code, mods}`, is posted to the
 worker, and lands in a `Channel<Key>`. A printable key carries its Unicode codepoint; named
@@ -268,6 +282,12 @@ That is §2.3 applied to input. Line editing — history, cursor movement, kill-
 lives in a **userland** `LineEditor` coroutine, not in the kernel. That is where the "line
 discipline" belongs, and it is far nicer as a coroutine than as a termios state machine.
 
+There is exactly one receiver on that channel, and while a pipeline runs it is the tty pump. A
+full-screen program therefore **does not take the keyboard — it claims a route through the
+pump**: `KeyInput` for raw keys with no echo, `InputClaim` to send the cooked bytes to another
+job's stdin, which is what `fg` needs. `^C` is never routed; it cancels the pipeline whatever
+is claimed, so a program that has taken the screen and stopped answering stays killable.
+
 ### 3.6 Kernel objects
 
 - **`Channel<T>`** — an async MPSC queue with bounded capacity: `co_await ch.recv()` and
@@ -276,7 +296,14 @@ discipline" belongs, and it is far nicer as a coroutine than as a termios state 
   `spawn()` pushes it onto the scheduler. Killing means signalling the token; every
   `co_await` point checks it and unwinds by returning, so destructors run correctly.
   Structured concurrency: a parent `co_await`s a child group, and cancellation propagates
-  down the tree.
+  down the tree. The name is a view the scheduler keeps, and `sched_procs()` reads the table
+  back out — which is what /proc is made of (§5.1).
+- **The job table** — a pipeline started with `&` outlives the shell frame that started it, so
+  M7 filed it here: an id, the command text, the stages' pids, and a reaper task standing where
+  the shell stands for a foreground pipeline. `jobs`, `fg` and `kill` are ordinary programs
+  over it, and the shell announces a finished job at the next prompt. There is no `bg` and no
+  `^Z`: stopping a running coroutine at an arbitrary point is the resume-side twin of
+  `CancelToken` and would have to reach every awaitable.
 - **Filesystem** — an async node tree, not inodes. One interface, split by *when* the work can
   happen rather than by what it does: naming a file may need the host and therefore a wake
   token, but an already-open file does not (§5.2).
@@ -451,6 +478,12 @@ they were to hold does not exist yet:
 - **`/bin` is `BinFs`, a filesystem over the program registry.** Programs are in-kernel
   coroutines until M8 gives them binaries, so `/bin` would otherwise be an empty directory that
   `ls` could not account for. A file there reads as the program's usage line.
+- **`/proc` is `ProcFs`, the same trick over the scheduler** (M7): `meminfo`, `uptime`,
+  `version`, `mounts`, `jobs`, and one file per live pid. `cat` and `grep` are then the
+  introspection tools and there is no second interface to keep in step. The tree is flat —
+  `/proc/42` is a file, not a directory — because a process here has one line of state, and a
+  generated directory level would hold exactly one file. Content is produced at `open` and read
+  out of that snapshot, so a two-block read cannot describe two different moments.
 
 ### 5.2 OPFS is the primary store
 
@@ -495,7 +528,12 @@ reporting a boot-time snapshot.
 
 `persisted` is the one field the worker cannot obtain: `navigator.storage.persist()` exists only
 on the main thread (§A.2). The page calls it during boot and posts the answer down, and the
-worker's boot waits for it — reporting the wrong durability is worse than a tick of delay.
+worker's boot waits for it — reporting the wrong durability is worse than a tick of delay. It is
+a *bounded* wait since M7, because the call is not always a tick: Firefox took over five seconds
+to answer it, which is a blank screen rather than a delay. The page sends a provisional
+best-effort answer if the browser has not decided within a grace period, and the real answer
+after it; the second one corrects the store, so `df` is right from then on. The request is made
+once per page however many terminals are mounted, since persistence belongs to the origin.
 
 `df` reports the backend, the mode (persistent vs best-effort), the quota and the usage, so
 storage semantics are inspectable from inside the OS instead of being invisible browser
@@ -544,8 +582,9 @@ numbering here is cited from source comments.
 
 ## 7. Repository layout
 
-As created in M0; `src/prog` and `src/user` arrived with M3, `src/fs` with M5 and `src/svc`
-with M6.
+As created in M0; `src/prog` and `src/user` arrived with M3, `src/fs` with M5, `src/svc`
+with M6 and `src/ui` with M7. `braam_ui` is a sibling of `braam_fs` and `braam_svc`: above the
+kernel, below userland, and depending on neither of the other two.
 
 ```
 doc/Concept.md          this document
@@ -560,11 +599,12 @@ src/kernel/hostcall.h   the asynchronous host request, shared by both interfaces
 src/kernel/jsref.h      the externref table and JsRef (§3.7)
 src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
 src/svc/                fetch, WebSocket, clipboard, file transfer, wall clock
+src/ui/                 the layout layer: Pane, FullScreen, TextBuf, TextView (§3.5)
 src/prog/               one file per program; self-registering
-src/user/               LineEditor, grammar, job runtime, shell, BinFs, boot
+src/user/               LineEditor, grammar, job runtime, shell, BinFs, ProcFs, boot
 bundle/                 the tree tools/pack.py packs into /usr
 test/                   in-wasm unit tests, the Node driver, the storage and service fakes
-web/                    index.html, worker.js, host shim, storage and service shims, renderer
+web/                    braam.js (the embedding API), worker.js, host shim, shims, renderer
 tools/                  build scripts, bundle packer, size-budget check, chat server
 ```
 

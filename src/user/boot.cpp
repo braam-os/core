@@ -9,6 +9,7 @@
 #include "kernel/alloc.h"
 #include "kernel/screen.h"
 #include "kernel/traits.h"
+#include "procfs.h"
 
 namespace {
 
@@ -97,6 +98,11 @@ Task<void> boot_filesystem()
     if (Fs *bin = binfs_create())
         if (vfs_mount("/bin", bin).is_err())
             say("braam: /bin would not mount");
+
+    // The scheduler, the heap and the job table, readable with cat and grep.
+    if (Fs *proc = procfs_create())
+        if (vfs_mount("/proc", proc).is_err())
+            say("braam: /proc would not mount");
 
     if (Task<void> t = mount_bundle())
         co_await t;

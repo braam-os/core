@@ -80,7 +80,7 @@ BRAAM_PROGRAM(prog_chat, "chat", "<url> [<nick>] — talk over a WebSocket")
     s->ws = move(got.value());
 
     s->refs++;
-    u32 pid = sched_spawn(receive(s));
+    u32 pid = sched_spawn(receive(s), "chat-recv");
     if (!pid)
         s->refs--;
 

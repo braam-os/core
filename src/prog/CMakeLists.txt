@@ -10,12 +10,17 @@ add_library(braam_prog OBJECT
     date.cpp
     df.cpp
     echo.cpp
+    edit.cpp
     export.cpp
     false.cpp
+    fg.cpp
     grep.cpp
     head.cpp
     help.cpp
     import.cpp
+    jobs.cpp
+    kill.cpp
+    less.cpp
     ls.cpp
     mkdir.cpp
     mount.cpp
