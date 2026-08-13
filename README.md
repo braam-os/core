@@ -38,15 +38,17 @@ Requires [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) — used as a clang
 only, since none of its runtime or headers are linked — plus CMake, Ninja and Node.
 
 ```
-cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake
-cmake --build build
-ctest --test-dir build --output-on-failure
-cmake --build build --target serve      # then open http://localhost:8080/
+make            # build the kernel and the tests
+make run        # run the tests
+make serve      # serve the site and open it in a browser
+make clean
 ```
 
-Pass `-DBRAAM_WASI_SDK=<path>` if the SDK is not at `/opt/wasi-sdk-33.0`. The build leaves a
-self-contained static site in `build/web/`; it needs no server and no special headers, so
-copying that directory anywhere is a deployment.
+The Makefile is a wrapper; CMake is the build system, and `make CMAKE_ARGS=-DBRAAM_WASI_SDK=...`
+passes flags through to it — for instance if the SDK is not at `/opt/wasi-sdk-33.0`.
+
+The build leaves a self-contained static site in `build/web/`. It needs no server and no special
+headers, so copying that directory anywhere is a deployment.
 
 ## License
 

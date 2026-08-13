@@ -398,11 +398,12 @@ Each milestone has one objective and one acceptance criterion. Tick them off as 
 Freestanding build, the coroutine shim, the allocator, `Str`/`Vec`, `host_log`.
 Set a binary-size budget now and track it in CI from the first commit.
 
-- [x] `cmake --build` produces a wasm binary with the Appendix C command line
+- [x] `make` produces a wasm binary with the Appendix C command line
 - [x] A static page loads a 4 KB wasm and logs a line to the console
 - [x] Size budget recorded (32 KiB) and enforced by CI
 
-CMake replaces `make`. `Span<T>`, `Result<T, E>` and `Option<T>` came along with `Str`/`Vec`,
+CMake is the build system; the top-level `Makefile` is a wrapper over it (`all`, `run`, `serve`,
+`clean`). `Span<T>`, `Result<T, E>` and `Option<T>` came along with `Str`/`Vec`,
 since M1 needs them immediately; `String` and `HashMap` wait for M1, where the wake-token table
 will shape the latter. Appendix C's command line changed in three ways — see §C.3, and
 [Release_Notes.md](Release_Notes.md) for the reasoning behind each.
@@ -478,6 +479,7 @@ milestones.
 ```
 doc/Concept.md          this document
 doc/Release_Notes.md    reasoning behind the code, milestone by milestone
+Makefile                wrapper: all, run, serve, clean
 CMakeLists.txt          the build
 cmake/                  the wasm32-unknown-unknown toolchain file
 src/kernel/             allocator, core types, Task, scheduler, Channel, Process

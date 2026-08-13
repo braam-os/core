@@ -27,18 +27,28 @@ deployable as a static site with no server and no special HTTP headers.
 
 ## Build
 
-CMake with a toolchain file; Ninja is the tested generator.
+CMake with a toolchain file; Ninja is the tested generator. The top-level `Makefile` wraps it
+and configures on first use:
+
+```
+make            # build kernel.wasm and tests.wasm
+make run        # ctest
+make serve      # serve build/web/ and open a browser
+make clean      # rm -rf build
+```
+
+The underlying commands, when a flag needs passing:
 
 ```
 cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake
 cmake --build build
 ctest --test-dir build --output-on-failure
-cmake --build build --target serve      # http://localhost:8080/
 ```
 
 `-DBRAAM_WASI_SDK=<path>` relocates the SDK (default `/opt/wasi-sdk-33.0`); `-DBRAAM_WERROR=ON`
-is what CI uses. The build produces `build/kernel.wasm`, a separate `build/test/tests.wasm`,
-and a ready-to-serve `build/web/`.
+is what CI uses. Both reach the Makefile through `make CMAKE_ARGS=...`, which only takes effect
+on the configure step — after `make clean`, or on a fresh tree. The build produces
+`build/kernel.wasm`, a separate `build/test/tests.wasm`, and a ready-to-serve `build/web/`.
 
 `/opt/wasi-sdk-33.0` is used as a clang distribution only. **Nothing from its runtime or its
 headers is linked or included** — `-nostdinc++` is not optional, and `--no-default-config`
