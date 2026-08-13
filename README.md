@@ -35,7 +35,7 @@ does.
 ## Building
 
 Requires [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) — used as a clang distribution
-only, since none of its runtime or headers are linked — plus CMake, Ninja and Node.
+only, since none of its runtime or headers are linked — plus CMake, make and Node.
 
 ```
 make            # build the kernel and the tests
@@ -44,8 +44,9 @@ make serve      # serve the site and open it in a browser
 make clean
 ```
 
-The Makefile is a wrapper; CMake is the build system, and `make CMAKE_ARGS=-DBRAAM_WASI_SDK=...`
-passes flags through to it — for instance if the SDK is not at `/opt/wasi-sdk-33.0`.
+The Makefile is a wrapper; CMake is the build system, generating Unix Makefiles. Pass flags
+through with `make CMAKE_ARGS=-DBRAAM_WASI_SDK=...` — for instance if the SDK is not at
+`/opt/wasi-sdk-33.0`.
 
 The build leaves a self-contained static site in `build/web/`. It needs no server and no special
 headers, so copying that directory anywhere is a deployment.

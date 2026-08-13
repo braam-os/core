@@ -1,20 +1,22 @@
 # Convenience wrapper over CMake. The build system proper is CMakeLists.txt.
+# Override with GENERATOR=Ninja, JOBS=1, BUILD=<dir>.
 
 BUILD     ?= build
-GENERATOR ?= Ninja
+GENERATOR ?= Unix Makefiles
 TOOLCHAIN := cmake/wasm32-unknown-unknown.cmake
 PORT      := 8080          # must match the serve target in CMakeLists.txt
+
+# make's own -jN cannot reach the generated build: its jobserver descriptors do
+# not survive the cmake process in between. Pass a count explicitly instead.
+JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 # macOS ships `open`, most Linux desktops `xdg-open`.
 BROWSER := $(firstword $(foreach c,open xdg-open,$(shell command -v $(c) 2>/dev/null)))
 
-# Ninja does its own job control and cannot read make's jobserver pipe.
-unexport MAKEFLAGS
-
 .PHONY: all run serve clean
 
 all: $(BUILD)/CMakeCache.txt
-	@cmake --build $(BUILD)
+	@cmake --build $(BUILD) -j $(JOBS)
 
 run: all
 	@ctest --test-dir $(BUILD) --output-on-failure
@@ -31,4 +33,4 @@ clean:
 	@rm -rf $(BUILD)
 
 $(BUILD)/CMakeCache.txt:
-	@cmake -B $(BUILD) -G $(GENERATOR) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) $(CMAKE_ARGS)
+	@cmake -B $(BUILD) -G "$(GENERATOR)" -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) $(CMAKE_ARGS)

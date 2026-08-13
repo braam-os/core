@@ -4,8 +4,8 @@ project(braam LANGUAGES CXX)
 
 if(NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "wasm32")
     message(FATAL_ERROR
-        "braam builds only for freestanding wasm32. Configure with:\n"
-        "  cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake")
+        "braam builds only for freestanding wasm32. Use `make`, or configure with:\n"
+        "  cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake")
 endif()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)

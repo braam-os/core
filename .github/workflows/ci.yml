@@ -37,25 +37,21 @@ jobs:
           sudo tar -xzf /tmp/wasi-sdk.tar.gz -C /opt
           "$WASI_SDK_DIR/bin/clang++" --version
 
+      - name: Toolchain versions
+        run: cmake --version | head -1; make --version | head -1; node --version
+
       - name: Check formatting
         run: |
           "$WASI_SDK_DIR/bin/clang-format" --dry-run -Werror \
             $(find src test -name '*.cpp' -o -name '*.h')
 
-      - uses: lukka/get-cmake@latest
-
-      - name: Configure
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake \
-            -DBRAAM_WASI_SDK="$WASI_SDK_DIR" \
-            -DBRAAM_WERROR=ON
-
+      # Same entry points a developer uses; the generator is Unix Makefiles,
+      # so nothing beyond cmake, make and node is needed.
       - name: Build
-        run: cmake --build build
+        run: make CMAKE_ARGS="-DBRAAM_WASI_SDK=$WASI_SDK_DIR -DBRAAM_WERROR=ON"
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: make run
 
       - name: Report size
         run: |

@@ -27,8 +27,8 @@ deployable as a static site with no server and no special HTTP headers.
 
 ## Build
 
-CMake with a toolchain file; Ninja is the tested generator. The top-level `Makefile` wraps it
-and configures on first use:
+CMake with a toolchain file, generating Unix Makefiles — so the whole toolchain is clang, cmake,
+make and node, with no ninja. The top-level `Makefile` wraps it and configures on first use:
 
 ```
 make            # build kernel.wasm and tests.wasm
@@ -37,18 +37,18 @@ make serve      # serve build/web/ and open a browser
 make clean      # rm -rf build
 ```
 
-The underlying commands, when a flag needs passing:
+Overrides: `JOBS=1` for a serial build (the default is the CPU count), `GENERATOR=Ninja` if it
+is installed and you want the ~30% faster build, `BUILD=<dir>` for the build tree.
 
-```
-cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
+`CMAKE_ARGS` passes flags to the configure step, which only happens on a fresh tree or after
+`make clean` — so `make CMAKE_ARGS="-DBRAAM_WERROR=ON"` on an already-configured tree does
+nothing. `-DBRAAM_WASI_SDK=<path>` relocates the SDK (default `/opt/wasi-sdk-33.0`);
+`-DBRAAM_WERROR=ON` is what CI uses. The build produces `build/kernel.wasm`, a separate
+`build/test/tests.wasm`, and a ready-to-serve `build/web/`.
 
-`-DBRAAM_WASI_SDK=<path>` relocates the SDK (default `/opt/wasi-sdk-33.0`); `-DBRAAM_WERROR=ON`
-is what CI uses. Both reach the Makefile through `make CMAKE_ARGS=...`, which only takes effect
-on the configure step — after `make clean`, or on a fresh tree. The build produces
-`build/kernel.wasm`, a separate `build/test/tests.wasm`, and a ready-to-serve `build/web/`.
+Note that `make -jN` does **not** reach the compiler: make's jobserver descriptors do not
+survive the intervening cmake process, so the wrapper passes `-j $(JOBS)` explicitly. Change
+`JOBS`, not `-j`.
 
 `/opt/wasi-sdk-33.0` is used as a clang distribution only. **Nothing from its runtime or its
 headers is linked or included** — `-nostdinc++` is not optional, and `--no-default-config`
