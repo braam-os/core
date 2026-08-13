@@ -1,6 +1,7 @@
 // The kernel lives here. The main thread only relays events and pixels
 // (Concept.md §3): OPFS sync handles and OffscreenCanvas both need a worker.
 
+import { makeFsImports, openStore } from "./fs.js";
 import { Memory, makeImports } from "./host.js";
 import { Renderer } from "./render.js";
 
@@ -9,16 +10,36 @@ const mem = new Memory();
 let renderer = null;
 let pending = null; // a canvas or viewport that arrived before the kernel did
 
+// navigator.storage.persist() is main-thread only (Concept.md §A.2), so the
+// page calls it and posts the answer down. Boot waits for it rather than
+// guessing, since `df` reporting the wrong durability is worse than a tick of
+// delay.
+let persisted = null;
+const persistedKnown = new Promise((resolve) => {
+    persisted = resolve;
+});
+
 function emit(kind, text) {
     self.postMessage({ kind, text });
 }
 
 async function boot() {
     const url = new URL("./kernel.wasm", import.meta.url);
+    const bundle = new URL("./bundle.bin", import.meta.url);
+    const store = await openStore(bundle, await persistedKnown);
+
+    // A reply arrives on a promise, so it is never on the stack of the tick
+    // that issued the request; pumping from here is what gets the resumed task
+    // moving when nothing else is scheduled.
+    const fs = makeFsImports(mem, store, (token) => {
+        self.kernel.wake(token >>> 0, 0, 0);
+        pump();
+    });
+
     const imports = makeImports(mem, (text) => emit("log", text), (x, y, w, h) => {
         if (renderer)
             renderer.present(x, y, w, h);
-    });
+    }, fs);
 
     // Streaming needs an application/wasm content type; not every static host
     // sets one, so fall back to a buffered instantiate.
@@ -88,6 +109,12 @@ function pump() {
 self.onmessage = ({ data }) => {
     if (!data)
         return;
+
+    // Boot itself waits on this one, so it is answered before the kernel exists.
+    if (data.kind === "persisted") {
+        persisted(!!data.value);
+        return;
+    }
 
     if (!self.kernel) {
         pending = pending || {};

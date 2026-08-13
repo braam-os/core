@@ -34,7 +34,7 @@ bool contains(Str hay, Str needle, bool fold)
 
 } // namespace
 
-BRAAM_PROGRAM(prog_grep, "grep", "[-i] [-v] <text> — pass the lines containing it")
+BRAAM_PROGRAM(prog_grep, "grep", "[-i] [-v] <text> [<file>...] — pass matching lines")
 {
     bool invert = false, fold = false;
     usize i = 1;
@@ -46,13 +46,17 @@ BRAAM_PROGRAM(prog_grep, "grep", "[-i] [-v] <text> — pass the lines containing
         else
             break;
     }
-    if (i + 1 != args.size()) {
-        co_await io.err.write("usage: grep [-i] [-v] <text>\n");
+    if (i >= args.size()) {
+        co_await io.err.write("usage: grep [-i] [-v] <text> [<file>...]\n");
         co_return 2;
     }
 
     Str pattern = args[i];
-    LineReader in(io.in);
+    Inputs files;
+    if (i32 bad = co_await open_inputs(files, Args{ args.v.subspan(i + 1) }, "grep", io))
+        co_return bad;
+
+    LineReader in(input_of(files, io));
     String line;
     bool matched = false;
 

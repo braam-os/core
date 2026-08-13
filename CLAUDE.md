@@ -14,7 +14,10 @@ import, and the canvas renderer in `web/render.js`. M3 (userland shell) is done:
 exit codes, and seven programs in `src/prog/`. M4 (streams) is done: `co_await send()` with
 `close`/`hangup`, pipes as `Channel<String>`, `Stream`/`Source` behind `Stdio`, the full shell
 grammar in `src/user/parse.{h,cpp}`, the job runtime and tty pump in `src/user/job.{h,cpp}`,
-and thirteen programs. M5 (filesystem) is next.
+and thirteen programs. M5 (filesystem) is done: `src/fs/` with the `Fs` interface, path
+resolution, the mount and open-file tables, `MemFs`, `BundleFs`, `OpfsFs` and the `host_fs`/
+`host_fs_sync` ABI; `BinFs` and the boot mounting in `src/user/`; working redirection; and
+twenty programs. M6 (host services) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -79,6 +82,12 @@ criterion — plus three CTest cases that run on every build: `smoke` asserts `k
 exact import/export surface and that it boots, `unit` runs `tests.wasm` under Node, and `size`
 checks `tools/size_budget.txt`. New core code gets a case in [test/unit/](test/unit/).
 
+Both wasm modules import the storage ABI, so both are driven with the in-memory backend in
+[test/fakefs.mjs](test/fakefs.mjs). It answers from inside the import, which no browser can do
+and the kernel cannot tell — `wake()` only queues a resumption. It takes its constants and its
+encoders from `web/fs.js`, so the two sides of the wire cannot drift silently; keep it that way
+rather than restating the format.
+
 ## Architecture invariants
 
 These three rules answer most "how should X work?" questions, and breaking one silently is the
@@ -89,8 +98,10 @@ main way to damage the design. Full statements in Concept.md §2.
    threads, no stack switching. A suspended process is a coroutine frame in a hash map.
 2. **A JS import never returns data — only accepts a wake token.** Results arrive later through
    the `wake()` export. Exactly two exceptions are sanctioned: `host_now()`, and OPFS sync
-   access handles once a file is open. A third exception needs written justification in
-   Concept.md, because at three it stops being pragmatism and becomes a second ABI.
+   access handles once a file is open (`host_fs_sync`). A third exception needs written
+   justification in Concept.md, because at three it stops being pragmatism and becomes a second
+   ABI. Storage is multiplexed — one import per calling convention, not one per operation — so
+   adding an operation is an enum value on each side, not a new import.
 3. **The terminal is a cell grid in linear memory, not a byte stream.** No ANSI escapes, no
    VT100 emulation, no xterm.js. Colours are struct fields and cursor addressing is indexing.
 
@@ -104,7 +115,14 @@ Further constraints that are easy to violate by habit:
   first; a naive `malloc` will dominate the profile.
 - **A coroutine frame past 512 bytes costs a whole 64 KiB span.** That is the allocator's top
   size class, so long-lived state belongs in a heap block the frame points at, not in the frame.
-  `test_shell` guards the shell's boot cost for exactly this reason.
+  `test_shell` guards the shell's boot cost for exactly this reason, and it is why the boot
+  mounting is its own coroutine and why `FS_BLOCK` is 512 rather than a rounder number.
+- **A host request may outlive the coroutine that issued it.** Anything whose address crosses to
+  JS and comes back later — every `FsCall` — must be a heap record the kernel keeps alive past a
+  cancelled await, never a buffer in the awaiting frame. `wake()` on an unclaimed token is what
+  reaps one; that is why `sched_wake` returns a bool.
+- **Never `new` anything.** `operator new` returns null on failure and `-fno-exceptions` means
+  the expression would construct at address zero. Use `heap_new`/`heap_delete` from `alloc.h`.
 - **Every awaiter deregisters in its destructor.** `sched_unwait` from `~Awaiter` is what makes
   destroying a suspended frame safe rather than a dangling `Waiter *` in the wake table. An
   awaitable that parks and has no destructor is a use-after-free waiting to happen.
@@ -123,7 +141,8 @@ Isolation is tiered by trust, and `exec` picks a tier from binary metadata so us
 notice (Concept.md §4):
 
 - **Kernel applet** — in-kernel coroutine, no isolation, no overhead. This is the only tier that
-  exists through M7.
+  exists through M7, which is why `/bin` is `BinFs` over the program registry rather than a
+  directory of binaries, and why the working directory is one global rather than per-process.
 - **Separate instance, shared worker** (M8) — address-space, capability and memory-cap isolation.
 - **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
   preempted.
@@ -145,9 +164,12 @@ rather than losing a wakeup quietly.
   [doc/Release_Notes.md](doc/Release_Notes.md) or another document, where they can be read as
   prose and revised in one place.
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
-- Layout: `src/kernel/`, `src/user/` (line editor, grammar, job runtime, shell), `src/prog/` (one
-  self-registering file per program), `test/unit/`, `web/`, `tools/`, `cmake/`; `src/fs/` arrives
-  with M5. Concept.md §7.
+- Layout: `src/kernel/`, `src/fs/` (paths, the VFS, the filesystems, the host storage ABI),
+  `src/user/` (line editor, grammar, job runtime, shell, `BinFs`, boot), `src/prog/` (one
+  self-registering file per program), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`.
+  Concept.md §7. `braam_fs` sits between the kernel and userland and must not depend upwards:
+  anything needing the program registry belongs in `src/user/`, which is why `BinFs` lives
+  there.
 - **`src/prog/` is an `OBJECT` library, not `STATIC`.** Nothing references those translation
   units by name — they reach the link only through their static-init registrars, and
   `--gc-sections` never extracts an unreferenced archive member. As an archive it would link

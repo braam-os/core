@@ -2,12 +2,16 @@ add_executable(tests
     unit/main.cpp
     unit/harness.cpp
     unit/test_alloc.cpp
+    unit/test_bundlefs.cpp
     unit/test_channel.cpp
     unit/test_coroutine.cpp
     unit/test_edit.cpp
     unit/test_fmt.cpp
     unit/test_hash.cpp
+    unit/test_hostfs.cpp
     unit/test_io.cpp
+    unit/test_memfs.cpp
+    unit/test_path.cpp
     unit/test_parse.cpp
     unit/test_prog.cpp
     unit/test_result.cpp
@@ -19,14 +23,18 @@ add_executable(tests
     unit/test_string.cpp
     unit/test_task.cpp
     unit/test_text.cpp
-    unit/test_vec.cpp)
+    unit/test_vec.cpp
+    unit/test_vfs.cpp)
 
-target_link_libraries(tests PRIVATE braam_prog braam_user braam_core braam_flags)
+target_link_libraries(tests PRIVATE braam_prog braam_user braam_fs braam_core braam_flags)
 
 find_program(BRAAM_NODE node REQUIRED)
 
+# The bundle comes along so that the packer and BundleFs are checked against
+# each other, not each against its own reading of the format.
 add_test(NAME smoke
-    COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --kernel $<TARGET_FILE:kernel>)
+    COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --kernel $<TARGET_FILE:kernel>
+            ${CMAKE_BINARY_DIR}/web/bundle.bin)
 
 add_test(NAME unit
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --tests $<TARGET_FILE:tests>)

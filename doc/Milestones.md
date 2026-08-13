@@ -91,12 +91,36 @@ token suffices, and a tripwire now fires if that stops being true. `LineEnd::Eof
 Programs added: `cat`, `grep`, `head`, `ls`, `tail`, `wc`, for thirteen. `kernel.wasm` went from
 28,282 to 62,926 bytes against an unchanged 256 KiB budget. See [Release_Notes.md](Release_Notes.md).
 
-## M5 — Filesystem
+## M5 — Filesystem — **done**
 Mount table, `MemFs`, `BundleFs` from a fetched archive, `OpfsFs` with the open-file table.
 
-- [ ] Write a file, reload the page, the file is still there
-- [ ] `df` reports quota, usage, and persistent vs best-effort mode
-- [ ] With OPFS unavailable, the system boots on `MemFs` and says so
+- [x] Write a file, reload the page, the file is still there
+- [x] `df` reports quota, usage, and persistent vs best-effort mode
+- [x] With OPFS unavailable, the system boots on `MemFs` and says so
+
+Storage reaches the host through two imports rather than one per operation — `host_fs` for the
+asynchronous half and `host_fs_sync` for §5.2's sanctioned exception — which is the shape §4.3
+fixes for the process ABI; Concept.md §3.4 is amended to say so, and `host_storage_read`/
+`host_storage_write` are gone. An asynchronous request is a record the kernel owns *past* a
+cancelled await, since the host still holds its address: the awaitable orphans it rather than
+freeing it, and the reply is what reaps it. `Fs` splits by when the work can happen rather than
+by what it does — naming is async, an open file is not — so a redirection opens at job setup and
+every write after that is a plain call.
+
+`BundleFs` reads one archive the worker loads beside `kernel.wasm`, not the Cache API: that API
+stores `Request`/`Response` pairs and is worth having once M6's `fetch` exists to make them.
+`/bin` became `BinFs`, the program registry as a read-only filesystem, so `ls /bin` still lists
+the programs and `ls` itself is an ordinary directory walk. The working directory is one global
+rather than per-process, because a program is handed `(Args, Stdio)` and nothing else until M8;
+the shell starts in `/home`. The open-file table refuses a *second open of any kind* rather than
+a second writer, because that is what an OPFS sync access handle enforces.
+
+Criterion 1 is checked mechanically as well as by hand: the smoke test writes a file, throws the
+instance away, builds a new one against the same JS-side store, and reads it back.
+Programs added: `cd`, `df`, `mkdir`, `mount`, `pwd`, `rm`, `touch`, for twenty; `cat`, `grep`,
+`head`, `tail` and `wc` gained file arguments and `ls` walks the mount table. `kernel.wasm` went
+from 62,926 to 137,867 bytes against an unchanged 256 KiB budget.
+See [Release_Notes.md](Release_Notes.md).
 
 ## M6 — Host services
 `fetch`, timers, WebSocket, clipboard, the `externref` table and `JsRef`.

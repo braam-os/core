@@ -46,7 +46,10 @@ u32 sched_spawn(Task<i32> t);
 void sched_cancel(u32 pid);
 bool sched_alive(u32 pid);
 i32 sched_tick(f64 now_ms);
-void sched_wake(u32 token, u32 ptr, u32 len);
+
+// False when nothing was waiting on the token: a late or cancelled event, which
+// the storage layer needs to hear about so it can free an abandoned request.
+bool sched_wake(u32 token, u32 ptr, u32 len);
 f64 sched_now();
 usize sched_pending();
 void sched_reset();

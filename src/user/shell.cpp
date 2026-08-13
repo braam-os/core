@@ -1,5 +1,6 @@
 #include "shell.h"
 
+#include "boot.h"
 #include "edit.h"
 #include "job.h"
 #include "kernel/fmt.h"
@@ -14,6 +15,13 @@ Task<i32> shell()
     i32 status = 0;
 
     screen_cursor(true);
+
+    // Before the first prompt, not alongside it: every line the shell can be
+    // given needs the mounts already in place. The work is in a coroutine of
+    // its own so that its locals stay out of this frame, which has a size
+    // class to fit inside (test_shell guards it).
+    if (Task<void> t = boot_filesystem())
+        co_await t;
 
     for (;;) {
         // The prompt lives in this frame, because read_line only holds a view

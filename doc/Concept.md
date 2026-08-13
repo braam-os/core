@@ -194,12 +194,21 @@ request was honoured.
 ```
 host_now(), host_random(ptr, len), host_log(ptr, len)
 host_fetch(token, url_ptr, url_len, opts_ptr)
-host_storage_read(token, key…), host_storage_write(token, …)
 host_present(dirty_x, dirty_y, dirty_w, dirty_h)
+host_fs(op, token, req)                       // storage, async  (§5.2)
+host_fs_sync(op, handle, ptr, len, off) -> i32 // storage, sync   (§5.2)
 ```
 
 There is no `host_timer`. The kernel owns the timer queue, so `tick()`'s return value already
 says when the host must call back, and one `setTimeout` serves every sleeping task.
+
+Storage is **multiplexed rather than named per operation**, which is what `host_storage_read`
+and `host_storage_write` above became in M5. One import per *calling convention* — one
+asynchronous, one synchronous — is the shape §4.3 already fixes for the process ABI, and it
+keeps the exact-import assertion in the smoke test stable while operations are added. `req` is
+the address of a request record carrying the path, the flags, a reply buffer and the status;
+the kernel owns that record for as long as the host may touch it, which is past a cancelled
+await, so it outlives its awaiter rather than being freed under the host.
 
 ### 3.5 The screen
 
@@ -247,17 +256,33 @@ discipline" belongs, and it is far nicer as a coroutine than as a termios state 
   `co_await` point checks it and unwinds by returning, so destructors run correctly.
   Structured concurrency: a parent `co_await`s a child group, and cancellation propagates
   down the tree.
-- **Filesystem** — an async node tree, not inodes. One interface:
+- **Filesystem** — an async node tree, not inodes. One interface, split by *when* the work can
+  happen rather than by what it does: naming a file may need the host and therefore a wake
+  token, but an already-open file does not (§5.2).
 
   ```cpp
   struct Fs {
-      virtual Task<Result<Bytes>>       read(Path);
-      virtual Task<Result<void>>        write(Path, Span<const u8>);
-      virtual Task<Result<Vec<Entry>>>  list(Path);
+      virtual Task<Result<Stat>>       stat(Str path);
+      virtual Task<Result<Vec<Entry>>> list(Str path);
+      virtual Task<Result<u32>>        open(Str path, u32 flags);
+      virtual Task<Result<void>>       mkdir(Str path);
+      virtual Task<Result<void>>       remove(Str path, bool all);
+
+      virtual Result<usize> read(u32 h, u64 off, u8 *buf, usize n);
+      virtual Result<usize> write(u32 h, u64 off, const u8 *buf, usize n);
+      virtual Result<u64>   size(u32 h);
+      virtual Result<void>  truncate(u32 h, u64 n);
+      virtual void          close(u32 h);
   };
   ```
 
-  A mount table maps prefix → `Fs`. Implementations in §5.
+  `read` returns bytes into a caller's buffer rather than a `Bytes`, for the reason a pipe
+  carries a `String`: a `Span` is a pointer and a length, and nothing below this line owns a
+  buffer the caller can keep. An implementation sees paths already resolved and relative to its
+  own mount point, so it never has to know where it was mounted.
+
+  A mount table maps prefix → `Fs`, longest prefix winning, and an open-file table above it
+  holds the descriptors. Implementations in §5.
 - **Programs** — a registry of `Task<int>(Args, Stdio)` functions, populated at static-init
   time by an inline registrar, so adding a command means adding one file and editing nothing
   else.
@@ -269,6 +294,10 @@ are supported everywhere now: a `WebAssembly.Table` of `externref` that wasm ind
 JS populates means a `Response`, a `FileSystemFileHandle`, or a `WebSocket` is just a slot
 index, with no serialisation. Wrap it in an RAII `JsRef` that frees the slot in its
 destructor.
+
+M5's OPFS handles are a plain JS array indexed by slot number, not this. The table arrives with
+M6, where `fetch` and `WebSocket` make more than one kind of object need holding; a filesystem
+handle is already only ever an integer on the wasm side, so it gains nothing from going first.
 
 ---
 
@@ -357,12 +386,24 @@ the full comparison and the durability caveats.
 ### 5.1 The mount layering
 
 ```
-BundleFs   → Cache API blob      (read-only /bin, /usr — immutable, cheap)
+BundleFs   → one packed archive  (read-only /usr — immutable, cheap)
+BinFs      → the program registry (read-only /bin)
 OpfsFs     → OPFS                (read-write /home, /var — the real store)
-MemFs      → linear memory       (/tmp, and the fallback when OPFS is absent)
+MemFs      → linear memory       (/, /tmp, and the fallback when OPFS is absent)
 HostFs     → File System Access  (/mnt/host, Chromium only, opt-in)
 HttpFs     → Range requests      (read-only remote trees)
 ```
+
+Two of those differ from what this section first said, and both for the same reason — the thing
+they were to hold does not exist yet:
+
+- **`BundleFs` reads one archive, not the Cache API.** The Cache API stores `Request`/`Response`
+  pairs, which is worth having once `fetch` exists to produce them; that is M6. Until then the
+  worker loads a single `bundle.bin` beside `kernel.wasm` at boot and hands the bytes over, and
+  the tree is unpacked in memory. The packer is `tools/pack.py`.
+- **`/bin` is `BinFs`, a filesystem over the program registry.** Programs are in-kernel
+  coroutines until M8 gives them binaries, so `/bin` would otherwise be an empty directory that
+  `ls` could not account for. A file there reads as the program's usage line.
 
 ### 5.2 OPFS is the primary store
 
@@ -384,23 +425,34 @@ promise is involved at any point.
 Two constraints to build around:
 
 - A sync access handle takes an **exclusive lock** on the file, so the VFS needs an open-file
-  table that refuses a second writer. We want that anyway.
+  table. It refuses a *second open of any kind*, not merely a second writer: OPFS's lock does
+  not care what mode the second handle asks for, and a rule that held only on some backends
+  would be worse than the restriction.
 - OPFS is unavailable in Safari private browsing. Capability-detect and fall back to `MemFs`.
 
 ### 5.3 Capability struct, not probing
 
-The JS host fills in a `StorageBackend` struct at boot and hands it to the kernel:
+The kernel asks once, at boot, and keeps the answer:
 
 ```cpp
 struct StorageBackend {
-    bool opfs, syncHandles, fsAccess, persisted;
-    u64  quotaBytes;
+    bool opfs, sync, fsaccess, persisted;
+    u64  quota, usage;
 };
 ```
 
-`mount` consults this rather than probing at use time. Add a `df`-style command reporting
-mode (persistent vs best-effort) and usage from `navigator.storage.estimate()`, so storage
-semantics are inspectable from inside the OS instead of being invisible browser behaviour.
+`mount` consults this rather than probing at use time. It arrives as the reply to one `Info`
+operation rather than being pushed into the kernel by a separate export, which keeps the
+boundary to the two imports of §3.4 and means `df` can ask again for a fresh `usage` instead of
+reporting a boot-time snapshot.
+
+`persisted` is the one field the worker cannot obtain: `navigator.storage.persist()` exists only
+on the main thread (§A.2). The page calls it during boot and posts the answer down, and the
+worker's boot waits for it — reporting the wrong durability is worse than a tick of delay.
+
+`df` reports the backend, the mode (persistent vs best-effort), the quota and the usage, so
+storage semantics are inspectable from inside the OS instead of being invisible browser
+behaviour.
 
 ### 5.4 The real local filesystem, and the escape hatch
 
@@ -430,8 +482,7 @@ numbering here is cited from source comments.
 
 ## 7. Repository layout
 
-As created in M0; the `src/fs`, `src/prog` and `src/user` directories arrive with their
-milestones.
+As created in M0; `src/prog` and `src/user` arrived with M3 and `src/fs` with M5.
 
 ```
 doc/Concept.md          this document
@@ -442,11 +493,12 @@ CMakeLists.txt          the build
 cmake/                  the wasm32-unknown-unknown toolchain file
 src/kernel/             allocator, core types, Task, scheduler, Channel, Process
 src/kernel/coroutine.h  the freestanding <coroutine> shim (Appendix C)
-src/fs/                 Fs interface, MemFs, BundleFs, OpfsFs, HostFs, mount table
+src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, host ABI
 src/prog/               one file per program; self-registering
-src/user/               LineEditor, shell, widget layer
-test/                   in-wasm unit tests and the Node driver
-web/                    index.html, worker.js, host shim, renderer
+src/user/               LineEditor, grammar, job runtime, shell, BinFs, boot
+bundle/                 the tree tools/pack.py packs into /usr
+test/                   in-wasm unit tests, the Node driver, the storage fake
+web/                    index.html, worker.js, host shim, storage shim, renderer
 tools/                  build scripts, bundle packer, size-budget check
 ```
 

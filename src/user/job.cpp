@@ -1,5 +1,6 @@
 #include "job.h"
 
+#include "fs/vfs.h"
 #include "io.h"
 #include "kernel/alloc.h"
 #include "kernel/key.h"
@@ -18,6 +19,13 @@ struct Report {
     u8 index;
 };
 
+// One stage's redirections, already open. Three slots because a command can
+// redirect each of its three streams exactly once; a later redirection of the
+// same stream replaces the earlier one, as a shell does.
+struct Files {
+    FileIo in, out, err;
+};
+
 // Everything a running pipeline owns. It is a heap block rather than a set of
 // locals in the shell's frame for two reasons: the allocator's top size class
 // is 512 bytes and a coroutine frame past it costs a whole 64 KiB span, and
@@ -29,6 +37,7 @@ struct Job {
     Pipeline pl;
     Pipe input; // the tty pump's end of stage 0's stdin
     Vec<Pipe *> pipes;
+    Vec<Files *> files;       // one per stage, index-aligned with the pipeline
     Channel<Report, 16> done; // MAX_STAGES plus the pump, rounded up
     Vec<u32> pids;
     u32 pump_pid = 0;
@@ -39,6 +48,8 @@ struct Job {
             p->~Pipe();
             heap_free(p);
         }
+        for (Files *f : files)
+            heap_delete(f);
     }
 };
 
@@ -81,6 +92,56 @@ struct StageEnd {
     i32 *status;
     u8 index;
 };
+
+// Opens one redirection into the stage's slot for that stream. A second
+// redirection of the same stream replaces the first, which is what `> a > b`
+// means; the earlier file is closed first, so the open-file table does not see
+// two writers on one path (Concept.md §5.2).
+Task<Result<void>> open_redirect(Files &f, Redir kind, Str path)
+{
+    u32 flags    = 0;
+    FileIo *slot = nullptr;
+    switch (kind) {
+    case Redir::In:
+        flags = O_READ;
+        slot  = &f.in;
+        break;
+    case Redir::Out:
+        flags = O_WRITE | O_CREATE | O_TRUNC;
+        slot  = &f.out;
+        break;
+    case Redir::Append:
+        flags = O_WRITE | O_CREATE | O_APPEND;
+        slot  = &f.out;
+        break;
+    case Redir::ErrOut:
+        flags = O_WRITE | O_CREATE | O_TRUNC;
+        slot  = &f.err;
+        break;
+    case Redir::ErrAppend:
+        flags = O_WRITE | O_CREATE | O_APPEND;
+        slot  = &f.err;
+        break;
+    }
+    slot->reset();
+
+    Task<Result<i32>> t = vfs_open(path, flags);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    i32 fd = CO_TRY(co_await t);
+
+    // Appending is a starting offset, not a mode: nothing below the VFS is
+    // seekable, so the position is this side's to keep.
+    u64 at = 0;
+    if (flags & O_APPEND) {
+        Result<u64> s = vfs_size(fd);
+        if (s.is_ok())
+            at = s.value();
+    }
+    slot->fd  = fd;
+    slot->off = at;
+    co_return {};
+}
 
 Task<i32> stage(Job *j, u8 index, const Program *p, Args args, Stdio io, Pipe *in, Pipe *out)
 {
@@ -180,20 +241,33 @@ Task<i32> run_line(Str line, Stdio io)
     if (j->pl.size() == 0)
         co_return 0;
 
-    // Redirection is parsed but has nowhere to go until M5. Refusing here
+    usize n = j->pl.size();
+
+    // Every redirection is opened before any stage is spawned. Refusing here
     // rather than at the first write is what stops a command running and
     // producing side effects before its redirection turns out to be
     // impossible, which is what a real shell does.
-    for (usize i = 0; i < j->pl.size(); i++) {
-        for (const Redirect &r : j->pl.redirects(i)) {
-            co_await io.err.write("braam: ");
-            co_await io.err.write(j->pl.target(r));
-            co_await io.err.write(": no filesystem\n");
+    for (usize i = 0; i < n; i++) {
+        Files *f = heap_new<Files>();
+        if (!f || !j->files.push(f)) {
+            heap_delete(f);
+            co_await io.err.write("braam: out of memory\n");
             co_return 1;
+        }
+        for (const Redirect &r : j->pl.redirects(i)) {
+            Str path        = j->pl.target(r);
+            Result<void> ok = co_await open_redirect(*f, r.kind, path);
+            if (ok.is_err()) {
+                co_await io.err.write("braam: ");
+                co_await io.err.write(path);
+                co_await io.err.write(": ");
+                co_await io.err.write(error_name(ok.error()));
+                co_await io.err.write("\n");
+                co_return 1;
+            }
         }
     }
 
-    usize n = j->pl.size();
     Vec<const Program *> progs;
     if (!progs.reserve(n)) {
         co_await io.err.write("braam: out of memory\n");
@@ -241,10 +315,15 @@ Task<i32> run_line(Str line, Stdio io)
         Pipe *in  = i == 0 ? &j->input : j->pipes[i - 1];
         Pipe *out = i + 1 < n ? j->pipes[i] : nullptr;
 
+        // A redirection displaces the pipe for that stream, but the pipe still
+        // exists and StageEnd still closes it — so `a > f | b` gives b a clean
+        // end of input rather than a wait that never finishes.
+        Files *f = j->files[i];
+
         Stdio sio;
-        sio.in  = pipe_source(*in);
-        sio.out = out ? pipe_sink(*out) : io.out;
-        sio.err = io.err;
+        sio.in  = f->in.fd >= 0 ? file_source(f->in) : pipe_source(*in);
+        sio.out = f->out.fd >= 0 ? file_sink(f->out) : (out ? pipe_sink(*out) : io.out);
+        sio.err = f->err.fd >= 0 ? file_sink(f->err) : io.err;
 
         j->refs++; // the stage's own reference, dropped by StageEnd
         u32 pid = sched_spawn(stage(j, u8(i), progs[i], j->pl.args(i), sio, in, out));

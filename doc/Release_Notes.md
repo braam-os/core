@@ -7,6 +7,201 @@ of the two needs amending.
 
 ---
 
+## M5 — Filesystem
+
+A mount table, four filesystems, an open-file table, redirection that reaches real files, and
+seven new commands. This is the first milestone whose state outlives the tab, which is what
+makes it the first one where getting the boundary wrong loses a user's work rather than a
+frame. 137,867 bytes of `kernel.wasm`, against an unchanged 256 KiB budget.
+
+`Concept.md` is amended in five places, because five decisions here differ from what it said:
+§3.4's import list, §3.6's `Fs` sketch, §3.7's `externref` table, §5.1's mount layering and
+§5.3's capability struct. Each is argued below.
+
+### Two imports, not ten
+
+Storage needs roughly ten operations. Concept.md §3.4 listed `host_storage_read` and
+`host_storage_write`, which suggests one named import per operation, and that is what the naive
+reading of §2.2 wants: an import is a syscall, so name it.
+
+The trouble is that the smoke test asserts `kernel.wasm`'s *exact* import list, deliberately —
+it is how an accidental libc dependency is caught at link time rather than as a runtime trap.
+Ten named imports means that assertion churns on every operation added, and the churn is
+noise: nothing about `host_fs_truncate` appearing is a fact anyone needs to review. What is
+worth reviewing is a new *calling convention*, and there are exactly two of those.
+
+So: `host_fs(op, token, req)` for everything asynchronous, and
+`host_fs_sync(op, handle, ptr, len, off) -> i32` for §5.2's sanctioned exception. That is also
+the shape §4.3 already fixes for the M8 process ABI — `sys` and `sys_async` — so the boundary
+userland crosses in M5 is the one it will keep crossing when programs become instances.
+
+The cost is an untyped op number in place of a symbol, and it is real: a mismatch between
+`FsOp` in `src/fs/hostfs.h` and `OP` in `web/fs.js` is a wrong answer rather than a link error.
+That is why `test/fakefs.mjs` imports its constants and its encoders *from* `web/fs.js` rather
+than restating them — the two sides of the wire cannot drift without the tests noticing.
+
+### A request outlives its awaiter
+
+`wake(token, ptr, len)` carries two words, and a directory listing is not two words. Something
+has to own a buffer the host can write into, and the obvious answer — export `kalloc`/`kfree`
+and let JS allocate — is wrong in a way that took a moment to see.
+
+The problem is cancellation. `^C` during `ls /home` destroys the frame that issued the request.
+If the reply buffer lived in that frame, or was owned by the host on the frame's behalf, the
+promise resolving a moment later would write into freed memory. Every awaitable in this system
+deregisters in its destructor precisely so that destroying a suspended frame is safe (§8.1),
+and a raw address handed across the boundary defeats that.
+
+So a request is a heap record with its own path and reply buffers, and `FsCall`'s destructor
+does not free it. If the reply has landed, the record goes; if it has not, the record is
+*orphaned* — moved to a list and left alive at the address the host holds. The reply is what
+finally reaps it, which is why `sched_wake` now returns a bool and `wake()` routes an
+undelivered token to `fs_orphan_reply`. An unclaimed token was previously ignored; now it is
+the one signal that says a record is safe to free.
+
+Two flags decide a record's fate, and both are easy to get wrong. `issued_` says the host was
+given the address at all — a request cancelled before it reached the import has nothing to wait
+for and must be freed, not orphaned, or it leaks silently. `done` says the reply landed, and it
+cannot simply be set on the resume path: a cancellation also resumes. `sched_cancel` is the only
+thing that sets `Waiter::cancelled`, so `done = issued_ && !w_.cancelled` is exactly right,
+including the case where a cancellation arrives *after* the reply and the request is finished
+with regardless. `test_hostfs` exists for this and nothing else.
+
+This also keeps the export surface where §3.4 put it: `init`, `wake`, `tick`, `key`, `resize`
+and `memory` is what M5 ships, exactly as M2 did.
+
+### Naming is asynchronous; an open file is not
+
+Concept.md §3.6's `Fs` was `read`/`write`/`list`, all returning `Task`. Splitting it instead by
+*when the work can happen* is the single change that makes the rest of the milestone simple.
+
+`stat`, `list`, `open`, `mkdir` and `remove` may need the host, so they park. `read`, `write`,
+`size`, `truncate` and `close` act on an open handle, and §5.2 says those are genuinely
+synchronous on OPFS. Following that split gives redirection its shape for free: a job opens
+its files at setup, before any stage is spawned, and from then on `Stream::Write` is a plain
+call. The file-backed `Stream` and `Source` never park, so their `park` hook is null and the
+whole retry-on-`Again` path is dead code for them.
+
+It also means a failed open stops the command before it produces side effects, which is what a
+shell does and what M4's placeholder refusal was standing in for.
+
+`read` fills a caller's buffer rather than returning `Bytes`. That is the same argument the
+pipe made in M4: a `Span` is a pointer and a length, and nothing below the VFS owns a buffer
+the caller may keep.
+
+### /bin is a filesystem
+
+M4's `ls` listed the program registry and its comment promised that M5 would replace the body
+with a walk of the mount table. Doing only that would have left `/bin` an empty directory —
+programs are in-kernel coroutines until M8 — and the registry reachable only through `help`.
+
+`BinFs` is about sixty lines and fixes both: the registry *is* a read-only filesystem mounted
+on `/bin`, `ls` really is an ordinary directory walk, and `ls /bin | grep hel` still means what
+it meant in M4. A file there reads as the program's usage line, because that is the only thing
+about a program there is to read. When M8 gives programs binaries, the mount changes and
+nothing above it does.
+
+It lives in `src/user/` rather than `src/fs/` because the registry does, and `braam_fs` must
+not depend upwards.
+
+### The bundle is an archive, not the Cache API
+
+§5.1 pairs `BundleFs` with the Cache API. The Cache API stores `Request`/`Response` pairs,
+which is a good fit *once something is producing them* — and that is `fetch`, which is M6. Using
+it now would mean pulling M6's import forward to serve a tree that never changes after the
+build.
+
+Instead the worker loads one `bundle.bin` beside `kernel.wasm` and hands the bytes over through
+the `Bundle` operation, and `BundleFs` unpacks it in memory. One request instead of one per
+file, no new import, and the format is small enough that `tools/pack.py` and
+`src/fs/bundlefs.cpp` are each about eighty lines. The smoke test is given the archive the
+build just produced, so the packer and the reader are checked against each other rather than
+each against its own reading of the format.
+
+### Two round trips, not one enormous buffer
+
+A reply whose size is not known in advance — a listing, the bundle — is asked for twice: the
+first attempt reports the room it needs and writes nothing, and the kernel retries with a
+buffer that size. The alternative is a buffer big enough for anything, and the allocator makes
+that expensive in a specific way: 512 bytes is the top size class and a byte more costs a whole
+64 KiB span (§8.2). A directory that fits in a block — nearly all of them — costs one trip; one
+that does not costs two, and only pays for a span when it genuinely needs one.
+
+That is also why files are read `FS_BLOCK` = 512 bytes at a time, and why `file_read` stages
+through a stack buffer rather than a `String`: reading is synchronous, so the buffer does not
+have to survive a suspension, and a 512-byte chunk lands exactly in the top size class on its
+way into a pipe.
+
+### One open handle per file
+
+§5.2 said the open-file table should refuse a second *writer*. It refuses a second open of any
+kind, because that is what OPFS actually enforces: `createSyncAccessHandle()` takes an
+exclusive lock and a second handle fails whatever mode it asks for.
+
+The looser rule would have worked on `MemFs` and failed on OPFS, which is the worst outcome —
+a program that behaves differently depending on which mount its path landed in. `cat a a` is
+refused as a result. That is a real restriction and an odd command, and the honest rule is
+worth more than the odd command.
+
+### The working directory is a global
+
+A program is `Task<i32>(Args, Stdio)`. There is nowhere to put a per-process cwd until §4.3's
+ABI gives a process a context, which is M8. With one shell running, a global and a per-process
+cwd are indistinguishable, so `cd` mutates one `String` in the VFS and the difference is
+deferred rather than designed around.
+
+The shell starts in `/home` rather than `/`, which is what makes `echo hi > notes` land
+somewhere that survives a reload without the user having to know that it must. The prompt stays
+`$`: putting the cwd in it is layout work, and it belongs with M7 rather than with a change
+that would churn every screen assertion in the tests.
+
+### Boot happens in the shell, before the first prompt
+
+Mounting needs to `co_await`, and `init()` is not a coroutine. Spawning a mounter alongside the
+shell would race the first prompt against the mount table. Awaiting it in `shell()` before the
+prompt is the only ordering that is correct, and it is also where the "no OPFS" line belongs —
+the third acceptance criterion is a sentence printed above the first prompt.
+
+The work is in `boot_filesystem()` rather than inline so that its locals stay out of the
+shell's frame, which has a size class to fit inside; `test_shell` guards that at 1 KiB and the
+guard is why the split exists. It is idempotent, because a test boots the shell a dozen times
+against one mount table and every one of those must not report the mounts as errors.
+
+### Proving the reload without a browser
+
+"Write a file, reload the page, the file is still there" reads like a criterion only a browser
+can check. It is not: what a reload destroys is the `WebAssembly.Instance`, and what it
+preserves is the store behind OPFS. `test/fakefs.mjs` puts the store in module scope, so the
+smoke test writes a file, throws the instance away, instantiates the same module again, and
+reads it back — with a real browser check still required before the milestone is believed, but
+with the mechanism itself under CI.
+
+The fake answers from inside the import, which no browser can do. The kernel cannot tell:
+`wake()` only queues a resumption, and the tick that issued the request drains the queue on its
+way out. One case in the smoke test holds replies back anyway and delivers them by hand, so the
+genuinely-parked path is covered too rather than assumed.
+
+### Smaller decisions
+
+- **`Error::NotEmpty` is new.** `rm` on a populated directory needed a message of its own, and
+  overloading `Invalid` would have printed "invalid" for the one error a user hits by accident.
+- **`heap_new`/`heap_delete` are new.** `operator new` returns null on failure and
+  `-fno-exceptions` means a plain `new` would then construct at address zero. Every allocation
+  in `src/fs/` goes through the checked pair instead; `job.cpp`'s hand-rolled version is now one
+  of them.
+- **`vfs_list` folds in mount points.** A mount point need not exist in the filesystem beneath
+  it, so `ls /` would not have shown `/home` at all. The table supplies the entry.
+- **Listings are sorted in the VFS, not in `ls`.** Insertion sort over a directory, which needs
+  no scratch and is small enough not to matter — and it means every consumer sees a stable
+  order, not just the one that remembered to sort.
+- **`persisted` is posted down from the page.** `navigator.storage.persist()` is not available
+  in a worker (§A.2), and boot waits for the answer rather than guessing: `df` reporting the
+  wrong durability is worse than a tick of delay.
+- **`close` flushes.** A sync access handle buffers, and flushing on every write would give up
+  the reason for using one. Closing is the point at which we know it is safe.
+
+---
+
 ## M4 — Streams
 
 Pipes with real backpressure, stdin, the whole shell grammar, and a `^C` that reaches a running

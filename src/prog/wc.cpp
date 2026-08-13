@@ -4,18 +4,18 @@
 #include "user/prog.h"
 
 // Counts over the raw chunks, so nothing here depends on where a chunk breaks.
-BRAAM_PROGRAM(prog_wc, "wc", "count the lines, words and bytes of the input")
+BRAAM_PROGRAM(prog_wc, "wc", "[<file>...] — count the lines, words and bytes")
 {
-    if (args.size() > 1) {
-        co_await io.err.write("usage: wc\n");
-        co_return 2;
-    }
+    Inputs files;
+    if (i32 bad = co_await open_inputs(files, args.tail(), "wc", io))
+        co_return bad;
 
+    Source in = input_of(files, io);
     u32 lines = 0, words = 0, bytes = 0;
     bool in_word = false;
 
     for (;;) {
-        Result<String> r = co_await io.in.read();
+        Result<String> r = co_await in.read();
         if (r.is_err()) {
             if (r.error() != Error::Closed)
                 co_return r.error() == Error::Cancelled ? 130 : 1;

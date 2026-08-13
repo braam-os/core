@@ -38,6 +38,20 @@ struct Buf {
 
     Buf &put(usize v) { return put(u32(v)); }
 
+    // A storage quota does not fit in 32 bits.
+    Buf &put(u64 v)
+    {
+        char t[20];
+        usize k = 0;
+        do {
+            t[k++] = char('0' + u32(v % 10));
+            v /= 10;
+        } while (v);
+        while (k)
+            put(t[--k]);
+        return *this;
+    }
+
     Buf &put(int v)
     {
         if (v < 0) {

@@ -1,0 +1,16 @@
+This tree is /usr, and it is read-only.
+
+It comes from one archive that the worker loads beside kernel.wasm at boot and
+hands to the kernel whole; the packer is tools/pack.py and the reader is
+src/fs/bundlefs.cpp. Nothing here is fetched file by file, so adding a file
+means repacking rather than uploading.
+
+The mounts:
+
+    /       memfs    the root, and /tmp with it — gone on reload
+    /bin    binfs    the program registry, read-only
+    /usr    bundle   this tree, read-only
+    /home   opfs     the Origin Private File System, and the only durable one
+
+`df` reports which of those /home really is, how much room there is, and
+whether the browser promised to keep it or merely intends to.

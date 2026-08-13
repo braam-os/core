@@ -35,8 +35,10 @@ export class Memory {
 }
 
 // `present` draws and returns; it must never call back into the kernel, which
-// would re-enter the scheduler in the middle of the tick that called it.
-export function makeImports(mem, sink, present) {
+// would re-enter the scheduler in the middle of the tick that called it. The
+// same is true of the storage imports, which is why every one of their replies
+// goes out on a promise (see fs.js).
+export function makeImports(mem, sink, present, fs) {
     return {
         host: {
             log(ptr, len) {
@@ -48,6 +50,8 @@ export function makeImports(mem, sink, present) {
             present(x, y, w, h) {
                 present(x, y, w, h);
             },
+            fs: fs.fs,
+            fs_sync: fs.fs_sync,
         },
     };
 }

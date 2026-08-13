@@ -2,16 +2,16 @@
 #include "user/prog.h"
 
 // Chunks, not lines: cat is byte-exact, so a last line without a newline stays
-// that way. File arguments arrive with M5.
-BRAAM_PROGRAM(prog_cat, "cat", "copy the input to the output")
+// that way. Named files are read end to end as one stream.
+BRAAM_PROGRAM(prog_cat, "cat", "[<file>...] — copy files, or the input, to the output")
 {
-    if (args.size() > 1) {
-        co_await io.err.write("usage: cat\n");
-        co_return 2;
-    }
+    Inputs files;
+    if (i32 bad = co_await open_inputs(files, args.tail(), "cat", io))
+        co_return bad;
 
+    Source in = input_of(files, io);
     for (;;) {
-        Result<String> r = co_await io.in.read();
+        Result<String> r = co_await in.read();
         if (r.is_err()) {
             if (r.error() == Error::Closed)
                 co_return 0;

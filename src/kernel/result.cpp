@@ -27,6 +27,8 @@ Str error_name(Error e)
         return "unsupported";
     case Error::Closed:
         return "closed";
+    case Error::NotEmpty:
+        return "directory not empty";
     }
     return "unknown error";
 }

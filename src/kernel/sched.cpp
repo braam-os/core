@@ -208,12 +208,12 @@ i32 sched_tick(f64 now_ms)
     return i32(d + 0.999); // round up, so the host never wakes early
 }
 
-void sched_wake(u32 token, u32 ptr, u32 len)
+bool sched_wake(u32 token, u32 ptr, u32 len)
 {
     Sched &s      = sched();
     Waiter **slot = s.waits.find(token);
     if (!slot)
-        return; // nothing waits on it: a late or cancelled event
+        return false; // nothing waits on it: a late or cancelled event
 
     Waiter *w = *slot;
     s.waits.remove(token);
@@ -223,6 +223,7 @@ void sched_wake(u32 token, u32 ptr, u32 len)
     if (w->cancel && w->cancel->waiting == w)
         w->cancel->waiting = nullptr;
     push_ready(w->h);
+    return true;
 }
 
 f64 sched_now()

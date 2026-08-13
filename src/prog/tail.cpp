@@ -5,24 +5,30 @@
 
 // A ring of the last `want` lines, so the input is read once and only the
 // answer is held. tail cannot stop early: the last line is the last one.
-BRAAM_PROGRAM(prog_tail, "tail", "[-n <count>] — the last lines, ten by default")
+BRAAM_PROGRAM(prog_tail, "tail", "[-n <count>] [<file>...] — the last lines, ten by default")
 {
-    u32 want = 10;
-    if (args.size() == 3 && args[1] == "-n") {
+    u32 want    = 10;
+    usize first = 1;
+    if (args.size() >= 3 && args[1] == "-n") {
         Option<u32> n = parse_u32(args[2]);
         if (!n.has_value()) {
-            co_await io.err.write("usage: tail [-n <count>]\n");
+            co_await io.err.write("usage: tail [-n <count>] [<file>...]\n");
             co_return 2;
         }
-        want = n.value();
-    } else if (args.size() != 1) {
-        co_await io.err.write("usage: tail [-n <count>]\n");
+        want  = n.value();
+        first = 3;
+    } else if (args.size() >= 2 && args[1].starts_with("-")) {
+        co_await io.err.write("usage: tail [-n <count>] [<file>...]\n");
         co_return 2;
     }
 
+    Inputs files;
+    if (i32 bad = co_await open_inputs(files, Args{ args.v.subspan(first) }, "tail", io))
+        co_return bad;
+
     Vec<String> ring;
     usize head = 0; // oldest, once the ring is full
-    LineReader in(io.in);
+    LineReader in(input_of(files, io));
     String line;
 
     while (want > 0) {

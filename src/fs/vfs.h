@@ -1,0 +1,56 @@
+// The mount table and the open-file table (Concept.md §5.1, §5.2). Everything
+// above this line works in whole paths; everything below it works in one
+// filesystem's own namespace.
+//
+// The tables live behind a pointer built on first use, like the scheduler: a
+// namespace-scope global with a non-trivial destructor would need __cxa_atexit,
+// which nothing provides.
+#pragma once
+
+#include "fs.h"
+#include "kernel/span.h"
+
+struct Mount {
+    String prefix; // absolute, normalised; "/" for the root
+    Fs *fs = nullptr;
+};
+
+// The table takes ownership of `fs`; vfs_reset() destroys every mount.
+Result<void> vfs_mount(Str prefix, Fs *fs);
+
+Span<const Mount> vfs_mounts();
+
+// The mount a path lands in, and its path within that filesystem. `sub` views
+// `abs`, so it lives exactly as long.
+const Mount *vfs_lookup(Str abs, Str &sub);
+
+Str vfs_cwd();
+
+Task<Result<void>> vfs_chdir(Str path);
+
+// Resolves against the cwd and normalises (path.h).
+Result<void> vfs_abs(Str path, String &out);
+
+Task<Result<Stat>> vfs_stat(Str path);
+
+// Directory entries, sorted by name, with any mount point directly beneath the
+// listed directory folded in — that is what makes /home visible in `ls /`.
+Task<Result<Vec<Entry>>> vfs_list(Str path);
+
+// A file descriptor, or an error. The offset is the caller's business; nothing
+// here is seekable, because nothing here is stateful.
+Task<Result<i32>> vfs_open(Str path, u32 flags);
+
+Task<Result<void>> vfs_mkdir(Str path);
+
+Task<Result<void>> vfs_remove(Str path, bool all);
+
+// On an open descriptor, and therefore synchronous (Concept.md §5.2).
+Result<usize> vfs_read(i32 fd, u64 off, u8 *buf, usize n);
+Result<usize> vfs_write(i32 fd, u64 off, const u8 *buf, usize n);
+Result<u64> vfs_size(i32 fd);
+Result<void> vfs_truncate(i32 fd, u64 n);
+void vfs_close(i32 fd);
+
+// Drops every mount and every open file. For tests, and for a reboot.
+void vfs_reset();

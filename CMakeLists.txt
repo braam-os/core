@@ -42,6 +42,7 @@ target_link_options(braam_flags INTERFACE
 target_include_directories(braam_flags INTERFACE ${CMAKE_SOURCE_DIR}/src)
 
 add_subdirectory(src/kernel)
+add_subdirectory(src/fs)
 add_subdirectory(src/user)
 add_subdirectory(src/prog)
 
@@ -49,7 +50,7 @@ add_subdirectory(src/prog)
 # directly; --gc-sections would not pull it out of an archive. The same is true
 # of src/prog, which is why it is an OBJECT library.
 add_executable(kernel src/kernel/main.cpp)
-target_link_libraries(kernel PRIVATE braam_prog braam_user braam_core braam_flags)
+target_link_libraries(kernel PRIVATE braam_prog braam_user braam_fs braam_core braam_flags)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(BRAAM_SIZE_BUDGET_CHECK
@@ -57,12 +58,19 @@ set(BRAAM_SIZE_BUDGET_CHECK
     --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt
     $<TARGET_FILE:kernel>)
 
+# bundle/ is packed rather than copied: BundleFs reads one archive, so the
+# worker loads one file instead of fetching a tree file by file.
+set(BRAAM_PACK_BUNDLE
+    ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
+    ${CMAKE_SOURCE_DIR}/bundle ${CMAKE_BINARY_DIR}/web/bundle.bin)
+
 add_custom_command(TARGET kernel POST_BUILD
     COMMAND ${BRAAM_SIZE_BUDGET_CHECK}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/web ${CMAKE_BINARY_DIR}/web
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:kernel> ${CMAKE_BINARY_DIR}/web/kernel.wasm
+    COMMAND ${BRAAM_PACK_BUNDLE}
     VERBATIM)
 
 add_custom_target(serve

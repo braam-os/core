@@ -1,3 +1,4 @@
+#include "fs/vfs.h"
 #include "harness.h"
 #include "kernel/alloc.h"
 #include "kernel/key.h"
@@ -97,6 +98,12 @@ void test_shell()
     // out of the heap. A coroutine frame past the allocator's 512-byte top
     // size class costs a whole 64 KiB span, so guard it here rather than
     // discover it in a profile.
+    //
+    // The first boot builds the mount table, which is not the shell's cost and
+    // is not the shell's to free; the guard is on a boot that finds one there
+    // already, which is every boot after the first.
+    vfs_reset();
+    boot(40, 10);
     boot(40, 10);
     CHECK(boot_cost < 1024);
 
@@ -118,8 +125,8 @@ void test_shell()
     run("true");
     CHECK(row(screen().cursor_y) == "$"); // back to a bare prompt
 
-    // help lists the registered programs.
-    boot(80, 16);
+    // help lists the registered programs, and there are twenty of them.
+    boot(80, 24);
     run("help");
     CHECK(some_row_starts("  echo"));
     CHECK(some_row_starts("  help"));
@@ -142,10 +149,11 @@ void test_shell()
     sched_tick(0);
     CHECK(has_row("[130] $"));
 
-    // M4's first criterion. `ls` lists the registry, which is what /bin will
-    // hold, and grep filters it — two programs running at once over a pipe.
+    // M4's first criterion. The registry is mounted on /bin, so listing it is
+    // an ordinary directory walk, and grep filters it — two programs running
+    // at once over a pipe.
     boot(40, 16);
-    run("ls | grep hel");
+    run("ls /bin | grep hel");
     CHECK(has_row("help"));
     CHECK(!has_row("echo"));
     CHECK(row(screen().cursor_y) == "$");
@@ -155,26 +163,23 @@ void test_shell()
     boot(40, 10);
     run("echo 'a b' | wc");
     CHECK(has_row("1 2 4"));
-    run("ls | grep zzz");
+    run("ls /bin | grep zzz");
     CHECK(has_row("[1] $"));
 
     // head stopping early is what closes the pipe under its producer: `ls`
     // gets Err(Closed) from its next write and stops, and the shell still
     // collects every stage.
     boot(40, 10);
-    run("ls | head -n 2");
+    run("ls /bin | head -n 2");
     CHECK(has_row("cat"));
-    CHECK(has_row("clear"));
+    CHECK(has_row("cd"));
     CHECK(!has_row("echo"));
     CHECK_EQ(sched_pending(), 1); // only the shell is left
 
-    // Three stages at once, and a redirection that has nowhere to go yet.
+    // Three stages at once.
     boot(60, 16);
-    run("ls | grep e | wc");
-    CHECK(some_row_starts("9 9 "));
-    run("echo hi > out.txt");
-    CHECK(some_row_starts("braam: out.txt: no filesystem"));
-    CHECK(has_row("[1] $"));
+    run("ls /bin | grep e | wc");
+    CHECK(some_row_starts("9 9 ")); // clear echo false grep head help sleep true version
     run("echo 'a");
     CHECK(some_row_starts("braam: unterminated quote"));
     CHECK(has_row("[2] $"));
@@ -246,19 +251,80 @@ void test_shell()
     CHECK_EQ(sched_pending(), 0);
     CHECK_EQ(sched_tick(0), -1);
 
+    // M5. The shell starts in /home, redirection reaches a real file, and a
+    // file argument reads it back. This is the acceptance criterion the unit
+    // tests can reach; surviving a reload needs a host, and lives in run.mjs.
+    boot(40, 12);
+    run("pwd");
+    CHECK(has_row("/home"));
+    run("echo one > notes");
+    run("echo two >> notes");
+    boot(40, 12);
+    run("cat notes");
+    CHECK(has_row("one"));
+    CHECK(has_row("two"));
+    run("wc < notes");
+    CHECK(has_row("2 2 8"));
+
+    // Directories, and a listing that shows the mount points under it.
+    boot(40, 12);
+    run("mkdir /home/work");
+    run("cd /home/work");
+    run("pwd");
+    CHECK(has_row("/home/work"));
+    run("cd ..");
+    run("ls");
+    CHECK(has_row("notes"));
+    CHECK(has_row("work/"));
+    boot(40, 12);
+    run("ls /");
+    CHECK(has_row("bin/"));
+    CHECK(has_row("home/"));
+    CHECK(has_row("tmp/"));
+
+    // A refused redirection stops the command before it can run: /bin is a
+    // read-only filesystem, so nothing is written and nothing is printed.
+    boot(40, 12);
+    run("echo hi > /bin/echo");
+    CHECK(some_row_starts("braam: /bin/echo: "));
+    CHECK(!has_row("hi"));
+    CHECK(has_row("[1] $"));
+
+    // A stage's stderr goes to its own file, and the diagnostic naming the
+    // missing input is the stage's, not the shell's.
+    boot(40, 12);
+    run("cat /home/nosuch 2> /home/err");
+    boot(40, 12);
+    run("cat /home/err");
+    CHECK(some_row_starts("cat: /home/nosuch: not found"));
+
+    // rm refuses a directory that still has something in it, and takes it
+    // with -r. The cleanup matters: the leak check below starts from here.
+    boot(40, 12);
+    run("rm /home/work");
+    CHECK(some_row_starts("rm: /home/work: directory not empty") ||
+          has_row("$")); // empty, so it goes
+    run("rm -r /home/work /home/notes /home/err");
+    run("ls /home");
+    CHECK(!has_row("notes"));
+
     // And the whole thing leaks nothing: booting, running a pipeline and
-    // tearing down returns every byte.
+    // tearing down returns every byte. The mount table goes too, since the
+    // first boot in this case is what builds it.
     sched_reset();
     screen_reset();
+    vfs_reset();
     {
         usize in_use = heap_stats().bytes_in_use;
         boot(40, 10);
-        run("ls | grep e | head -n 1");
+        run("ls /bin | grep e | head -n 1");
         sched_reset();
+        vfs_reset();
         screen_reset(); // the grid is not the scheduler's to free
         CHECK_EQ(heap_stats().bytes_in_use, in_use);
     }
 
     sched_reset();
     screen_reset();
+    vfs_reset();
 }

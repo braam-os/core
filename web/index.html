@@ -53,6 +53,20 @@ if (!canvas.transferControlToOffscreen) {
 
 const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
 
+// navigator.storage.persist() exists only on the main thread (Concept.md §A.2),
+// and asking for it is what keeps files from being evicted without warning. The
+// worker blocks its boot on the answer, so it is posted before anything else.
+(async () => {
+    let granted = false;
+    try {
+        if (navigator.storage && navigator.storage.persist)
+            granted = await navigator.storage.persist();
+    } catch {
+        granted = false;
+    }
+    worker.postMessage({ kind: "persisted", value: granted });
+})();
+
 // Only once per element: a future "reset kernel" button must replace the
 // <canvas>, not reuse it.
 const offscreen = canvas.transferControlToOffscreen();
