@@ -7,6 +7,173 @@ of the two needs amending.
 
 ---
 
+## M2 — Screen and keys
+
+The cell grid, its damage rectangle and the canvas renderer, `Channel<T>`, and the `key` and
+`resize` exports that complete §3.4's five — §2.3 and §3.5 made real, plus the first code in the
+system that a user can see. 14,011 bytes of `kernel.wasm`, against the same 32 KiB budget.
+
+### `resize` returns where the screen is
+
+§3.4 lists `resize(cols, rows)` with no return value, but the renderer has to learn three things
+from somewhere: the address of the cell array, the geometry, and where the cursor is. Four
+mechanisms could carry them. A hard-coded address reverses M0's deliberate decision that the host
+stays ignorant of the kernel's memory map. Exporting a wasm global needs a linker flag, and
+exports are named with `BRAAM_EXPORT` or not at all. Widening `host_present` re-sends unchanging
+geometry on every frame and only tells the host anything *after* the first paint. A separate
+`screen()` export is the honest alternative and was close, but `resize` is already the one call
+that reallocates the grid, so it is already the moment every cached view has to be re-derived
+(§8.4) — making it also the moment the address is handed over keeps that discipline in one place
+instead of two, and keeps the export list at the five §3.4 names.
+
+So `resize` returns the address of a static `Screen` descriptor, or 0 if the new grid could not be
+allocated. Static, not heap, so the address is a link-time constant the host can hold forever;
+and it carries a `'BSCR'` magic word, so a renderer paired with the wrong build says so rather
+than drawing noise. §3.4 is amended.
+
+Failure is all-or-nothing: the replacement grid is allocated and filled before anything is
+published, so a `resize` that returns 0 leaves the old screen whole and still on display. And the
+geometry is clamped — 512 columns by 256 rows — because `cols * rows * sizeof(Cell)` is computed
+in a 32-bit `usize`, and a host that asked for 30000×20000 would otherwise wrap it to a small
+allocation and then write past the end. The host reads `cols` and `rows` back out of the
+descriptor instead of assuming it got what it asked for, which makes clamping, out-of-memory and
+success one path on the JS side: *draw what the descriptor says*.
+
+### One rectangle, flushed once a tick, with the cursor folded in
+
+Damage could be presented per write, which would mean an import call per character. It is instead
+accumulated into a single rectangle and flushed from `tick()` after `sched_tick()` returns, so a
+tick that typed a line presents once and an idle tick presents not at all. `tick()` in `main.cpp`
+does the flushing rather than the scheduler, so the screen does not become a dependency of the
+scheduler.
+
+The cursor is drawn by the renderer and stored nowhere, which means moving it dirties two cells:
+the one it left and the one it entered. Marking both at every site that moves the cursor works
+until someone adds a site and forgets — and M3's line editor will add several. So `screen_flush`
+remembers where the cursor was last drawn and folds the move into the rectangle itself. Mutations
+now only have to mark cells they actually wrote, and the ghost-cursor bug is unavailable by
+construction.
+
+### Channel wakeups reuse the token table
+
+A receiver suspended on an empty channel has to be resumed by whichever `try_send` fills it. The
+obvious mechanism is a new scheduler entry point taking the `Waiter *` the channel holds — and it
+is a trap. `sched_cancel` unwaits and readies a waiter, but `sched_unwait` knows only about the
+timer queue and the wake table; it cannot unlink from a channel it has never heard of. A cancelled
+receiver would therefore sit on the ready queue while still listed in the channel, and the next
+`try_send` would queue the same handle a second time. Fixing that properly means intrusive queue
+links inside `Waiter` so that deregistration stays in one place, which is real machinery and, on
+the evidence, M4's to build when `send()` needs it too.
+
+The channel instead allocates a wake token and stores only the token, not the pointer.
+`sched_wake` on a token nothing waits on is already defined to be ignored — "a late or cancelled
+event" — so a stale token after a cancellation is ordinary traffic rather than a use-after-free,
+and every existing path works untouched: `sched_unwait` in the awaiter's destructor deregisters,
+`sched_cancel` already knows how to pull a token waiter out. Nothing in `sched.h` or `sched.cpp`
+changed for M2.
+
+The cost is a hash insert and remove per suspension, which is nothing at keyboard rates and worth
+revisiting in M4 when `Channel<Bytes>` carries pipe traffic. The price of a globally visible token
+is that a stray `wake()` from JS can resume a receiver spuriously, so `await_resume` checks the
+ring rather than trusting the wake and returns `Error::Again` when there is nothing to take.
+Without that check the count would underflow.
+
+### `Channel<T>` gets its mechanism, M4 gets its policy
+
+§3.6 specifies both `co_await ch.recv()` and `co_await ch.send(v)`. Only `recv` and a
+non-blocking `try_send` landed. The size argument for deferring would be bogus — an uninstantiated
+member of a class template emits nothing — but blocking send needs decisions M2 has no way to
+make: what a cancelled sender does with its half-delivered value, whether a full channel with no
+receiver parks or errors, and what closing one does to the senders waiting on it. Those are pipe
+semantics, and M4 defines them. An awaiter nothing awaits is an awaiter nothing tests, and the
+test suite is the thing that has found every real bug so far.
+
+The ring is inline rather than heap-allocated, which is what lets the keyboard channel be a plain
+global. A `--no-entry` binary never runs `__wasm_call_ctors`, so a global has to be correct when
+zero-initialised and trivially destructible — the same constraint that pushed the scheduler behind
+a pointer in M1, solved the other way here because a fixed-capacity ring has no allocation to do.
+Sending therefore cannot fail for want of memory, which matters because `key()` is called from the
+host with nowhere to report an error to. A full ring drops the newest event, which is the right
+failure for a keyboard.
+
+### Keys are codepoints; there are no control characters
+
+`key(code, mods)` carries a Unicode codepoint for anything printable and a value above `0x110000`
+for the named keys, so the two can never collide. Enter, Tab and Backspace are named keys, not
+`0x0D`, `0x09` and `0x08` — the temptation to encode them as control characters is exactly what
+§2.3 exists to refuse. `^C` arrives as `'c'` with the control modifier set and means whatever its
+reader decides; there is no byte anywhere in the system that has to be recognised as an
+interrupt, and nothing to mis-parse.
+
+`key()` only queues. Like `wake()`, it never resumes a coroutine, so an event arriving from the
+host cannot re-enter the scheduler — and because the worker is single-threaded and `tick()` is a
+synchronous call, it cannot arrive mid-tick anyway. The rule is kept for the same reason `wake()`
+keeps it: it makes the question moot for every event source added later. The corresponding
+obligation on the host is that `key()` and `resize()` are each followed by `pump()`, since an idle
+kernel has no timer armed and queued work would otherwise wait forever.
+
+### Reflow keeps the rows in use, not the bottom of the grid
+
+"Window resize reflows" has three plausible readings. Full re-wrapping of logical lines is the one
+a modern terminal does, and it needs a per-row continuation bit and a notion of line length that
+the grid does not have; that is properly M7's, where the layout layer decides who owns line
+structure. Keeping the top-left corner is not a reflow but a crop, and it discards precisely the
+recent output the user is looking at.
+
+Keeping the bottom-most rows is the obvious remaining answer, and it is wrong in the common case:
+a 24-row screen holding one line of output has its text at the top, so keeping the bottom five
+rows of it keeps five blank rows and throws the text away. The smoke test caught exactly that on
+the boot banner. What survives is the rows *in use* — `0..cursor_y` — dropping from the top when
+they no longer fit and landing at the top of the new grid, since output grows downwards and that
+is where the eye already is. A full screen still keeps its bottom, because there the rows in use
+are the whole grid.
+
+The wrap is deferred for the same reason: the cursor parks at `cursor_x == cols` after the last
+column is filled and only descends when the next character arrives. Wrapping eagerly would scroll
+the screen the moment a line reached the right edge, before there was anything to put on the next
+one.
+
+### The renderer, and where the font lives
+
+Rendering is the ~300 lines of JavaScript §2.3 promises, in `web/render.js`, and it does exactly
+one thing: read cells, draw glyphs. It never calls back into the kernel — `host_present` runs
+synchronously inside `tick()`, so a call the other way would re-enter the scheduler mid-drain.
+That rule is written next to the import.
+
+The split between page and worker follows what each one can know. The page owns the pixel box and
+reports it in device pixels via `ResizeObserver`'s `devicePixelContentBoxSize`, which is already
+correct under fractional zoom; it also has to watch `devicePixelRatio` with a `matchMedia` query
+re-armed at each new ratio, because moving a window to another monitor changes it and nothing else
+reports that. The worker owns the font, so it owns the metrics and therefore the geometry: it
+measures a glyph, divides, and calls `resize`. `devicePixelRatio` does not exist in a worker at
+all, which settles the question of who computes what. Advance widths are fractional, so the cell
+width is rounded once and every glyph is placed at `col * cellW` rather than letting the font
+advance across a row; a startup check compares `M` against `i` and warns if the font turned out
+not to be monospaced, because that failure otherwise looks like a kernel bug.
+
+There is no blinking cursor. A blink needs a timer, `tick()` would then never return `-1`, and the
+page would never go idle — a visual flourish is not worth a kernel that never sleeps.
+`transferControlToOffscreen` has no fallback: without `SharedArrayBuffer` the main thread cannot
+see the kernel's memory, so main-thread rendering is not available at any price, and its absence
+is reported rather than worked around.
+
+### What the smoke test now proves
+
+`init` creates an 80×24 grid before anything else, so the kernel is never in a screenless state
+and the boot banner has somewhere to go. The host's first `resize` then reflows that banner into
+the measured geometry, which makes the reflow path visible on every page load rather than only
+when someone drags a window.
+
+Both M2 criteria are checked against the shipping `kernel.wasm`, not only against `tests.wasm`:
+the smoke test resizes, types through `key()`, and asserts the codepoints landed in the right
+cells, that the cursor advanced, and that exactly one `host_present` arrived covering the two
+written cells *and* the cell the cursor left. Then it shrinks the screen and asserts the text
+survived with the cursor still inside the grid, and that an absurd geometry comes back clamped.
+The M1 assertions are unchanged and still pass: the console task suspends on a channel rather than
+a timer, so it cannot perturb the tick delays the M1 test pins down.
+
+---
+
 ## M1 — Scheduler
 
 `Task<T>`, a ready queue, a timer queue, wake tokens, `tick()`, `wake()`, `sleep_ms` and

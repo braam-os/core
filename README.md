@@ -26,8 +26,11 @@ Early. Milestone M0 — the nucleus — is done: a freestanding wasm build, a ha
 `<coroutine>` shim, an allocator built for coroutine frames, the base core types, and a page
 that boots the kernel in a Web Worker and prints a line. M1 — the scheduler — is done too:
 `Task<T>`, a ready queue, kernel-side timers, wake tokens, and cancellation that unwinds a
-sleeping task by returning through it. `kernel.wasm` is 8 KB. M2, the screen and keyboard, is
-next.
+sleeping task by returning through it. M2 — the screen and keyboard — is done as well: a grid of
+cells in linear memory that a canvas renderer reads directly, damage rectangles, `Channel<T>`,
+and a keyboard that speaks Unicode codepoints rather than control characters. Type into the page
+and the characters appear; resize the window and the screen reflows. `kernel.wasm` is 14 KB.
+M3, the userland shell, is next.
 
 [doc/Concept.md](doc/Concept.md) is the specification — the architecture and the reasoning
 behind each decision. Read it first. [doc/Milestones.md](doc/Milestones.md) is the plan: the

@@ -8,44 +8,111 @@
     html { color-scheme: dark; }
     body {
         margin: 0;
-        padding: 2rem;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
         background: #12131a;
         color: #c8cbd6;
-        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    h1 { margin: 0 0 1.5rem; font-size: 14px; font-weight: 600; color: #6f7488; }
-    #console { margin: 0; white-space: pre-wrap; }
+    #screen { flex: 1 1 auto; display: block; width: 100%; min-height: 0; }
+    #status {
+        flex: 0 0 auto;
+        margin: 0;
+        padding: 0.35rem 0.6rem;
+        border-top: 1px solid #24263200;
+        color: #6f7488;
+        white-space: pre-wrap;
+    }
+    #status:not(:empty) { border-top-color: #242632; }
     .error { color: #e5687a; }
 </style>
 </head>
 <body>
-<h1>braam — M1 scheduler</h1>
-<pre id="console"></pre>
+<canvas id="screen" tabindex="0"></canvas>
+<pre id="status"></pre>
 <script type="module">
-const out = document.getElementById("console");
+import { normalise, consumes } from "./keys.js";
 
-function append(text, cls) {
+const canvas = document.getElementById("screen");
+const status = document.getElementById("status");
+
+function note(text, cls) {
     const line = document.createElement("div");
     if (cls) line.className = cls;
     line.textContent = text;
-    out.appendChild(line);
+    status.appendChild(line);
+}
+
+// Without SharedArrayBuffer the main thread cannot see the kernel's memory, so
+// there is no main-thread rendering to fall back to (Concept.md §1).
+if (!canvas.transferControlToOffscreen) {
+    note("this browser has no OffscreenCanvas, so there is nothing to draw on", "error");
+    throw new Error("no OffscreenCanvas");
 }
 
 const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
 
+// Only once per element: a future "reset kernel" button must replace the
+// <canvas>, not reuse it.
+const offscreen = canvas.transferControlToOffscreen();
+worker.postMessage({ kind: "canvas", canvas: offscreen }, [offscreen]);
+
+// The page owns the pixel box; the worker owns the font and therefore the
+// geometry. devicePixelContentBoxSize is the exact device-pixel box, and is
+// already right under fractional zoom.
+function viewport(entry) {
+    const dpr = window.devicePixelRatio || 1;
+    let width, height;
+    if (entry && entry.devicePixelContentBoxSize && entry.devicePixelContentBoxSize.length) {
+        const box = entry.devicePixelContentBoxSize[0];
+        width = box.inlineSize;
+        height = box.blockSize;
+    } else {
+        const rect = canvas.getBoundingClientRect();
+        width = Math.round(rect.width * dpr);
+        height = Math.round(rect.height * dpr);
+    }
+    worker.postMessage({ kind: "viewport", width, height, dpr });
+}
+
+new ResizeObserver((entries) => viewport(entries[0])).observe(canvas);
+
+// devicePixelRatio changes when the window moves to another monitor or the
+// browser zooms; the query has to be re-armed at the new ratio each time.
+function watchRatio() {
+    matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener(
+        "change",
+        () => {
+            viewport(null);
+            watchRatio();
+        },
+        { once: true });
+}
+watchRatio();
+
+addEventListener("keydown", (event) => {
+    const key = normalise(event);
+    if (consumes(event, key))
+        event.preventDefault();
+    if (key)
+        worker.postMessage({ kind: "key", code: key.code, mods: key.mods });
+});
+
+canvas.focus();
+
 worker.onmessage = ({ data }) => {
     if (data.kind === "error") {
         console.error(data.text);
-        append(data.text, "error");
+        note(data.text, "error");
     } else {
         console.log(data.text);
-        append(data.text);
     }
 };
 
 worker.onerror = (e) => {
     console.error(e.message);
-    append(`worker error: ${e.message}`, "error");
+    note(`worker error: ${e.message}`, "error");
 };
 </script>
 </body>

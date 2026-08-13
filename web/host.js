@@ -7,11 +7,13 @@ export class Memory {
     constructor() {
         this.memory = null;
         this._u8 = null;
+        this._u32 = null;
     }
 
     bind(memory) {
         this.memory = memory;
         this._u8 = null;
+        this._u32 = null;
     }
 
     view() {
@@ -20,12 +22,21 @@ export class Memory {
         return this._u8;
     }
 
+    // The cell grid and the screen descriptor are read as u32s.
+    u32() {
+        if (this._u32 === null || this._u32.byteLength === 0)
+            this._u32 = new Uint32Array(this.memory.buffer);
+        return this._u32;
+    }
+
     str(ptr, len) {
         return new TextDecoder().decode(this.view().subarray(ptr, ptr + len));
     }
 }
 
-export function makeImports(mem, sink) {
+// `present` draws and returns; it must never call back into the kernel, which
+// would re-enter the scheduler in the middle of the tick that called it.
+export function makeImports(mem, sink, present) {
     return {
         host: {
             log(ptr, len) {
@@ -33,6 +44,9 @@ export function makeImports(mem, sink) {
             },
             now() {
                 return performance.now();
+            },
+            present(x, y, w, h) {
+                present(x, y, w, h);
             },
         },
     };

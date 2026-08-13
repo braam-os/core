@@ -2,11 +2,13 @@ add_executable(tests
     unit/main.cpp
     unit/harness.cpp
     unit/test_alloc.cpp
+    unit/test_channel.cpp
     unit/test_coroutine.cpp
     unit/test_fmt.cpp
     unit/test_hash.cpp
     unit/test_result.cpp
     unit/test_sched.cpp
+    unit/test_screen.cpp
     unit/test_str.cpp
     unit/test_string.cpp
     unit/test_task.cpp

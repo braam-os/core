@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 M0 (nucleus) is done: CMake build, the coroutine shim, the allocator, `Str`/`Span`/`Vec`/
 `Result`/`Option`, `host_log`, a Node test harness, and CI with a size budget. M1 (scheduler)
 is done: `Task<T>`, the ready and timer queues, wake tokens, `tick()`/`wake()`, `sleep_ms`,
-`CancelToken`, `HashMap` and `String`. M2 (screen and keys) is next.
+`CancelToken`, `HashMap` and `String`. M2 (screen and keys) is done: the cell grid and its
+damage rectangle, `Channel<T>`, `Key`, the `key()`/`resize()` exports, the `host_present`
+import, and the canvas renderer in `web/render.js`. M3 (userland shell) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -97,6 +99,10 @@ Further constraints that are easy to violate by habit:
   first; a naive `malloc` will dominate the profile.
 - **`memory.grow` detaches the `ArrayBuffer`**, killing cached `Uint8Array` views. Route JS-side
   access through a `view()` accessor that re-derives after growth.
+- **A namespace-scope global must be correct when zero-initialised and trivially destructible.**
+  `--no-entry` never calls `__wasm_call_ctors`, and a non-trivial destructor pulls in
+  `__cxa_atexit`, which nothing provides — a link error, deliberately. Either make the state a
+  POD (`Heap`, `Screen`, `Channel`) or put it behind a pointer built on first use (`Sched`).
 
 ## Process model
 

@@ -39,11 +39,19 @@ travels in `Task`'s promise rather than in every signature, and `CO_TRY` joins `
 plain `return` is ill-formed in a coroutine. Both acceptance criteria are checked twice: in
 `tests.wasm` against a fake clock, and in the smoke test against the shipping `kernel.wasm`.
 
-## M2 — Screen and keys
+## M2 — Screen and keys — **done**
 Cell grid, canvas renderer, damage rectangles, `Channel<Key>`, `OffscreenCanvas` transfer.
 
-- [ ] Typed characters appear on screen and the cursor moves
-- [ ] Window resize reflows and `resize(cols, rows)` reaches the kernel
+- [x] Typed characters appear on screen and the cursor moves
+- [x] Window resize reflows and `resize(cols, rows)` reaches the kernel
+
+`resize` returns the address of a screen descriptor, which is how the host learns the geometry
+and where the cells are — Concept.md §3.4 is amended to say so. Reflow keeps the rows in use and
+drops from the top; re-wrapping logical lines waits for M7's layout layer.
+`Channel<T>` landed with `co_await recv()` and a non-blocking `try_send()`, but not
+`co_await send()`: backpressure is M4's to define, where pipes make it testable. `init` creates
+an 80×24 grid so the kernel is never screenless, and the host's first `resize` reflows the boot
+banner into the measured geometry. See [Release_Notes.md](Release_Notes.md).
 
 ## M3 — Userland shell
 `LineEditor` coroutine with history and editing, tokeniser, program registry, argv, exit codes.

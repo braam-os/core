@@ -180,8 +180,14 @@ init(heap_base)
 wake(token, payload_ptr, payload_len)   // host signals an event
 tick(now_ms)                            // drains ready queue; returns ms-until-next-timer, or -1
 key(code, mods)                         // fast path, avoids allocation
-resize(cols, rows)
+resize(cols, rows)                      // returns the screen descriptor's address, or 0
 ```
+
+`resize` returns where the screen descriptor (§3.5) lives, which is how the host learns the
+geometry and the address of the cell array. It is the only call that moves the cells, so it is
+also where the renderer re-derives its views (§8.4). The kernel clamps the geometry it is
+given, so the host reads `cols` and `rows` back out of the descriptor rather than assuming its
+request was honoured.
 
 **Wasm imports** (kernel → host), all non-blocking, all returning immediately:
 
@@ -198,19 +204,39 @@ says when the host must call back, and one `setTimeout` serves every sleeping ta
 ### 3.5 The screen
 
 ```cpp
-struct Cell { char32_t ch; u8 fg, bg, attrs; };   // 8 bytes, or pack to 8 with a palette
+struct Cell { char32_t ch; u8 fg, bg, attrs, reserved; };   // 8 bytes; fg and bg are palette indices
 Cell screen[rows * cols];
 ```
 
-The renderer holds a `Uint8Array` view over that region and blits monospace glyphs to the
-canvas, plus a cursor. Damage tracking is a dirty rectangle the kernel updates as it writes,
-passed to `host_present`.
+The renderer holds a view over that region and blits monospace glyphs to the canvas, plus a
+cursor. Damage tracking is a dirty rectangle the kernel updates as it writes, passed to
+`host_present` once per `tick`. The cursor is drawn, never stored, so moving it dirties the
+cell it left as well as the one it entered.
+
+The host finds all of this through a descriptor, whose address `resize` returns:
+
+```cpp
+struct Screen {
+    u32 magic;                 // 'BSCR', so a mismatched renderer fails loudly (§8.4)
+    u32 cols, rows;
+    u32 cursor_x, cursor_y;    // cursor_x may equal cols: the wrap is deferred
+    u32 cursor_on;
+    u32 cells;                 // address of Cell[cols * rows]
+};
+```
+
+The wrap is deferred, so filling the last column does not scroll the screen on its own. A
+resize keeps the rows in use — `0..cursor_y` — dropping from the top when they no longer fit,
+and lands them at the top of the new grid. Re-wrapping logical lines needs a line model the
+grid does not have, and belongs with the layout layer in M7.
 
 Input is symmetric: a normalised `KeyboardEvent` becomes `{code, mods}`, is posted to the
-worker, and lands in a `Channel<Key>`. Line editing — history, cursor movement, kill-word,
-completion — lives in a **userland** `LineEditor` coroutine, not in the kernel. That is where
-the "line discipline" belongs, and it is far nicer as a coroutine than as a termios state
-machine.
+worker, and lands in a `Channel<Key>`. A printable key carries its Unicode codepoint; named
+keys take values above the Unicode range. **No control characters exist anywhere in the
+system**: `^C` is `'c'` with the control modifier set, and the reader decides what that means.
+That is §2.3 applied to input. Line editing — history, cursor movement, kill-word, completion —
+lives in a **userland** `LineEditor` coroutine, not in the kernel. That is where the "line
+discipline" belongs, and it is far nicer as a coroutine than as a termios state machine.
 
 ### 3.6 Kernel objects
 

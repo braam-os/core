@@ -17,6 +17,8 @@ void test_coroutine();
 void test_task();
 void test_sched();
 void test_fmt();
+void test_channel();
+void test_screen();
 
 // Returns the number of failed checks; the harness treats nonzero as failure.
 BRAAM_EXPORT("run_tests") u32 run_tests() {
@@ -32,6 +34,8 @@ BRAAM_EXPORT("run_tests") u32 run_tests() {
     test_coroutine();
     test_task();
     test_sched();
+    test_channel();
+    test_screen();
 
     u32 failures = test_failures();
     HeapStats s = heap_stats();

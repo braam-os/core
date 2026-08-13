@@ -2,8 +2,12 @@
 // (Concept.md §3): OPFS sync handles and OffscreenCanvas both need a worker.
 
 import { Memory, makeImports } from "./host.js";
+import { Renderer } from "./render.js";
 
 const mem = new Memory();
+
+let renderer = null;
+let pending = null; // a canvas or viewport that arrived before the kernel did
 
 function emit(kind, text) {
     self.postMessage({ kind, text });
@@ -11,7 +15,10 @@ function emit(kind, text) {
 
 async function boot() {
     const url = new URL("./kernel.wasm", import.meta.url);
-    const imports = makeImports(mem, (text) => emit("log", text));
+    const imports = makeImports(mem, (text) => emit("log", text), (x, y, w, h) => {
+        if (renderer)
+            renderer.present(x, y, w, h);
+    });
 
     // Streaming needs an application/wasm content type; not every static host
     // sets one, so fall back to a buffered instantiate.
@@ -30,7 +37,35 @@ async function boot() {
     instance.exports.init(0);
 
     self.kernel = instance.exports;
+
+    // The canvas may have arrived before the module finished compiling.
+    if (pending) {
+        const { canvas, viewport } = pending;
+        pending = null;
+        if (canvas)
+            attach(canvas);
+        if (viewport)
+            fit(viewport);
+    }
     pump();
+}
+
+function attach(canvas) {
+    renderer = new Renderer(canvas, mem);
+}
+
+// The worker owns the font, so it owns the geometry: the page reports a box in
+// device pixels and reads back whatever the kernel accepted.
+function fit({ width, height, dpr }) {
+    if (!renderer)
+        return;
+    const { cols, rows } = renderer.fit(width, height, dpr);
+    const info = self.kernel.resize(cols, rows);
+    if (info === 0) {
+        emit("error", `braam: no memory for a ${cols}x${rows} screen`);
+        return;
+    }
+    renderer.attach(info);
 }
 
 // The event loop is the scheduler (Concept.md §2.1). tick() drains the ready
@@ -48,11 +83,37 @@ function pump() {
 }
 
 // Events reach a suspended task as a wake token, never as a return value
-// (Concept.md §2.2).
+// (Concept.md §2.2). Every one of them pumps: when nothing is sleeping there is
+// no timer armed, so queued work would otherwise sit there forever.
 self.onmessage = ({ data }) => {
-    if (data && data.kind === "wake" && self.kernel) {
+    if (!data)
+        return;
+
+    if (!self.kernel) {
+        pending = pending || {};
+        if (data.kind === "canvas")
+            pending.canvas = data.canvas;
+        else if (data.kind === "viewport")
+            pending.viewport = data;
+        return;
+    }
+
+    switch (data.kind) {
+    case "canvas":
+        attach(data.canvas);
+        break;
+    case "viewport":
+        fit(data);
+        pump();
+        break;
+    case "key":
+        self.kernel.key(data.code >>> 0, data.mods >>> 0);
+        pump();
+        break;
+    case "wake":
         self.kernel.wake(data.token >>> 0, data.ptr >>> 0, data.len >>> 0);
         pump();
+        break;
     }
 };
 

@@ -1,0 +1,54 @@
+// KeyboardEvent → {code, mods}, on the main thread (Concept.md §3.5). A
+// printable key carries its Unicode codepoint; everything else gets a name
+// from the table below. There are no control characters: ^C is 'c' with
+// MOD_CTRL, and the kernel decides what that means (§2.3).
+
+export const MOD_SHIFT = 1;
+export const MOD_CTRL = 2;
+export const MOD_ALT = 4;
+export const MOD_META = 8;
+
+// Must match the enum in src/kernel/key.h, in order.
+const NAMED = 0x110000;
+const NAMES = [
+    "Enter", "Backspace", "Tab", "Escape", "Delete", "Insert",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+    "Home", "End", "PageUp", "PageDown",
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+];
+
+const CODES = new Map(NAMES.map((name, i) => [name, NAMED + i]));
+
+// Browser shortcuts the page has no business eating. Ctrl+L is not among them:
+// clearing the screen is what it means in a terminal, and the kernel binds it.
+const RESERVED = new Set(["r", "R", "t", "T", "w", "W", "n", "N"]);
+
+export function normalise(event) {
+    let mods = 0;
+    if (event.shiftKey) mods |= MOD_SHIFT;
+    if (event.ctrlKey) mods |= MOD_CTRL;
+    if (event.altKey) mods |= MOD_ALT;
+    if (event.metaKey) mods |= MOD_META;
+
+    const named = CODES.get(event.key);
+    if (named !== undefined)
+        return { code: named, mods };
+
+    // A printable key is one whose .key is a single code point; a modifier
+    // press on its own, and any dead or composing key, is not one.
+    const points = [...event.key];
+    if (points.length !== 1)
+        return null;
+
+    return { code: points[0].codePointAt(0), mods };
+}
+
+// Whether to preventDefault. Meta is the system's, and a few Ctrl shortcuts
+// are the browser's; a page that swallows Ctrl+R is a page you cannot leave.
+export function consumes(event, key) {
+    if (key === null || event.metaKey)
+        return false;
+    if (event.ctrlKey && RESERVED.has(event.key))
+        return false;
+    return true;
+}
