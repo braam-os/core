@@ -293,6 +293,13 @@ void *operator new(usize n)
     return heap_alloc(n);
 }
 
+// The form a Task's frame uses, because TaskPromise declares
+// get_return_object_on_allocation_failure. Null is a value here, not a fault.
+void *operator new(usize n, const std::nothrow_t &) noexcept
+{
+    return heap_alloc(n);
+}
+
 void *operator new[](usize n)
 {
     return heap_alloc(n);

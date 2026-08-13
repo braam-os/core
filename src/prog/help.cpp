@@ -1,4 +1,5 @@
 #include "kernel/fmt.h"
+#include "user/io.h"
 #include "user/prog.h"
 
 // Two passes over the registry: the widest name, then the padded listing. The
@@ -16,7 +17,8 @@ BRAAM_PROGRAM(prog_help, "help", "list the programs")
         for (usize k = p->name.size(); k < width; k++)
             b.put(' ');
         b.put("  ").put(p->usage).put('\n');
-        co_await io.out.write(b.str());
+        if ((co_await write_all(io.out, b.str())).is_err())
+            co_return 1;
     }
 
     co_return 0;

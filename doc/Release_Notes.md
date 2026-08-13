@@ -7,6 +7,250 @@ of the two needs amending.
 
 ---
 
+## M4 — Streams
+
+Pipes with real backpressure, stdin, the whole shell grammar, and a `^C` that reaches a running
+pipeline. This is the milestone where three debts recorded below come due at once — `send()`'s
+policy, the owning token store quoting forces, and a shell that can watch the keyboard while a
+child runs — and where the first thing in the system runs genuinely concurrently with another.
+62,926 bytes of `kernel.wasm`, against an unchanged 256 KiB budget.
+
+Nothing here changed a design *decision*, so `Concept.md` is not amended. Two comments that
+described plans rather than facts are: `tty.h`'s, which proposed putting the screen behind a byte
+channel, and `shell.cpp`'s, which named an argv-lifetime invariant that no longer exists.
+
+### A pipe carries owning chunks, not `Bytes`
+
+Milestones.md says `Channel<Bytes>` and `Bytes` already exists — `using Bytes = Span<const u8>` —
+so the obvious reading is that a pipe moves `Bytes`. It cannot. A `Span` is a pointer and a
+length, and the whole point of a pipe is that the reader runs *later*: by the time it takes the
+value, the writer's buffer is a dead coroutine frame. The channel has to own what it carries, so
+a pipe is `Channel<String, 8>` and `Stream::Write` copies into a `String` on the way in.
+
+The copy is the price of the decoupling and it is the same copy `Bytes` would have needed
+somewhere else, in a place with less obvious ownership. `String` also happens to satisfy exactly
+what the ring needs — a default constructor for the inline slots and move-assignment for
+`try_send` — which is not a coincidence: `Vec<String>` was already proven by the editor's history.
+
+Capacity is counted in *chunks*, not bytes, so one huge write occupies one slot and backpressure
+is per-write. Eight slots is enough to keep a producer and a consumer both busy without making
+the block that holds them large; the number is one constant in `io.h`.
+
+### What `send()` decided
+
+M2 deferred blocking send because the decisions belonged to pipes. Here they are.
+
+**A cancelled sender delivers nothing.** The value lives in the awaitable and dies with it; the
+ring is only ever written by `put()`, which a cancelled sender never reaches. That is the only
+answer that keeps cancellation meaning "unwinds by returning", because a half-delivered value
+would have to be either dropped silently or delivered by a task that has already been killed.
+
+**A full channel parks.** Not an error, not a drop — parking *is* backpressure, and a pipe that
+dropped would make `ls | wc` report a number that depends on scheduling. The one place that
+deliberately drops instead is the tty pump, for the reason M2 gives about the keyboard ring.
+
+**Closing is directional, because a pipe is.** `close()` is the writer saying there is no more:
+the receiver drains what is queued and only *then* reads `Err(Closed)`, so nothing in flight is
+lost. `hangup()` is the reader saying it will take no more: parked and future senders get
+`Err(Closed)`. Two verbs rather than one, because "the far end is gone" means opposite things at
+the two ends, and a single `close()` would have had to guess which.
+
+`Error::Closed` is a new value rather than a reuse of `Again`. `Again` is already the stray-wake
+sentinel — "you were woken but there is nothing here" — and end of input is the opposite claim.
+Overloading it would have made a spurious `wake()` from JS indistinguishable from EOF.
+
+### `take()` wakes the sender, not `await_resume`
+
+The obvious symmetry to `try_send` waking a parked receiver is `Recv::await_resume` waking a
+parked sender, and it deadlocks. `Recv::await_ready` is `!empty()`, so a receiver that finds the
+ring non-empty never suspends and is never resumed by a wake — and that is the *ordinary* case
+for a pipe, where the reader is usually behind. The wake has to live in `take()`, which is the
+one thing every path that removes a value goes through.
+
+The same reasoning put the closed check into `await_ready`: a receiver parked on an empty pipe has
+nothing coming to wake it when the writer closes, so `close()` has to wake it explicitly and
+`await_ready` has to admit that a closed empty channel is ready.
+
+### The intrusive waiter queue is still not needed, and now says so
+
+M2's notes hand this milestone the job of putting intrusive queue links inside `Waiter`, so that
+deregistration lives in one place, "when `send()` needs it too". It does not need it. Every
+channel in the system has exactly one writer — each pipe has one upstream stage, `err` is the
+console, the input pipe has only the pump, and the report channel uses `try_send` — so a single
+`send_token_`, symmetric with the existing `recv_token_`, holds every case, and the existing
+cancellation path works untouched.
+
+That is true of *this* grammar. `2>&1` would join two writers onto one channel and silently
+clobber a token, which is the kind of bug that shows up as a lost wakeup three milestones later.
+So `Send::await_suspend` and `park_sender` panic if a second sender arrives, and the operator that
+would trip it arrives with the queue work rather than before it.
+
+### The pipeline is a heap block, and could not be anything else
+
+The natural shape is locals in the shell's frame: the parsed pipeline, the pipes, the report
+channel. Two things forbid it, and both are load-bearing enough that `test_shell` guards them.
+
+The allocator's top size class is 512 bytes and anything above it takes a whole 64 KiB span, so a
+shell frame carrying a pipeline would cost a span *per shell*. And `~Sched` destroys jobs in spawn
+order — the shell first — so a stage frame pointing into the shell's frame is a use-after-free
+during `sched_reset`, which the test suite does after every case.
+
+One object answers both: a refcounted heap block holding the frozen pipeline, the pipes, the
+report channel and the pid list. The shell holds a reference, each stage holds one through an RAII
+local in its own frame, and the last one out frees it — so the order they leave in stops
+mattering. `~Sched` also now runs backwards, since a child is spawned after its parent, and
+`sched_cancel` stands down while it does, because `jobs` holds freed pointers as that loop walks.
+
+The pipes inside it are individually heap-allocated rather than an array, for a smaller reason
+with the same shape: `Channel` deletes its copy constructor, which suppresses the implicit move,
+so `Vec<Channel>` does not compile — and an inline array of eight would have pushed the block past
+512 anyway.
+
+### A tty pump, not a `select`
+
+M3's notes name the two candidates for interrupting a running program: a second receiver on a
+single-receiver channel, or a `select`-shaped combinator. Neither is what landed, because both
+fight the same constraint from opposite sides — `CancelState::waiting` is a single slot, so one
+task tree can be parked on exactly one awaiter, and a select over two channels needs two.
+
+Instead the keyboard changes hands. While a pipeline runs, a spawned pump coroutine is the only
+receiver on `keys()` and the shell is parked on the job's report channel; when the job ends the
+pump is cancelled and the shell takes the keyboard back. The one-receiver rule holds at every
+instant, and it holds *structurally* rather than by luck: `sched_unwait` knows nothing about
+channels, so a cancelled pump leaves its token in `keys()` until its `~Recv` runs, and the shell
+must not re-register before then. That is why the pump files a report of its own and the shell
+waits for it — the report is proof the pump has unwound. The equality guard in `~Recv` is now
+load-bearing for two receivers rather than one, and is commented as such.
+
+The pump never parks on the input pipe, and that is not an optimisation. `ls | grep foo` reads no
+stdin, so a blocking pump would fill the eight-slot ring after eight keystrokes, park, stop being
+the receiver on `keys()` — and make `^C` unreachable, defeating the milestone's own criterion
+within a second of key autorepeat. It drops instead, which is the policy `key()` already uses on
+the keyboard ring and for the same reason: there is nowhere to report a full ring to.
+
+This also means the shell has exactly one path. A single command is a one-stage pipeline with a
+pump, costing two extra job records and two frames, because the `^C` criterion is met by
+`sleep 5000` and a fast path for single commands would have left precisely that case broken.
+
+### Structured concurrency, put back by hand
+
+§3.6 says a parent `co_await`s a child group and cancellation propagates down the tree. The stages
+here are independent scheduler jobs with independent `CancelState`s, so it does not. That is
+forced rather than chosen: the stages of a pipeline must all be parked at once, one job cannot
+have two children parked at once, and `sched_spawn` is the only concurrency there is.
+
+What §3.6 buys is put back explicitly. A destructor in `run_line`'s frame cancels every launched
+stage and the pump — a destructor rather than a branch, because a cancelled coroutine cannot park
+again to clean up (every `await_suspend` here declines to suspend once the flag is set) and
+because the frame may be destroyed outright rather than resumed. The same reasoning shapes a
+stage's epilogue: closing its output, hanging up its input and filing its report all happen in a
+destructor, so they also happen when the stage is cancelled or destroyed while suspended.
+
+That epilogue is the whole of the early-close mechanism. `head -n 1` needs no way to say "I am
+done" — it returns, its runner hangs up its input, and the next write upstream gets `Err(Closed)`.
+
+A real child-group awaitable is what would retire this, and it needs the intrusive `Waiter` links
+above. The two deferrals are the same deferral.
+
+### A frame that will not allocate is now a value
+
+`operator new` returns null and its comment says callers must check, but no promise declared
+`get_return_object_on_allocation_failure`, so the compiler was entitled to assume it never does.
+`sched_spawn`'s `if (!t) return 0` was written in anticipation of this and could not fire.
+
+M4 is where it matters, because "how many stages actually launched" is a number the shell has to
+wait for exactly. So `TaskPromise` declares the handler, which also switches frame allocation to
+the nothrow `operator new` the standard names for it — hence a `std::nothrow_t` in `types.h`,
+which is a declaration the freestanding build has to supply like everything else. Awaiting a task
+whose frame never allocated panics rather than reading a promise that does not exist; only a
+spawned root turns the failure into a value, which is the only place that can do anything with it.
+
+### The terminal stays a cell grid
+
+`tty.h` said M4 would replace the console sink with a pair of `Channel<Bytes>` and move the screen
+behind a reader task. It does not, and the comment is amended instead. §2.3 is the stronger
+argument: the terminal *is* a cell grid, and a byte channel in front of it would add a copy, a
+frame and a scheduling hop to reach an array `screen_write` already fills synchronously — while
+putting terminal output behind a bounded queue that can drop. The one thing the reader task would
+have bought, `prog | prog` and `prog | screen` sharing one mechanism, the `Stream` function
+pointer gives for nothing.
+
+`Stream` did have to grow. A sink can now answer `Err(Again)` for "full, park me" and gets a
+second function pointer to arm the wake token with; `Write` gained a `Waiter` and, more
+importantly, a destructor that deregisters it, without which a frame destroyed mid-write leaves a
+dangling pointer in the wake table — exactly the bug the channel notes below describe. `Write`
+retries once after being woken, which is enough because a pipe has one writer and being woken by
+`take()` means there is room; a second `Again` is a stray wake, and `write_all` loops for the
+programs that care. `Stream::write` stayed an awaitable rather than becoming a `Task` for the
+reason M3 gives: a coroutine frame per write is the hot path §8.2 warns about.
+
+`Source` is its mirror, and `Stdio` gained an `in`. A program the shell gave no input gets a
+source that reports EOF immediately rather than a null one, so no program has to check.
+
+### The store that replaced the borrow
+
+M3's notes predicted this exactly: quote removal produces words that are not substrings of the
+line, which destroys the zero-copy argv path and forces an owning token store the parser is built
+around. Both halves happened.
+
+Words are appended to one growing `String` and turned into `Str` only by `freeze()`, because the
+store reallocates while it grows and every view into it would move. Making that a rule enforced by
+the API rather than by a comment matters more than it looks: `add_word` panics after `freeze`, and
+the accessors panic before it, so the one ordering that must hold cannot be got wrong quietly.
+Moving a *frozen* pipeline is still safe — `String` and `Vec` move by stealing the pointer, so
+nothing shifts — and that is what lets the parse result live in the job block rather than in a
+frame. It would not be true of a small-string-optimised string, which is worth knowing before
+anyone adds one.
+
+`Args` stays a non-owning `Span<const Str>`, now over the store rather than over the shell's line
+buffer. The invariant M3's comment called "the single easiest thing for M4's pipelines to break"
+is not preserved so much as retired: nothing borrows from `line.text` any more.
+
+Redirection targets live in a second table rather than among the words, so that a command's argv
+stays contiguous. `> f ls` would otherwise put `f` in `ls`'s argv.
+
+### Redirection is parsed and refused
+
+Quoting, escaping, `|` and `>` are one grammar and writing half of it means writing it twice, so
+all of it is written. There is no filesystem to redirect *to* until M5, so a path target is
+refused — but at pipeline setup, before anything is spawned, rather than at the first write. A
+sink that fails on its first write would let a command run and produce its side effects before its
+redirection turned out to be impossible, which is not what a shell does. When M5 lands, one
+function turns the refusal into an open.
+
+`out` and `err` are still the same sink, for the reason M3 gave: `2>` is parsed, so the split is
+now expressible, but there is nowhere for it to go.
+
+### `ls` lists the registry
+
+The criterion is `ls | grep foo`, and `ls` lists a filesystem that arrives a milestone later.
+Rather than reword the criterion or pull `MemFs` forward, `ls` lists the program registry — which
+is what `/bin` will hold, and which §4's tier table already calls a kernel applet's job. The
+criterion is met literally, the pipeline it exists to prove is proved, and M5 replaces a loop over
+`program_first()` with a walk of the mount table while the test stays green.
+
+### Smaller decisions
+
+`clear` still writes to the grid rather than to `io.out`. Clearing is a grid operation with no
+byte representation, so `clear > f` is meaningless; the honest cost is that `clear | cat` clears
+the screen, which is what it says it does.
+
+`grep` is a substring match, and its usage line says "text" rather than implying a pattern
+language. `cat` copies chunks rather than lines, so it is byte-exact and a final line without a
+newline stays that way; `grep`, `head`, `tail` and the rest go through a `LineReader` that keeps a
+partial chunk, so a line may span any number of chunks. `wc` counts over raw chunks for the same
+reason — nothing should depend on where a chunk happens to break.
+
+`LineEnd::Eof` is still not there. ^D closes a program's stdin through the pump, which is where
+end of input actually means something; at the prompt there is nowhere to exit to, and inventing a
+meaning for it before there is one is how enums acquire dead members.
+
+The size more than doubled, 28,282 to 62,926 bytes, which is 24% of the budget M3 raised with
+exactly this in mind. Six new programs, a lexer, a parser, the job runtime and a second awaitable
+pair account for it; the budget is not moved.
+
+---
+
 ## M3 — Userland shell
 
 The `LineEditor` coroutine §3.5 promised, a tokeniser, the self-registering program registry of

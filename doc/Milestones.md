@@ -70,11 +70,26 @@ tested. Programs shipped: `clear`, `echo`, `false`, `help`, `sleep`, `true`, `ve
 The size budget was raised from 32 KiB to 256 KiB; `kernel.wasm` is 28,282 bytes.
 See [Release_Notes.md](Release_Notes.md).
 
-## M4 — Streams
+## M4 — Streams — **done**
 `Channel<Bytes>` as stdio, pipes, redirection, cancellation on `^C`.
 
-- [ ] `ls | grep foo` works
-- [ ] `^C` interrupts a running pipeline and returns a prompt
+- [x] `ls | grep foo` works
+- [x] `^C` interrupts a running pipeline and returns a prompt
+
+A pipe is a `Channel<String>`, not a `Channel<Bytes>`: `Bytes` is a `Span`, and a writer's buffer
+does not outlive the handover to a reader that runs later. `ls` lists the program registry — what
+`/bin` will hold — so the criterion is met literally and M5 replaces one function body. The
+grammar is written whole (quoting, escaping, `|`, `<`, `>`, `>>`, `2>`, `2>>`), but a redirection
+to a path is refused at setup with `no filesystem` and nothing runs; quote removal ended the
+zero-copy argv borrow, so `Args` now views an owning store. The stages of a pipeline are
+independent scheduler jobs alongside a tty pump rather than a child group the shell `co_await`s —
+`CancelState::waiting` is a single slot, so one job cannot have two children parked at once, and
+§3.6's structured concurrency is put back by hand from a destructor. The intrusive `Waiter` queue
+M2's notes promised to this milestone is still not built: every pipe has one writer, so one send
+token suffices, and a tripwire now fires if that stops being true. `LineEnd::Eof` also waits —
+^D closes a program's stdin through the pump, and at the prompt there is nothing to exit to.
+Programs added: `cat`, `grep`, `head`, `ls`, `tail`, `wc`, for thirteen. `kernel.wasm` went from
+28,282 to 62,926 bytes against an unchanged 256 KiB budget. See [Release_Notes.md](Release_Notes.md).
 
 ## M5 — Filesystem
 Mount table, `MemFs`, `BundleFs` from a fetched archive, `OpfsFs` with the open-file table.

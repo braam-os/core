@@ -8,7 +8,8 @@ namespace {
 
 // Every program in src/prog/. The count is the tripwire for a registrar the
 // linker dropped: those fail silently, and only a count notices.
-constexpr Str NAMES[] = { "clear", "echo", "false", "help", "sleep", "true", "version" };
+constexpr Str NAMES[] = { "cat", "clear", "echo", "false", "grep",    "head", "help",
+                          "ls",  "sleep", "tail", "true",  "version", "wc" };
 
 i32 status;
 

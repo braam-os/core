@@ -19,6 +19,10 @@ struct Job {
     CancelState cancel;
 };
 
+// jobs[] holds freed pointers while ~Sched walks it, so anything a frame
+// destructor might reach that iterates jobs has to stand down.
+bool tearing_down = false;
+
 struct Sched {
     Vec<std::coroutine_handle<>> ready;
     usize head = 0; // Vec has no pop_front; the queue is drained with a cursor
@@ -31,11 +35,14 @@ struct Sched {
 
     // Destroying a job destroys its suspended frames, whose awaiters
     // deregister from the queues above; those must still be alive here.
+    // Backwards, because a child is spawned after its parent and its frame
+    // may hold a reference to something the parent's frame owns.
     ~Sched()
     {
-        for (Job *j : jobs) {
-            j->~Job();
-            heap_free(j);
+        tearing_down = true;
+        for (usize i = jobs.size(); i > 0; i--) {
+            jobs[i - 1]->~Job();
+            heap_free(jobs[i - 1]);
         }
     }
 };
@@ -103,6 +110,8 @@ void remove_timer(Waiter *w)
 
 Job *find_job(u32 pid)
 {
+    if (tearing_down)
+        return nullptr;
     for (Job *j : sched().jobs)
         if (j->pid == pid)
             return j;
@@ -233,7 +242,8 @@ void sched_reset()
     Sched *s = g;
     s->~Sched(); // g stays set: deregistration during teardown needs it
     heap_free(s);
-    g = nullptr;
+    g            = nullptr;
+    tearing_down = false;
 }
 
 u32 sched_token()

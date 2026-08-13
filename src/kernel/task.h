@@ -39,11 +39,16 @@ struct TaskPromiseBase {
     void unhandled_exception() {}
 };
 
+// Declaring get_return_object_on_allocation_failure is what makes a frame
+// allocation failure a value rather than undefined behaviour: without it the
+// compiler assumes operator new never returns null, and ours does.
 template <class T>
 struct TaskPromise : TaskPromiseBase {
     Option<T> value;
 
     Task<T> get_return_object();
+
+    static Task<T> get_return_object_on_allocation_failure();
 
     void return_value(T v) { value = Option<T>(move(v)); }
 };
@@ -51,6 +56,8 @@ struct TaskPromise : TaskPromiseBase {
 template <>
 struct TaskPromise<void> : TaskPromiseBase {
     Task<void> get_return_object();
+
+    static Task<void> get_return_object_on_allocation_failure();
 
     void return_void() {}
 };
@@ -115,8 +122,13 @@ struct Task {
             return h;
         }
 
+        // A null handle means the frame never allocated. Nothing sensible can
+        // be returned for it, so it stops here rather than reading a promise
+        // that does not exist; a spawned root reports the failure instead.
         T await_resume()
         {
+            if (!h)
+                panic("await on a coroutine whose frame failed to allocate");
             if constexpr (!is_same<T, void>)
                 return move(h.promise().value.value());
         }
@@ -137,4 +149,15 @@ Task<T> TaskPromise<T>::get_return_object()
 inline Task<void> TaskPromise<void>::get_return_object()
 {
     return Task<void>(std::coroutine_handle<TaskPromise<void>>::from_promise(*this));
+}
+
+template <class T>
+Task<T> TaskPromise<T>::get_return_object_on_allocation_failure()
+{
+    return {};
+}
+
+inline Task<void> TaskPromise<void>::get_return_object_on_allocation_failure()
+{
+    return {};
 }

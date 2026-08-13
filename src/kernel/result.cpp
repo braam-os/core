@@ -25,6 +25,8 @@ Str error_name(Error e)
         return "try again";
     case Error::Unsupported:
         return "unsupported";
+    case Error::Closed:
+        return "closed";
     }
     return "unknown error";
 }

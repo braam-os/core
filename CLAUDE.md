@@ -11,7 +11,10 @@ is done: `Task<T>`, the ready and timer queues, wake tokens, `tick()`/`wake()`, 
 damage rectangle, `Channel<T>`, `Key`, the `key()`/`resize()` exports, the `host_present`
 import, and the canvas renderer in `web/render.js`. M3 (userland shell) is done: the
 `LineEditor` coroutine, the tokeniser, the self-registering program registry, `Args`/`Stdio`,
-exit codes, and seven programs in `src/prog/`. M4 (streams) is next.
+exit codes, and seven programs in `src/prog/`. M4 (streams) is done: `co_await send()` with
+`close`/`hangup`, pipes as `Channel<String>`, `Stream`/`Source` behind `Stdio`, the full shell
+grammar in `src/user/parse.{h,cpp}`, the job runtime and tty pump in `src/user/job.{h,cpp}`,
+and thirteen programs. M5 (filesystem) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -99,6 +102,12 @@ Further constraints that are easy to violate by habit:
   `await_suspend`. Retrofitting this later is painful, so do not defer it.
 - **Coroutine frame allocation is the hot path.** The allocator is built for that workload
   first; a naive `malloc` will dominate the profile.
+- **A coroutine frame past 512 bytes costs a whole 64 KiB span.** That is the allocator's top
+  size class, so long-lived state belongs in a heap block the frame points at, not in the frame.
+  `test_shell` guards the shell's boot cost for exactly this reason.
+- **Every awaiter deregisters in its destructor.** `sched_unwait` from `~Awaiter` is what makes
+  destroying a suspended frame safe rather than a dangling `Waiter *` in the wake table. An
+  awaitable that parks and has no destructor is a use-after-free waiting to happen.
 - **`memory.grow` detaches the `ArrayBuffer`**, killing cached `Uint8Array` views. Route JS-side
   access through a `view()` accessor that re-derives after growth.
 - **A namespace-scope global must be trivially destructible.** A non-trivial destructor pulls in
@@ -122,6 +131,13 @@ notice (Concept.md §4):
 The kernel↔process ABI (Concept.md §4.3) is already fixed even though tiers 2 and 3 are not
 built, so that M0–M7 work does not have to be unpicked later. Do not design around its absence.
 
+Since M4 a pipeline's stages are independent scheduler jobs rather than a child group the shell
+`co_await`s: `CancelState::waiting` is a single slot, so one job cannot have two children parked
+at once. §3.6's structured concurrency is put back by hand, from a destructor in `run_line`'s
+frame. A real child-group awaitable needs intrusive queue links inside `Waiter` first — the same
+work a channel with two blocked senders would need, which `Channel::park_sender` panics on today
+rather than losing a wakeup quietly.
+
 ## Conventions
 
 - **Keep comments in code and scripts terse.** A comment says what a thing is, not why the
@@ -129,8 +145,9 @@ built, so that M0–M7 work does not have to be unpicked later. Do not design ar
   [doc/Release_Notes.md](doc/Release_Notes.md) or another document, where they can be read as
   prose and revised in one place.
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
-- Layout: `src/kernel/`, `src/user/` (line editor, shell), `src/prog/` (one self-registering file
-  per program), `test/unit/`, `web/`, `tools/`, `cmake/`; `src/fs/` arrives with M5. Concept.md §7.
+- Layout: `src/kernel/`, `src/user/` (line editor, grammar, job runtime, shell), `src/prog/` (one
+  self-registering file per program), `test/unit/`, `web/`, `tools/`, `cmake/`; `src/fs/` arrives
+  with M5. Concept.md §7.
 - **`src/prog/` is an `OBJECT` library, not `STATIC`.** Nothing references those translation
   units by name — they reach the link only through their static-init registrars, and
   `--gc-sections` never extracts an unreferenced archive member. As an archive it would link

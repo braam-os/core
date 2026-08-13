@@ -1,5 +1,8 @@
 add_library(braam_user STATIC
     edit.cpp
+    io.cpp
+    job.cpp
+    parse.cpp
     prog.cpp
     shell.cpp
     tokenize.cpp

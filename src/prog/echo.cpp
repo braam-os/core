@@ -1,7 +1,6 @@
+#include "user/io.h"
 #include "user/prog.h"
 
-// There is no quoting yet, so a quote is a literal character. Quoting arrives
-// with M4's grammar, alongside pipes and redirection.
 BRAAM_PROGRAM(prog_echo, "echo", "[-n] [word...] — write the arguments")
 {
     usize i      = 1;
@@ -12,12 +11,13 @@ BRAAM_PROGRAM(prog_echo, "echo", "[-n] [word...] — write the arguments")
     }
 
     for (bool first = true; i < args.size(); i++, first = false) {
-        if (!first)
-            co_await io.out.write(" ");
-        co_await io.out.write(args[i]);
+        if (!first && (co_await write_all(io.out, " ")).is_err())
+            co_return 1;
+        if ((co_await write_all(io.out, args[i])).is_err())
+            co_return 1;
     }
-    if (newline)
-        co_await io.out.write("\n");
+    if (newline && (co_await write_all(io.out, "\n")).is_err())
+        co_return 1;
 
     co_return 0;
 }

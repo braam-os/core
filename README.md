@@ -30,10 +30,13 @@ sleeping task by returning through it. M2 — the screen and keyboard — is don
 cells in linear memory that a canvas renderer reads directly, damage rectangles, `Channel<T>`,
 and a keyboard that speaks Unicode codepoints rather than control characters. M3 — the userland
 shell — is done: a `LineEditor` coroutine with history and readline-style editing, a tokeniser, a
-program registry that each program adds itself to, argv and exit codes. Open the page and there
-is a prompt: `echo hello` prints, `help` lists the programs, Up recalls what you typed, and a
-failed command shows its status in the next prompt. `kernel.wasm` is 28 KB.
-M4, streams and pipes, is next.
+program registry that each program adds itself to, argv and exit codes. M4 — streams — is done:
+pipes with real backpressure, stdin, the whole shell grammar including quoting and redirection,
+and a `^C` that reaches a running pipeline. Open the page and there is a prompt: `ls | grep foo`
+runs both programs at once over a bounded pipe, `ls | head -n 2` stops the producer early,
+`^C` interrupts whatever is running and hands the prompt back, and a failed command shows its
+status in the next one. Thirteen programs. `kernel.wasm` is 61 KB.
+M5, the filesystem, is next.
 
 [doc/Concept.md](doc/Concept.md) is the specification — the architecture and the reasoning
 behind each decision. Read it first. [doc/Milestones.md](doc/Milestones.md) is the plan: the

@@ -109,6 +109,13 @@ struct String {
 
     void clear() { n_ = 0; }
 
+    // Drops everything past `n`. Never grows, and never touches the capacity.
+    void truncate(usize n)
+    {
+        if (n < n_)
+            n_ = n;
+    }
+
     friend bool operator==(const String &a, Str b) { return a.str() == b; }
 
     friend bool operator!=(const String &a, Str b) { return !(a.str() == b); }

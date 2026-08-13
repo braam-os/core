@@ -7,6 +7,8 @@ add_executable(tests
     unit/test_edit.cpp
     unit/test_fmt.cpp
     unit/test_hash.cpp
+    unit/test_io.cpp
+    unit/test_parse.cpp
     unit/test_prog.cpp
     unit/test_result.cpp
     unit/test_sched.cpp

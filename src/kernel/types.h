@@ -20,7 +20,17 @@ static_assert(sizeof(usize) == 4, "wasm32");
 namespace std {
 using size_t    = usize;
 using nullptr_t = decltype(nullptr);
+
+// A promise with get_return_object_on_allocation_failure allocates its frame
+// through the nothrow operator new, which the compiler names by this tag.
+struct nothrow_t {
+    explicit nothrow_t() = default;
+};
+
+inline constexpr nothrow_t nothrow{};
 } // namespace std
+
+void *operator new(usize n, const std::nothrow_t &) noexcept;
 
 inline void *operator new(usize, void *p) noexcept
 {

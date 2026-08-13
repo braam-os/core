@@ -156,8 +156,10 @@ if (mode === "--kernel") {
     if (row(s, s.cursor_y) !== "$")
         fail(`the prompt after a success is ${row(s, s.cursor_y)}, expected $`);
 
+    submit("clear", 1045); // thirteen programs need the whole grid
     s = submit("help", 1050);
-    for (const name of ["clear", "echo", "false", "help", "sleep", "true", "version"])
+    for (const name of ["cat", "clear", "echo", "false", "grep", "head", "help", "ls",
+                        "sleep", "tail", "true", "version", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
 
@@ -228,6 +230,56 @@ if (mode === "--kernel") {
     s = descriptor(instance.exports.resize(9999, 9999));
     if (s.cols !== 512 || s.rows !== 256)
         fail(`an oversized resize gave ${s.cols}x${s.rows}`);
+
+    // M4, first criterion: a pipeline, in the shipping kernel. `ls` lists the
+    // registry — what /bin will hold — and grep filters it, both running at
+    // once over a bounded pipe. `clear` first, so the rows below are the
+    // pipeline's and nothing else's.
+    if (instance.exports.resize(60, 16) === 0)
+        fail("the resize before the pipeline failed");
+    press("c".codePointAt(0), CTRL); // the "hi" typed above is still pending
+    s = submit("clear", 1130);
+    s = submit("ls | grep hel", 1140);
+    const listed = rows(s).filter((line) => line && !line.includes("$"));
+    if (listed.join() !== "help")
+        fail(`ls | grep hel printed ${JSON.stringify(listed)}, expected ["help"]`);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`a pipeline that matched left ${row(s, s.cursor_y)}, expected $`);
+
+    // The status of a pipeline is its last command's: grep reports 1 when
+    // nothing matched, and quote removal reaches argv on the way in.
+    s = submit("ls | grep zzz", 1150);
+    if (!rows(s).includes("[1] $"))
+        fail(`an empty pipeline left ${row(s, s.cursor_y)}, expected [1] $`);
+    s = submit("echo 'a b' | wc", 1160);
+    if (!rows(s).includes("1 2 4"))
+        fail(`echo 'a b' | wc printed ${JSON.stringify(rows(s))}, expected 1 2 4`);
+
+    // Redirection parses but has nowhere to go until M5, and nothing runs.
+    s = submit("echo hi > out.txt", 1170);
+    if (!rows(s).some((line) => line.startsWith("braam: out.txt: no filesystem")))
+        fail(`a redirection said nothing: ${JSON.stringify(rows(s))}`);
+    if (rows(s).includes("hi"))
+        fail("a command with an impossible redirection ran anyway");
+
+    // M4, second criterion: ^C interrupts a running pipeline and the prompt
+    // comes back. tick's return value is what proves the sleep really went.
+    type("sleep 5000");
+    press(KEY.ENTER);
+    if (instance.exports.tick(1180) !== 5000)
+        fail("the pipeline did not park on the timer");
+    press("c".codePointAt(0), CTRL);
+    if (instance.exports.tick(1190) !== -1)
+        fail("^C left the pipeline's timer armed");
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C on a pipeline left ${row(s, s.cursor_y)}, expected [130] $`);
+
+    // The keyboard came back: the pump was its only receiver while the job
+    // ran, and the shell has to be able to read it again afterwards.
+    s = submit("echo back", 1200);
+    if (!rows(s).includes("back"))
+        fail(`the shell lost the keyboard after ^C: ${JSON.stringify(rows(s))}`);
 
     console.log(`smoke ok: ${got_imports.length} imports, ${got_exports.length} exports`);
 } else {

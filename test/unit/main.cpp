@@ -17,11 +17,13 @@ void test_task();
 void test_sched();
 void test_fmt();
 void test_channel();
+void test_io();
 void test_screen();
 void test_text();
 void test_prog();
 void test_edit();
 void test_tokenize();
+void test_parse();
 void test_shell();
 
 // The kernel's init() calls this too: it is what populates the program
@@ -45,11 +47,13 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_task();
     test_sched();
     test_channel();
+    test_io();
     test_screen();
     test_text(); // after screen: it round-trips through the grid
     test_prog();
     test_edit();
     test_tokenize();
+    test_parse();
     test_shell();
 
     u32 failures = test_failures();

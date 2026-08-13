@@ -17,6 +17,7 @@ enum class Error : u8 {
     Cancelled,
     Again,
     Unsupported,
+    Closed, // the far end of a stream is gone: EOF to a reader, EPIPE to a writer
 };
 
 Str error_name(Error e);

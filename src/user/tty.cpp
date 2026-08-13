@@ -1,5 +1,6 @@
 #include "tty.h"
 
+#include "io.h"
 #include "kernel/screen.h"
 
 namespace {
@@ -14,6 +15,6 @@ Result<usize> to_screen(void *, Str s)
 
 Stdio stdio_console()
 {
-    Stream s{ to_screen, nullptr };
-    return Stdio{ s, s };
+    Stream s{ to_screen, nullptr, nullptr };
+    return Stdio{ null_source(), s, s };
 }
