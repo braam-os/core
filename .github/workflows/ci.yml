@@ -33,8 +33,11 @@ jobs:
           tag="wasi-sdk-${WASI_SDK_VERSION%%.*}"
           url="https://github.com/WebAssembly/wasi-sdk/releases/download/${tag}/wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz"
           curl -fsSL "$url" -o /tmp/wasi-sdk.tar.gz
-          sudo mkdir -p /opt
-          sudo tar -xzf /tmp/wasi-sdk.tar.gz -C /opt
+          # The tarball unpacks to wasi-sdk-<version>-<arch>-<os>/, so strip
+          # that level rather than depend on its name: WASI_SDK_DIR is what
+          # the cache key, the toolchain default and a local install all use.
+          sudo mkdir -p "$WASI_SDK_DIR"
+          sudo tar -xzf /tmp/wasi-sdk.tar.gz -C "$WASI_SDK_DIR" --strip-components=1
           "$WASI_SDK_DIR/bin/clang++" --version
 
       - name: Toolchain versions
