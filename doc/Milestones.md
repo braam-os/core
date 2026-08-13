@@ -25,12 +25,19 @@ since M1 needs them immediately; `String` and `HashMap` wait for M1, where the w
 will shape the latter. Appendix C's command line changed in three ways — see Concept.md §C.3,
 and [Release_Notes.md](Release_Notes.md) for the reasoning behind each.
 
-## M1 — Scheduler
+## M1 — Scheduler — **done**
 `Task<T>`, ready queue, wake tokens, `tick()`, `sleep_ms`.
 `CancelToken` participates in every awaitable from this milestone on (Concept.md §8.1).
 
-- [ ] Two coroutines interleave sleeps in the correct order
-- [ ] Cancelling a sleeping task unwinds it and runs its destructors
+- [x] Two coroutines interleave sleeps in the correct order
+- [x] Cancelling a sleeping task unwinds it and runs its destructors
+
+Timers live in the kernel: there is no `host_timer` import, and `tick()`'s return value is the
+only thing that schedules the host's next call — see Concept.md §3.4 and
+[Release_Notes.md](Release_Notes.md). `String` and `HashMap` landed as planned; `CancelToken`
+travels in `Task`'s promise rather than in every signature, and `CO_TRY` joins `TRY`, since a
+plain `return` is ill-formed in a coroutine. Both acceptance criteria are checked twice: in
+`tests.wasm` against a fake clock, and in the smoke test against the shipping `kernel.wasm`.
 
 ## M2 — Screen and keys
 Cell grid, canvas renderer, damage rectangles, `Channel<Key>`, `OffscreenCanvas` transfer.

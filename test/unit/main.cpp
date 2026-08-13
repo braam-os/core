@@ -9,9 +9,13 @@
 
 void test_alloc();
 void test_str();
+void test_string();
 void test_vec();
+void test_hash();
 void test_result();
 void test_coroutine();
+void test_task();
+void test_sched();
 void test_fmt();
 
 // Returns the number of failed checks; the harness treats nonzero as failure.
@@ -23,7 +27,11 @@ BRAAM_EXPORT("run_tests") u32 run_tests() {
     test_result();
     test_alloc();
     test_vec();
+    test_string();
+    test_hash();
     test_coroutine();
+    test_task();
+    test_sched();
 
     u32 failures = test_failures();
     HeapStats s = heap_stats();

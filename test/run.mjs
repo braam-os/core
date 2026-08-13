@@ -50,7 +50,7 @@ if (mode === "--kernel") {
     // The import and export surface is the ABI; drift is a bug, and an
     // unexpected import means a libc dependency crept in.
     const want_imports = ["host.log", "host.now"];
-    const want_exports = ["init", "memory"];
+    const want_exports = ["init", "memory", "tick", "wake"];
     const got_imports = names(WebAssembly.Module.imports(module));
     const got_exports = names(WebAssembly.Module.exports(module));
 
@@ -65,6 +65,18 @@ if (mode === "--kernel") {
         fail(`expected one boot line, got ${logged.length}`);
     if (!logged[0].startsWith("braam "))
         fail(`unexpected boot line: ${logged[0]}`);
+
+    // The demo tasks run only when ticked, on a clock we supply, so their
+    // interleaving is exact rather than approximate. a sleeps 10 then 20,
+    // b sleeps 15 then 10.
+    const delays = [0, 10, 15, 25, 30].map((now) => instance.exports.tick(now));
+    const want_delays = [10, 5, 10, 5, -1];
+    if (delays.join() !== want_delays.join())
+        fail(`tick returned [${delays}], expected [${want_delays}]`);
+
+    const order = logged.slice(1).join(" ");
+    if (order !== "demo a1 demo b1 demo b2 demo a2")
+        fail(`the demo tasks ran out of order: ${order}`);
 
     console.log(`smoke ok: ${got_imports.length} imports, ${got_exports.length} exports`);
 } else {

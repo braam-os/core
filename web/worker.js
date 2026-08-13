@@ -30,6 +30,30 @@ async function boot() {
     instance.exports.init(0);
 
     self.kernel = instance.exports;
+    pump();
 }
+
+// The event loop is the scheduler (Concept.md §2.1). tick() drains the ready
+// queue and says how long until it next needs to run; -1 means idle.
+let timer = null;
+
+function pump() {
+    if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+    }
+    const delay = self.kernel.tick(performance.now());
+    if (delay >= 0)
+        timer = setTimeout(pump, delay);
+}
+
+// Events reach a suspended task as a wake token, never as a return value
+// (Concept.md §2.2).
+self.onmessage = ({ data }) => {
+    if (data && data.kind === "wake" && self.kernel) {
+        self.kernel.wake(data.token >>> 0, data.ptr >>> 0, data.len >>> 0);
+        pump();
+    }
+};
 
 boot().catch((e) => emit("error", `boot failed: ${e && e.message ? e.message : e}`));

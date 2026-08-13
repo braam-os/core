@@ -1,54 +1,27 @@
-// The kernel's exported surface. M0 has only init(); the scheduler exports
-// (wake, tick, key, resize) arrive with M1 and M2.
+// The kernel's exported surface. M1 adds the scheduler's tick() and wake();
+// key() and resize() arrive with M2.
 
 #include "alloc.h"
-#include "coroutine.h"
 #include "fmt.h"
 #include "host.h"
-#include "result.h"
+#include "sched.h"
 #include "str.h"
-#include "vec.h"
+#include "task.h"
 
 namespace {
 
-constexpr Str VERSION = "0.1.0-m0";
+constexpr Str VERSION = "0.1.0-m1";
 
-// Proves the coroutine shim links and runs: suspends once with a live frame
-// across the suspend point, then resumes to completion.
-struct Boot {
-    struct promise_type {
-        Boot get_return_object() {
-            return Boot{std::coroutine_handle<promise_type>::from_promise(*this)};
-        }
-
-        std::suspend_always initial_suspend() noexcept { return {}; }
-
-        std::suspend_always final_suspend() noexcept { return {}; }
-
-        void return_void() {}
-
-        void unhandled_exception() {}
-    };
-
-    std::coroutine_handle<promise_type> h;
-};
-
-Boot coroutine_check(int &out) {
-    int local = 21;
-    co_await std::suspend_always{};
-    out = local * 2;
-}
-
-bool coroutine_ok() {
-    int out = 0;
-    Boot b = coroutine_check(out);
-    if (!b.h)
-        return false;
-    b.h.resume(); // past initial_suspend, to the co_await
-    b.h.resume(); // through the body, to final_suspend
-    bool done = b.h.done();
-    b.h.destroy();
-    return done && out == 42;
+// Two of these interleave their sleeps, so a bare page shows the scheduler
+// running without a shell to drive it. The shell replaces them in M3.
+Task<i32> demo(u32 first_ms, Str first, u32 second_ms, Str second) {
+    if ((co_await sleep_ms(first_ms)).is_err())
+        co_return 1;
+    log(first);
+    if ((co_await sleep_ms(second_ms)).is_err())
+        co_return 1;
+    log(second);
+    co_return 0;
 }
 
 } // namespace
@@ -58,14 +31,9 @@ BRAAM_EXPORT("init") void init(u32 heap_base) {
 
     heap_init(heap_base);
 
-    if (!coroutine_ok())
-        panic("braam: coroutine shim is broken");
-
-    Vec<u32> v;
-    for (u32 i = 0; i < 64; i++)
-        v.push(i * i);
-    if (v.size() != 64 || v[63] != 63 * 63)
-        panic("braam: Vec self-check failed");
+    if (!sched_spawn(demo(10, "demo a1", 20, "demo a2")) ||
+        !sched_spawn(demo(15, "demo b1", 10, "demo b2")))
+        panic("braam: the demo tasks would not spawn");
 
     HeapStats s = heap_stats();
     Buf<160> line;
@@ -81,4 +49,14 @@ BRAAM_EXPORT("init") void init(u32 heap_base) {
         .put(u32((host_now() - started) * 1000))
         .put(" us");
     log(line.str());
+}
+
+// Drains the ready queue and reports the delay until the next timer, or -1
+// when nothing is pending (Concept.md §3.4).
+BRAAM_EXPORT("tick") i32 tick(f64 now_ms) {
+    return sched_tick(now_ms);
+}
+
+BRAAM_EXPORT("wake") void wake(u32 token, u32 payload_ptr, u32 payload_len) {
+    sched_wake(token, payload_ptr, payload_len);
 }

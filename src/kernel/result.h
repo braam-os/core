@@ -216,3 +216,20 @@ private:
         if (_try_r.is_err())            \
             return Err(_try_r.error()); \
     } while (0)
+
+// TRY inside a coroutine. A plain `return` is ill-formed there, so these are
+// the co_return forms; the enclosing Task's result type carries the error.
+#define CO_TRY(expr)                       \
+    ({                                     \
+        auto _try_r = (expr);              \
+        if (_try_r.is_err())               \
+            co_return Err(_try_r.error()); \
+        move(_try_r.value());              \
+    })
+
+#define CO_TRY_VOID(expr)                  \
+    do {                                   \
+        auto _try_r = (expr);              \
+        if (_try_r.is_err())               \
+            co_return Err(_try_r.error()); \
+    } while (0)

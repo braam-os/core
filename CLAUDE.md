@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 M0 (nucleus) is done: CMake build, the coroutine shim, the allocator, `Str`/`Span`/`Vec`/
 `Result`/`Option`, `host_log`, a Node test harness, and CI with a size budget. M1 (scheduler)
-is next.
+is done: `Task<T>`, the ready and timer queues, wake tokens, `tick()`/`wake()`, `sleep_ms`,
+`CancelToken`, `HashMap` and `String`. M2 (screen and keys) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is

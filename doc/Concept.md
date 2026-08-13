@@ -187,11 +187,13 @@ resize(cols, rows)
 
 ```
 host_now(), host_random(ptr, len), host_log(ptr, len)
-host_timer(token, ms)
 host_fetch(token, url_ptr, url_len, opts_ptr)
 host_storage_read(token, key…), host_storage_write(token, …)
 host_present(dirty_x, dirty_y, dirty_w, dirty_h)
 ```
+
+There is no `host_timer`. The kernel owns the timer queue, so `tick()`'s return value already
+says when the host must call back, and one `setTimeout` serves every sleeping task.
 
 ### 3.5 The screen
 
