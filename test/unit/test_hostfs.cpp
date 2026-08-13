@@ -48,7 +48,7 @@ void test_hostfs()
     CHECK(backend.opfs);
     CHECK(backend.sync);
     CHECK(backend.quota > 0);
-    CHECK_EQ(fs_orphans(), 0);
+    CHECK_EQ(host_orphans(), 0);
 
     // A task cancelled before it reaches the import never issues a request, so
     // the record is this side's to free rather than something to orphan. The
@@ -62,12 +62,12 @@ void test_hostfs()
     CHECK_EQ(sched_tick(0), -1);
     CHECK(answered);
     CHECK(failure == Error::Cancelled);
-    CHECK_EQ(fs_orphans(), 0);
+    CHECK_EQ(host_orphans(), 0);
 
     // A reply for a token nothing is waiting on is the ordinary case for a
     // late event, and must not disturb anything.
-    fs_orphan_reply(12345);
-    CHECK_EQ(fs_orphans(), 0);
+    host_orphan_reply(12345);
+    CHECK_EQ(host_orphans(), 0);
 
     sched_reset();
     CHECK_EQ(heap_stats().bytes_in_use, in_use);

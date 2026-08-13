@@ -4,6 +4,7 @@
 import { makeFsImports, openStore } from "./fs.js";
 import { Memory, makeImports } from "./host.js";
 import { Renderer } from "./render.js";
+import { makeSvcImport } from "./svc.js";
 
 const mem = new Memory();
 
@@ -23,6 +24,19 @@ function emit(kind, text) {
     self.postMessage({ kind, text });
 }
 
+// The clipboard, the file picker and the download need the DOM, so the page
+// does them and answers by id. Everything else in svc.js happens right here.
+let next_relay = 1;
+const relays = new Map();
+
+function relay(msg) {
+    return new Promise((resolve, reject) => {
+        const id = next_relay++;
+        relays.set(id, { resolve, reject });
+        self.postMessage({ kind: "svc", id, ...msg });
+    });
+}
+
 async function boot() {
     const url = new URL("./kernel.wasm", import.meta.url);
     const bundle = new URL("./bundle.bin", import.meta.url);
@@ -36,10 +50,18 @@ async function boot() {
         pump();
     });
 
+    // The same rule as storage: a reply must reach the kernel on a promise,
+    // never inside the import call that asked for it.
+    const svc = makeSvcImport(mem, (slot, obj) => self.kernel.ref(slot >>> 0, obj), relay,
+        (token) => {
+            self.kernel.wake(token >>> 0, 0, 0);
+            pump();
+        });
+
     const imports = makeImports(mem, (text) => emit("log", text), (x, y, w, h) => {
         if (renderer)
             renderer.present(x, y, w, h);
-    }, fs);
+    }, fs, svc);
 
     // Streaming needs an application/wasm content type; not every static host
     // sets one, so fall back to a buffered instantiate.
@@ -113,6 +135,18 @@ self.onmessage = ({ data }) => {
     // Boot itself waits on this one, so it is answered before the kernel exists.
     if (data.kind === "persisted") {
         persisted(!!data.value);
+        return;
+    }
+
+    if (data.kind === "svc-reply") {
+        const waiting = relays.get(data.id);
+        if (!waiting)
+            return;
+        relays.delete(data.id);
+        if (data.error)
+            waiting.reject({ braam: data.error });
+        else
+            waiting.resolve(data.value);
         return;
     }
 

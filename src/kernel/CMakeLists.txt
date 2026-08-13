@@ -1,5 +1,7 @@
 add_library(braam_core STATIC
     alloc.cpp
+    hostcall.cpp
+    jsref.cpp
     key.cpp
     result.cpp
     sched.cpp

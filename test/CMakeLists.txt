@@ -9,6 +9,7 @@ add_executable(tests
     unit/test_fmt.cpp
     unit/test_hash.cpp
     unit/test_hostfs.cpp
+    unit/test_jsref.cpp
     unit/test_io.cpp
     unit/test_memfs.cpp
     unit/test_path.cpp
@@ -21,12 +22,13 @@ add_executable(tests
     unit/test_str.cpp
     unit/test_tokenize.cpp
     unit/test_string.cpp
+    unit/test_svc.cpp
     unit/test_task.cpp
     unit/test_text.cpp
     unit/test_vec.cpp
     unit/test_vfs.cpp)
 
-target_link_libraries(tests PRIVATE braam_prog braam_user braam_fs braam_core braam_flags)
+target_link_libraries(tests PRIVATE braam_prog braam_user braam_fs braam_svc braam_core braam_flags)
 
 find_program(BRAAM_NODE node REQUIRED)
 

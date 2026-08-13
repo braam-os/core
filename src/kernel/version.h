@@ -3,4 +3,4 @@
 
 #include "str.h"
 
-constexpr Str BRAAM_VERSION = "0.1.0-m5";
+constexpr Str BRAAM_VERSION = "0.1.0-m6";

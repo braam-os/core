@@ -7,6 +7,176 @@ of the two needs amending.
 
 ---
 
+## M6 — Host services
+
+The tab reaches outside itself: HTTP, WebSocket, the clipboard, the user's own disk, and a
+clock that can name a day. Seven new commands, one new import, one new export, and the
+`externref` table Concept.md §3.7 has been promising since M0. 180,474 bytes of `kernel.wasm`,
+against an unchanged 256 KiB budget.
+
+`Concept.md` is amended in six places: §2.2 (no third synchronous exception, and why the new
+export is not one), §3.4 (`host_fetch` becomes `host_svc`, and `ref` joins the exports), §3.7
+(the table is real, and it points the other way), §5.1 (`/mnt/import`, and the bundle stays an
+archive), §5.4 (the escape hatch exists) and §7 (`src/svc/`).
+
+### The table is deposited into, not read out of
+
+§3.7 described "a `WebAssembly.Table` of `externref` that wasm indexes into and JS populates".
+Half of that is wrong, and the half that is wrong is the half about JS.
+
+`__externref_t` and the `__builtin_wasm_table_*` builtins work exactly as hoped —
+reference-types is on by default for `wasm32-unknown-unknown`, so a `static __externref_t
+table[0]` compiles and links with no extra flag. What does not work is getting JS to that
+table: `import_module` and `import_name` are function attributes, and clang rejects them on a
+table outright. An imported table is not available, and exporting the module's own table means
+teaching wasm-ld to export a table symbol.
+
+Neither is needed, because an import may take an `externref` *parameter* and an export may
+take one too. So the traffic runs the other way and JS never touches the table at all:
+
+- The kernel reserves a slot before it issues the request, and puts the number in the record.
+- The host resolves its promise and calls `ref(slot, obj)`, the one new export.
+- To use the object later, the kernel reads the slot and passes it as `host_svc`'s fourth
+  argument. The host is handed the object; it never asks for it.
+
+This is better than the sketch rather than merely equivalent. A host that cannot index the
+table cannot reach an object the kernel did not deliberately pass out, which is the property
+§4.1 wants from per-instance tables in M8 — and it comes for free, since a module-defined
+table is part of the instance.
+
+`ref` is an export, so §2.2 is untouched: the rule is about imports returning data, and this
+returns nothing.
+
+### One request record, two interfaces
+
+A service call needs precisely what M5 built for storage: a heap-owned record that outlives a
+cancelled awaiter, an orphan list, the two-phase reply for a variable-sized answer, and the
+register-then-issue ordering in `await_suspend`. Writing a second copy of it would have been
+about 150 lines, a second orphan list, a second reaper chained off `wake()`, and a second
+`Request` class in JS.
+
+So `FsRequest`/`FsReq`/`FsCall` moved to `src/kernel/hostcall.h` as `HostRequest`/`HostReq`/
+`HostCall`, tagged with a `HostIface` that picks the import in `issue()`, and `FsCall` and
+`SvcCall` are one-line subclasses that name the op enum. `path_ptr`/`path_len` became
+`arg_ptr`/`arg_len`, because a URL and a clipboard string are not paths. `web/abi.js` is the
+same move: `Request`, the field table, the error numbering and `statusOf` now live there, and
+`fs.js` and `svc.js` both import them.
+
+The risk in a refactor like this is that it quietly breaks the cancellation path nobody looks
+at. `test_hostfs` is exactly that test and it did not move, which is the reason to do the
+refactor in the same milestone rather than the next one.
+
+The record gained one word, `ref`, and the ownership question that comes with it. A borrowed
+slot — `WsSend` naming a socket the caller holds — is just a number. A slot the *reply* fills
+is owned by the record, not by the frame: `reserve_ref()` puts a `JsRef` inside `HostReq`, so
+a request cancelled before it is issued frees the slot along with the record, and one
+cancelled after it is issued keeps the slot alive at the address the host still holds.
+`test_svc` exists for that one case.
+
+### No `host_svc_sync`
+
+The wall clock is the near miss. `Date.now()` is as synchronous as `performance.now()`, and a
+`host_clock()` import would have been three lines. It would also have been §2.2's third
+exception, and the section says plainly that at three it stops being pragmatism.
+
+Making it an operation on the asynchronous ABI costs one round trip in a program that runs
+once and prints a line. That is the right trade every time, and the fact that it was even
+tempting is why the rule is written down.
+
+### Two waits mean two jobs, and the child outlives the parent
+
+`chat` reads the keyboard and the socket at once. `CancelState::waiting` is a single slot, so
+that is two jobs — the same conclusion M4 reached for pipeline stages, and the second place
+§3.6's structured concurrency is put back by hand from a destructor.
+
+What is new is that the child can outlive the parent. `run_line`'s `CancelAll` cancels its
+stages, but a cancelled coroutine does not unwind until the scheduler resumes it, which is a
+tick or two later. In M4 that was harmless: the pump holds a reference to the refcounted `Job`,
+so everything it touches is alive for as long as it is. `chat`'s receiver has no such handle —
+a program is given a `Stream`, not the thing that owns the pipe behind it. Cancel `chat` in
+`chat url | tee log` and the receiver could wake up to write into a pipe whose `Job` has
+already been freed.
+
+So the receiver touches nothing the parent owns: the session is refcounted and holds the
+socket, and incoming lines go to `screen_write` — a global, like `boot.cpp`'s diagnostics.
+The cost is that `chat > log` does not capture what arrives. For an interactive program that
+is close to right anyway, and M7's layout layer is where a program gets a pane of its own.
+
+This is the second time a child-group awaitable would have made the problem disappear. It
+needs intrusive queue links in `Waiter` first, which is the same work a channel with two
+blocked senders needs; the note in CLAUDE.md stands, with one more reason behind it.
+
+### CORS is the first wall, so `curl` says so
+
+A relative URL resolves against the page, which is why `curl /index.html` works with no network
+at all and why the acceptance criterion can be met offline. Anything cross-origin needs the
+server to send `access-control-allow-origin`, and `fetch` reports a CORS refusal and a dead
+network identically, as a `TypeError` with nothing in it.
+
+That reaches the kernel as `Error::Io`, and "curl: https://…: i/o error" would send someone
+looking at their connection. The diagnostic appends "(a cross-origin URL needs CORS)" on `Io`
+and nothing else, which is the one hint that is right most of the time.
+
+### The clipboard, the picker and the download live on the page
+
+Three of the thirteen operations cannot happen in a worker: `navigator.clipboard` is
+main-thread only, `<input type="file">` and an `<a download>` click need the DOM. `web/svc.js`
+keeps a map of pending ids and relays those three to the page over `postMessage`.
+
+None of that is visible from the kernel, which is the point of §2.2: a service operation is a
+token whether the answer comes from `fetch` in the worker or from a file picker two threads
+away. The picker opens inside the transient activation of the keystroke that ran the command,
+so `import` needs no button of its own; the page reads each file with `arrayBuffer()` and posts
+the bytes down, so the slot holds a plain array and reading a file back needs no further relay.
+
+### A response body streams; a message does not
+
+Two reply shapes, for two different unknowns. A response body is read with `writeSome` — as
+much as fits in a 512-byte buffer, with the host keeping the remainder — because a body has no
+size worth asking about and 512 bytes is the allocator's top size class (§8.2). A WebSocket
+message uses the two-phase reply instead, because a message is atomic: splitting one across
+two reads would lose the boundary that makes it a message.
+
+The retry that the two-phase reply implies is why a `Fetch` reply deposits its object *before*
+reporting the header size. A retry arrives with the object already in the slot, so the host
+skips the request and only rewrites the headers — otherwise asking for more room would issue
+the fetch a second time.
+
+### Proving the browser half without a browser
+
+`test/fakesvc.mjs` mirrors `test/fakefs.mjs`: canned routes, a loopback socket, a clipboard
+variable, a fixed set of picked files, all answered from inside the import. That covers the
+kernel, and it deliberately does not cover `web/svc.js`, which is the code a user actually
+runs.
+
+So `tools/wsd.mjs` is a real WebSocket server — the RFC 6455 handshake and frame codec in
+about a hundred lines of dependency-free Node — and `make serve` starts it beside the static
+server. Two tabs running `chat ws://localhost:8081` talk to each other with no internet, which
+is what the second criterion means and what the loopback fake cannot show.
+
+### Smaller decisions
+
+- **`/mnt/import` is a directory, not a mount.** The picker hands over bytes. A read-through
+  `Fs` over `File` objects would exercise `JsRef` more thoroughly and would not make `cat`
+  work any better.
+- **`Drop` is fire-and-forget.** Releasing a slot is not enough on its own: an open socket is
+  held alive by its own event handlers on the JS side. `JsHandle` says so out loud, with a
+  token-less `host_svc` call from its destructor, which is also what closes the socket when
+  `^C` destroys the frame holding it.
+- **`E` gained `CANCELLED`, `AGAIN` and `CLOSED`.** `web/fs.js` listed only the values it
+  reported; a socket that has gone away needs `Closed` to mean EOF to a reader, as it does for
+  a pipe.
+- **`date` carries its own calendar.** Twenty lines of `civil_from_days` rather than asking the
+  host to format, which would have put a locale in the ABI. `-u` prints UTC; without it the
+  offset comes back from the host in the reply's `flags`, biased by 1440 to stay unsigned.
+- **`export` buffers the whole file.** A download is one Blob, so there is nothing to stream
+  into.
+- **The `help` grid grew.** Twenty-seven programs no longer fit twenty-four rows, so
+  `test_prog` and the smoke test both resize before checking `help`. That the assertion needed
+  changing at all is the tripwire working.
+
+---
+
 ## M5 — Filesystem
 
 A mount table, four filesystems, an open-file table, redirection that reaches real files, and

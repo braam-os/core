@@ -38,7 +38,7 @@ export class Memory {
 // would re-enter the scheduler in the middle of the tick that called it. The
 // same is true of the storage imports, which is why every one of their replies
 // goes out on a promise (see fs.js).
-export function makeImports(mem, sink, present, fs) {
+export function makeImports(mem, sink, present, fs, svc) {
     return {
         host: {
             log(ptr, len) {
@@ -52,6 +52,7 @@ export function makeImports(mem, sink, present, fs) {
             },
             fs: fs.fs,
             fs_sync: fs.fs_sync,
+            svc,
         },
     };
 }

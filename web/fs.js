@@ -3,8 +3,11 @@
 // sanctioned §2.2 exception — once a sync access handle exists, reading and
 // writing a file really are synchronous.
 //
-// The FsRequest layout below mirrors src/fs/hostfs.h field for field. Change
-// one and change the other.
+// The request record itself is in abi.js, shared with host services.
+
+import { E, Request, statusOf } from "./abi.js";
+
+export { E, Request, statusOf };
 
 export const OP = {
     INFO: 1,
@@ -28,62 +31,6 @@ export const SYNC = {
 // Open flags, from src/fs/fs.h. Only creation and truncation reach OPFS: a
 // sync access handle is read-write regardless of what the opener asked for.
 export const O_CREATE = 4, O_TRUNC = 8;
-
-// src/kernel/result.h's Error, for the values this file reports.
-export const E = {
-    INVALID: 1, NOMEMORY: 2, NOTFOUND: 3, EXISTS: 4, NOTDIR: 5, ISDIR: 6,
-    PERM: 7, IO: 8, UNSUPPORTED: 11, NOTEMPTY: 13,
-};
-
-// Field offsets in words, matching struct FsRequest.
-const F = {
-    op: 0, token: 1, pathPtr: 2, pathLen: 3, flags: 4,
-    bufPtr: 5, bufCap: 6, status: 7, resultLo: 8, resultHi: 9, bufLen: 10,
-};
-
-export class Request {
-    constructor(mem, addr) {
-        this.mem = mem;
-        this.at = addr >>> 2;
-    }
-
-    get(field) {
-        return this.mem.u32()[this.at + F[field]];
-    }
-
-    set(field, value) {
-        this.mem.u32()[this.at + F[field]] = value >>> 0;
-    }
-
-    path() {
-        return this.mem.str(this.get("pathPtr"), this.get("pathLen"));
-    }
-
-    ok(lo = 0, hi = 0) {
-        this.set("status", 0);
-        this.set("resultLo", lo);
-        this.set("resultHi", hi);
-    }
-
-    fail(code) {
-        this.mem.u32()[this.at + F.status] = (-code) >>> 0;
-    }
-
-    // Copies a reply into the buffer the kernel supplied, or reports how much
-    // room it would have needed (src/fs/hostfs.h's two-phase reply).
-    write(bytes) {
-        const cap = this.get("bufCap");
-        if (bytes.length > cap) {
-            this.set("bufLen", 0);
-            this.set("resultLo", bytes.length);
-            this.set("status", 0);
-            return;
-        }
-        this.mem.view().set(bytes, this.get("bufPtr"));
-        this.set("bufLen", bytes.length);
-        this.set("status", 0);
-    }
-}
 
 // The reply the kernel decodes in fs_decode_entries: per entry, four u32s and
 // then the name, padded up to the next word.
@@ -234,24 +181,6 @@ export class OpfsStore {
     }
 }
 
-// Maps a rejection onto one of src/kernel/result.h's Error values.
-function statusOf(e) {
-    if (e && e.braam)
-        return e.braam;
-    const name = e && e.name;
-    if (name === "NotFoundError")
-        return E.NOTFOUND;
-    if (name === "TypeMismatchError")
-        return E.NOTDIR;
-    if (name === "InvalidModificationError")
-        return E.NOTEMPTY;
-    if (name === "NoModificationAllowedError")
-        return E.PERM;
-    if (name === "QuotaExceededError")
-        return E.IO;
-    return E.IO;
-}
-
 // Builds the two imports. `reply` delivers a finished request to the kernel;
 // it must never run inside the import call itself, or wake() would re-enter a
 // tick that is still on the stack. Every path below goes through a promise,
@@ -272,24 +201,24 @@ export function makeFsImports(mem, store, reply) {
             r.write(store.bundle);
             return;
         case OP.OPEN:
-            r.ok(await store.open(r.path(), r.get("flags")));
+            r.ok(await store.open(r.arg(), r.get("flags")));
             return;
         case OP.STAT: {
-            const s = await store.stat(r.path());
+            const s = await store.stat(r.arg());
             r.set("flags", s.dir ? 1 : 0);
             r.ok(s.size >>> 0, Math.floor(s.size / 4294967296) >>> 0);
             return;
         }
         case OP.LIST:
             r.set("status", 0);
-            r.write(packEntries(await store.list(r.path())));
+            r.write(packEntries(await store.list(r.arg())));
             return;
         case OP.MKDIR:
-            await store.mkdir(r.path());
+            await store.mkdir(r.arg());
             r.ok();
             return;
         case OP.REMOVE:
-            await store.remove(r.path(), (r.get("flags") & 1) !== 0);
+            await store.remove(r.arg(), (r.get("flags") & 1) !== 0);
             r.ok();
             return;
         default:

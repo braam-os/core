@@ -4,16 +4,23 @@
 add_library(braam_prog OBJECT
     cat.cpp
     cd.cpp
+    chat.cpp
     clear.cpp
+    curl.cpp
+    date.cpp
     df.cpp
     echo.cpp
+    export.cpp
     false.cpp
     grep.cpp
     head.cpp
     help.cpp
+    import.cpp
     ls.cpp
     mkdir.cpp
     mount.cpp
+    pbcopy.cpp
+    pbpaste.cpp
     pwd.cpp
     rm.cpp
     sleep.cpp

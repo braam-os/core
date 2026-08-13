@@ -4,8 +4,9 @@
 
 #include "alloc.h"
 #include "fmt.h"
-#include "fs/hostfs.h"
 #include "host.h"
+#include "hostcall.h"
+#include "jsref.h"
 #include "key.h"
 #include "sched.h"
 #include "screen.h"
@@ -63,13 +64,21 @@ BRAAM_EXPORT("tick") i32 tick(f64 now_ms)
     return delay;
 }
 
-// A token nothing waits on is normally a late event and nothing more. A
-// storage request is the exception: its awaiter may be gone while the host
-// still holds the record's address, so the reply is what finally frees it.
+// A token nothing waits on is normally a late event and nothing more. A host
+// request is the exception: its awaiter may be gone while the host still holds
+// the record's address, so the reply is what finally frees it.
 BRAAM_EXPORT("wake") void wake(u32 token, u32 payload_ptr, u32 payload_len)
 {
     if (!sched_wake(token, payload_ptr, payload_len))
-        fs_orphan_reply(token);
+        host_orphan_reply(token);
+}
+
+// How a JS object enters the kernel (Concept.md §3.7). The slot was reserved
+// before the request that produces the object was issued, so this only stores;
+// nothing is scheduled and no tick is re-entered.
+BRAAM_EXPORT("ref") void ref(u32 slot, __externref_t obj)
+{
+    jsref_set(slot, obj);
 }
 
 // The fast path: it only queues, so it can never re-enter the scheduler, and a

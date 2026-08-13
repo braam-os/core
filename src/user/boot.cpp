@@ -86,6 +86,14 @@ Task<void> boot_filesystem()
     if (Task<Result<void>> t = vfs_mkdir("/tmp"))
         co_await t;
 
+    // Where `import` puts what the file picker hands over (Concept.md §5.4).
+    // A directory on the root MemFs rather than a mount of its own: the files
+    // arrive as bytes, and nothing about them is a filesystem.
+    if (Task<Result<void>> t = vfs_mkdir("/mnt"))
+        co_await t;
+    if (Task<Result<void>> t = vfs_mkdir("/mnt/import"))
+        co_await t;
+
     if (Fs *bin = binfs_create())
         if (vfs_mount("/bin", bin).is_err())
             say("braam: /bin would not mount");

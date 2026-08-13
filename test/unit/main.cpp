@@ -1,11 +1,12 @@
 // tests.wasm — the same kernel sources, driven from Node. Kept out of
 // kernel.wasm so test code never counts against the size budget.
 
-#include "fs/hostfs.h"
 #include "harness.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/host.h"
+#include "kernel/hostcall.h"
+#include "kernel/jsref.h"
 #include "kernel/sched.h"
 
 void test_alloc();
@@ -29,6 +30,8 @@ void test_parse();
 void test_shell();
 void test_path();
 void test_hostfs();
+void test_jsref();
+void test_svc();
 void test_memfs();
 void test_vfs();
 void test_bundlefs();
@@ -44,7 +47,13 @@ extern "C" void __wasm_call_ctors();
 BRAAM_EXPORT("wake") void wake(u32 token, u32 payload_ptr, u32 payload_len)
 {
     if (!sched_wake(token, payload_ptr, payload_len))
-        fs_orphan_reply(token);
+        host_orphan_reply(token);
+}
+
+// The same ref() kernel.wasm exports, so the service fake can hand objects in.
+BRAAM_EXPORT("ref") void ref(u32 slot, __externref_t obj)
+{
+    jsref_set(slot, obj);
 }
 
 // Returns the number of failed checks; the harness treats nonzero as failure.
@@ -68,7 +77,9 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_screen();
     test_text(); // after screen: it round-trips through the grid
     test_path();
+    test_jsref();
     test_hostfs();
+    test_svc();
     test_memfs();
     test_bundlefs();
     test_vfs();

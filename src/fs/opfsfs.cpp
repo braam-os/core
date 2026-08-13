@@ -74,7 +74,7 @@ Task<Result<Vec<Entry>>> OpfsFs::list(Str path)
     // which is a whole span the common case never uses).
     for (int attempt = 0; attempt < 2; attempt++) {
         CO_TRY_VOID(co_await c);
-        FsReq &r = c.req();
+        HostReq &r = c.req();
         if (r.h.buf_len > 0 || r.h.result_lo == 0)
             co_return fs_decode_entries(r.buf.data(), r.h.buf_len);
         if (!c.reserve(r.h.result_lo))

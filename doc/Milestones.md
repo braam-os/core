@@ -122,12 +122,32 @@ Programs added: `cd`, `df`, `mkdir`, `mount`, `pwd`, `rm`, `touch`, for twenty; 
 from 62,926 to 137,867 bytes against an unchanged 256 KiB budget.
 See [Release_Notes.md](Release_Notes.md).
 
-## M6 — Host services
+## M6 — Host services — **done**
 `fetch`, timers, WebSocket, clipboard, the `externref` table and `JsRef`.
 
-- [ ] A `curl`-ish command fetches a URL and prints the body
-- [ ] A chat client works over a WebSocket
-- [ ] `/mnt/import` and `export` move files in and out
+- [x] A `curl`-ish command fetches a URL and prints the body
+- [x] A chat client works over a WebSocket
+- [x] `/mnt/import` and `export` move files in and out
+
+There is one new import, `host_svc(op, token, req, ref)`, not the `host_fetch` §3.4 sketched:
+M5 fixed the style at one import per calling convention, and everything here is asynchronous,
+so §2.2 still has exactly two sanctioned exceptions. The request record M5 built is now
+`HostRequest` in `src/kernel/hostcall.h`, shared by both interfaces along with the orphan list
+and the reaper; `web/abi.js` is the same move on the JS side. The `externref` table runs the
+opposite way from §3.7's sketch — a table cannot be imported, so the kernel owns it and the
+host deposits through a new `ref(slot, obj)` export, which is the sixth and only new one.
+
+Timers needed nothing: the queue landed in M1 and there is deliberately no `host_timer`. What
+was missing was a wall clock, since `host_now()` is `performance.now()`; `date` asks for one
+through the service ABI. `/mnt/import` is a directory on the root `MemFs` rather than a mount,
+because the picker hands over bytes. `chat` is the second place §3.6's structured concurrency
+is put back by hand, and the first where the child outlives its parent — so it writes to the
+screen rather than through stdout, whose pipe it does not own. `tools/wsd.mjs` is a
+dependency-free broadcast server so two tabs can chat with no internet; `make serve` starts it.
+
+Programs added: `chat`, `curl`, `date`, `export`, `import`, `pbcopy`, `pbpaste`, for
+twenty-seven. `kernel.wasm` went from 137,867 to 180,474 bytes against an unchanged 256 KiB
+budget. See [Release_Notes.md](Release_Notes.md).
 
 ## M7 — Depth
 A layout/widget layer over the cell grid (panes, a `less`, an editor), job control,

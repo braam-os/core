@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 
 import { FakeStore, makeFakeImports } from "./fakefs.mjs";
+import { FakeNet, makeFakeSvc } from "./fakesvc.mjs";
 
 function usage() {
     console.error("usage: run.mjs --kernel <wasm> [<bundle.bin>] | --tests <wasm>");
@@ -44,6 +45,7 @@ const mem = {
 };
 
 const store = new FakeStore();
+const net = new FakeNet();
 
 // The archive tools/pack.py just produced, so the packer and src/fs/bundlefs.cpp
 // are checked against each other rather than each against its own idea.
@@ -62,6 +64,7 @@ const imports = {
             presented.push({ x, y, w, h });
         },
         ...makeFakeImports(mem, store, () => instance.exports),
+        svc: makeFakeSvc(mem, net, () => instance.exports),
     },
 };
 
@@ -121,8 +124,9 @@ const names = (list) => list.map((e) => `${e.module ? e.module + "." : ""}${e.na
 if (mode === "--kernel") {
     // The import and export surface is the ABI; drift is a bug, and an
     // unexpected import means a libc dependency crept in.
-    const want_imports = ["host.fs", "host.fs_sync", "host.log", "host.now", "host.present"];
-    const want_exports = ["init", "key", "memory", "resize", "tick", "wake"];
+    const want_imports = ["host.fs", "host.fs_sync", "host.log", "host.now", "host.present",
+                          "host.svc"];
+    const want_exports = ["init", "key", "memory", "ref", "resize", "tick", "wake"];
     const got_imports = names(WebAssembly.Module.imports(module));
     const got_exports = names(WebAssembly.Module.exports(module));
 
@@ -191,13 +195,14 @@ if (mode === "--kernel") {
     if (row(s, s.cursor_y) !== "$")
         fail(`the prompt after a success is ${row(s, s.cursor_y)}, expected $`);
 
-    submit("clear", 1045); // twenty programs need more than the whole grid
-    addr = instance.exports.resize(60, 32);
+    submit("clear", 1045); // the programs need more than the whole grid
+    addr = instance.exports.resize(60, 40);
     if (addr === 0)
         fail("the resize before help failed");
     s = submit("help", 1050);
-    for (const name of ["cat", "cd", "clear", "df", "echo", "false", "grep", "head", "help",
-                        "ls", "mkdir", "mount", "pwd", "rm", "sleep", "tail", "touch", "true",
+    for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "export",
+                        "false", "grep", "head", "help", "import", "ls", "mkdir", "mount",
+                        "pbcopy", "pbpaste", "pwd", "rm", "sleep", "tail", "touch", "true",
                         "version", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
@@ -435,6 +440,89 @@ if (mode === "--kernel") {
     s = submit("cat gone", 3012);
     if (!rows(s).includes("volatile"))
         fail(`the memory fallback is not writable: ${JSON.stringify(rows(s))}`);
+
+    // M6, first criterion: curl fetches a URL and prints the body. -i puts the
+    // status and the headers in front of it.
+    s = submit("clear", 3020);
+    s = submit("curl /hello.txt", 3021);
+    if (!rows(s).includes("hi there"))
+        fail(`curl printed nothing: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3022);
+    s = submit("curl -i /hello.txt", 3023);
+    if (!rows(s).includes("HTTP 200"))
+        fail(`curl -i did not print the status: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith("content-type: text/plain")))
+        fail(`curl -i did not print the headers: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3024);
+    s = submit("curl /nosuch", 3025);
+    if (!rows(s).some((line) => line.startsWith("curl: /nosuch: not found")))
+        fail(`a failed fetch said nothing: ${JSON.stringify(rows(s))}`);
+
+    // A fetched body reaches a pipe like any other output.
+    s = submit("clear", 3026);
+    s = submit("curl /hello.txt | wc", 3027);
+    if (!rows(s).some((line) => line.startsWith("1 2 9")))
+        fail(`curl into a pipe printed ${JSON.stringify(rows(s))}, expected 1 2 9`);
+
+    // M6, second criterion: a chat client over a WebSocket. The fake loops a
+    // lone socket back to itself, so one client is a whole conversation; the
+    // receiver is a job of its own, which is what makes the reply arrive while
+    // the program is parked on the keyboard.
+    s = submit("clear", 3030);
+    type("chat ws://loop me");
+    press(KEY.ENTER);
+    instance.exports.tick(3031);
+    if (net.sockets.length !== 1)
+        fail(`chat opened ${net.sockets.length} sockets, expected 1`);
+    s = submit("hello", 3032);
+    if (!rows(s).includes("me: hello"))
+        fail(`the chat message did not come back: ${JSON.stringify(rows(s))}`);
+
+    // ^C leaves the socket dropped and the prompt back, with the receiver job
+    // taken down by the destructor in its parent's frame.
+    press("c".codePointAt(0), CTRL);
+    if (instance.exports.tick(3033) !== -1)
+        fail("^C left the chat receiver scheduled");
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C on chat left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!net.sockets[0].closed)
+        fail("chat did not drop its socket on the way out");
+
+    // M6, third criterion: /mnt/import takes what the picker hands over, and
+    // export sends a file back out through the browser.
+    net.reset();
+    s = submit("clear", 3040);
+    s = submit("import", 3041);
+    if (!rows(s).includes("/mnt/import/notes.txt"))
+        fail(`import named nothing: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3042);
+    s = submit("cat /mnt/import/notes.txt", 3043);
+    if (!rows(s).includes("picked"))
+        fail(`the imported file did not read back: ${JSON.stringify(rows(s))}`);
+
+    submit("export /mnt/import/notes.txt", 3044);
+    if (net.saved.length !== 1 || net.saved[0].name !== "notes.txt")
+        fail(`export saved ${JSON.stringify(net.saved.map((f) => f.name))}`);
+    if (new TextDecoder().decode(net.saved[0].bytes) !== "picked\n")
+        fail(`export saved the wrong bytes: ${JSON.stringify(net.saved[0].bytes)}`);
+
+    // The clipboard, and the wall clock the kernel's monotonic one cannot give.
+    submit("echo copied | pbcopy", 3050);
+    if (net.clipboard !== "copied\n")
+        fail(`pbcopy left ${JSON.stringify(net.clipboard)} on the clipboard`);
+    s = submit("clear", 3051);
+    s = submit("pbpaste", 3052);
+    if (!rows(s).includes("copied"))
+        fail(`pbpaste printed nothing: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3053);
+    s = submit("date -u", 3054);
+    if (!rows(s).some((line) => /^\w\w\w \w\w\w \d\d \d\d:\d\d:\d\d \+0000 \d{4}$/.test(line)))
+        fail(`date printed ${JSON.stringify(rows(s))}`);
 
     console.log(`smoke ok: ${got_imports.length} imports, ${got_exports.length} exports`);
 } else {

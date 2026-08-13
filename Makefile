@@ -7,6 +7,8 @@ TOOLCHAIN := cmake/wasm32-unknown-unknown.cmake
 # No trailing comment here: make keeps the space before a `#`, and the port
 # would end up padded. Must match the serve target in CMakeLists.txt.
 PORT      := 8080
+# The chat demo's WebSocket server, started alongside `serve`.
+WS_PORT   := 8081
 
 # make's own -jN cannot reach the generated build: its jobserver descriptors do
 # not survive the cmake process in between. Pass a count explicitly instead.
@@ -15,7 +17,7 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 # macOS ships `open`, most Linux desktops `xdg-open`.
 BROWSER := $(firstword $(foreach c,open xdg-open,$(shell command -v $(c) 2>/dev/null)))
 
-.PHONY: all run serve clean
+.PHONY: all run serve wsd clean
 
 all: $(BUILD)/CMakeCache.txt
 	@cmake --build $(BUILD) -j $(JOBS)
@@ -29,7 +31,13 @@ ifeq ($(BROWSER),)
 else
 	@( sleep 1; $(BROWSER) "http://localhost:$(PORT)/" ) &
 endif
-	@cmake --build $(BUILD) --target serve
+	@BRAAM_WS_PORT=$(WS_PORT) node tools/wsd.mjs & \
+	 trap "kill $$! 2>/dev/null" EXIT INT TERM; \
+	 cmake --build $(BUILD) --target serve
+
+# The chat server on its own, for a browser that is already open.
+wsd:
+	@BRAAM_WS_PORT=$(WS_PORT) node tools/wsd.mjs
 
 clean:
 	@rm -rf $(BUILD)

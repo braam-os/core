@@ -31,11 +31,13 @@
 <body>
 <canvas id="screen" tabindex="0"></canvas>
 <pre id="status"></pre>
+<input id="picker" type="file" multiple hidden>
 <script type="module">
 import { normalise, consumes } from "./keys.js";
 
 const canvas = document.getElementById("screen");
 const status = document.getElementById("status");
+const picker = document.getElementById("picker");
 
 function note(text, cls) {
     const line = document.createElement("div");
@@ -115,7 +117,69 @@ addEventListener("keydown", (event) => {
 
 canvas.focus();
 
+// The three host services a worker cannot perform itself: navigator.clipboard,
+// <input type="file"> and a download all need the DOM (Concept.md §5.4). The
+// worker asks by id and the answer goes straight back.
+const E_PERM = 7, E_IO = 8;
+
+function pick() {
+    return new Promise((resolve) => {
+        const done = async () => {
+            const files = [...picker.files];
+            picker.value = "";
+            resolve(await Promise.all(files.map(async (f) => ({
+                name: f.name,
+                bytes: new Uint8Array(await f.arrayBuffer()),
+            }))));
+        };
+        picker.addEventListener("change", done, { once: true });
+        picker.addEventListener("cancel", () => {
+            picker.removeEventListener("change", done);
+            resolve([]);
+        }, { once: true });
+        // The keystroke that ran the command is still the current activation,
+        // which is what lets this open without a click of its own.
+        picker.click();
+    });
+}
+
+function save(name, bytes) {
+    const url = URL.createObjectURL(new Blob([bytes]));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function service(data) {
+    switch (data.svc) {
+    case "clipRead":
+        return await navigator.clipboard.readText();
+    case "clipWrite":
+        await navigator.clipboard.writeText(data.text);
+        return null;
+    case "pick":
+        return await pick();
+    case "save":
+        save(data.name, data.bytes);
+        return null;
+    }
+    throw new Error(`unknown service ${data.svc}`);
+}
+
 worker.onmessage = ({ data }) => {
+    if (data.kind === "svc") {
+        service(data)
+            .then((value) => worker.postMessage({ kind: "svc-reply", id: data.id, value }))
+            .catch((e) => worker.postMessage({
+                kind: "svc-reply",
+                id: data.id,
+                error: (e && (e.name === "NotAllowedError" || e.name === "SecurityError"))
+                    ? E_PERM : E_IO,
+            }));
+        return;
+    }
     if (data.kind === "error") {
         console.error(data.text);
         note(data.text, "error");

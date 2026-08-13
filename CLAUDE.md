@@ -17,7 +17,11 @@ grammar in `src/user/parse.{h,cpp}`, the job runtime and tty pump in `src/user/j
 and thirteen programs. M5 (filesystem) is done: `src/fs/` with the `Fs` interface, path
 resolution, the mount and open-file tables, `MemFs`, `BundleFs`, `OpfsFs` and the `host_fs`/
 `host_fs_sync` ABI; `BinFs` and the boot mounting in `src/user/`; working redirection; and
-twenty programs. M6 (host services) is next.
+twenty programs. M6 (host services) is done: the `externref` table and `JsRef` in
+`src/kernel/jsref.h`, the generic request record in `src/kernel/hostcall.h` shared by both
+asynchronous imports, the `host_svc` ABI and `src/svc/` (fetch, WebSocket, clipboard, file
+transfer, wall clock), the `ref` export, the page-side relay in `web/`, `tools/wsd.mjs`, and
+twenty-seven programs. M7 (depth) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -93,11 +97,16 @@ criterion — plus three CTest cases that run on every build: `smoke` asserts `k
 exact import/export surface and that it boots, `unit` runs `tests.wasm` under Node, and `size`
 checks `tools/size_budget.txt`. New core code gets a case in [test/unit/](test/unit/).
 
-Both wasm modules import the storage ABI, so both are driven with the in-memory backend in
-[test/fakefs.mjs](test/fakefs.mjs). It answers from inside the import, which no browser can do
-and the kernel cannot tell — `wake()` only queues a resumption. It takes its constants and its
-encoders from `web/fs.js`, so the two sides of the wire cannot drift silently; keep it that way
-rather than restating the format.
+Both wasm modules import the storage and service ABIs, so both are driven with the in-memory
+backends in [test/fakefs.mjs](test/fakefs.mjs) and [test/fakesvc.mjs](test/fakesvc.mjs). They
+answer from inside the import, which no browser can do and the kernel cannot tell — `wake()`
+only queues a resumption. They take their constants and their encoders from `web/fs.js`,
+`web/svc.js` and `web/abi.js`, so the two sides of the wire cannot drift silently; keep it that
+way rather than restating the format.
+
+A fake proves the kernel, not the shipping JS. `tools/wsd.mjs` is the counterweight for the one
+service where that gap matters: a real WebSocket server, so `make serve` gives two tabs a real
+conversation rather than a loopback.
 
 ## Architecture invariants
 
@@ -111,8 +120,10 @@ main way to damage the design. Full statements in Concept.md §2.
    the `wake()` export. Exactly two exceptions are sanctioned: `host_now()`, and OPFS sync
    access handles once a file is open (`host_fs_sync`). A third exception needs written
    justification in Concept.md, because at three it stops being pragmatism and becomes a second
-   ABI. Storage is multiplexed — one import per calling convention, not one per operation — so
-   adding an operation is an enum value on each side, not a new import.
+   ABI. Storage and host services are each multiplexed — one import per calling convention, not
+   one per operation — so adding an operation is an enum value on each side, not a new import.
+   `ref(slot, obj)` is an export, not an exception: it stores a JS object in the externref table
+   and schedules nothing.
 3. **The terminal is a cell grid in linear memory, not a byte stream.** No ANSI escapes, no
    VT100 emulation, no xterm.js. Colours are struct fields and cursor addressing is indexing.
 
@@ -129,9 +140,14 @@ Further constraints that are easy to violate by habit:
   `test_shell` guards the shell's boot cost for exactly this reason, and it is why the boot
   mounting is its own coroutine and why `FS_BLOCK` is 512 rather than a rounder number.
 - **A host request may outlive the coroutine that issued it.** Anything whose address crosses to
-  JS and comes back later — every `FsCall` — must be a heap record the kernel keeps alive past a
-  cancelled await, never a buffer in the awaiting frame. `wake()` on an unclaimed token is what
-  reaps one; that is why `sched_wake` returns a bool.
+  JS and comes back later — every `HostCall`, storage or service — must be a heap record the
+  kernel keeps alive past a cancelled await, never a buffer in the awaiting frame. `wake()` on an
+  unclaimed token is what reaps one; that is why `sched_wake` returns a bool. A slot the host
+  will deposit into belongs to the record for the same reason: `reserve_ref()`, not a `JsRef` in
+  the frame.
+- **The externref table is the kernel's; JS never indexes it.** `import_module`/`import_name` do
+  not apply to tables, so the table is module-defined: the host deposits through the `ref` export
+  and receives an object as an argument of `host_svc`. Do not try to hand the table to JS.
 - **Never `new` anything.** `operator new` returns null on failure and `-fno-exceptions` means
   the expression would construct at address zero. Use `heap_new`/`heap_delete` from `alloc.h`.
 - **Every awaiter deregisters in its destructor.** `sched_unwait` from `~Awaiter` is what makes
@@ -164,9 +180,13 @@ built, so that M0–M7 work does not have to be unpicked later. Do not design ar
 Since M4 a pipeline's stages are independent scheduler jobs rather than a child group the shell
 `co_await`s: `CancelState::waiting` is a single slot, so one job cannot have two children parked
 at once. §3.6's structured concurrency is put back by hand, from a destructor in `run_line`'s
-frame. A real child-group awaitable needs intrusive queue links inside `Waiter` first — the same
-work a channel with two blocked senders would need, which `Channel::park_sender` panics on today
-rather than losing a wakeup quietly.
+frame. `chat` is the second case, and it shows the cost: a cancelled child does not unwind until
+the scheduler resumes it, a tick or two after its parent is gone, so it must touch nothing the
+parent owns — its session is refcounted and it writes to the screen rather than through a
+`Stream` whose pipe belongs to a `Job` that may already be freed. A real child-group awaitable
+needs intrusive queue links inside `Waiter` first — the same work a channel with two blocked
+senders would need, which `Channel::park_sender` panics on today rather than losing a wakeup
+quietly.
 
 ## Conventions
 
@@ -176,11 +196,12 @@ rather than losing a wakeup quietly.
   prose and revised in one place.
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
 - Layout: `src/kernel/`, `src/fs/` (paths, the VFS, the filesystems, the host storage ABI),
-  `src/user/` (line editor, grammar, job runtime, shell, `BinFs`, boot), `src/prog/` (one
-  self-registering file per program), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`.
-  Concept.md §7. `braam_fs` sits between the kernel and userland and must not depend upwards:
-  anything needing the program registry belongs in `src/user/`, which is why `BinFs` lives
-  there.
+  `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock), `src/user/` (line editor,
+  grammar, job runtime, shell, `BinFs`, boot), `src/prog/` (one self-registering file per
+  program), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`. Concept.md §7. `braam_fs` and
+  `braam_svc` are siblings above the kernel and below userland, and must not depend upwards or
+  on each other: anything needing the program registry belongs in `src/user/`, which is why
+  `BinFs` lives there.
 - **`src/prog/` is an `OBJECT` library, not `STATIC`.** Nothing references those translation
   units by name — they reach the link only through their static-init registrars, and
   `--gc-sections` never extracts an unreferenced archive member. As an archive it would link

@@ -179,7 +179,8 @@ void test_shell()
     // Three stages at once.
     boot(60, 16);
     run("ls /bin | grep e | wc");
-    CHECK(some_row_starts("9 9 ")); // clear echo false grep head help sleep true version
+    // clear date echo export false grep head help pbpaste sleep true version
+    CHECK(some_row_starts("12 12 "));
     run("echo 'a");
     CHECK(some_row_starts("braam: unterminated quote"));
     CHECK(has_row("[2] $"));

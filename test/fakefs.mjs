@@ -54,7 +54,7 @@ export class FakeStore {
 // exports, which change when the test re-instantiates.
 export function makeFakeImports(mem, store, kernel) {
     function perform(r, op) {
-        const path = op === OP.INFO || op === OP.BUNDLE ? "" : r.path();
+        const path = op === OP.INFO || op === OP.BUNDLE ? "" : r.arg();
         switch (op) {
         case OP.INFO:
             return r.write(packInfo({

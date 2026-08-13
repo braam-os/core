@@ -71,6 +71,16 @@ One or two pragmatic exceptions are fine. Three become an ad-hoc second calling 
 and then we have two ABIs and no invariant. Each new exception needs a written justification
 in this document.
 
+M6 added `fetch`, WebSocket, the clipboard, file transfer and a wall clock, and asked for no
+third exception: every one of them is a promise on the host side, so every one of them takes
+a token. The wall clock is the near miss — `Date.now()` is as synchronous as `host_now()` —
+but a service already had an import and one more operation on it costs nothing, while a
+second value-returning import costs the invariant.
+
+There is one call in the other direction that carries no token, and it is not an exception to
+this rule because it is an *export*: `ref(slot, obj)` (§3.7) is how the host puts a JS object
+into the kernel's table. It stores and returns; nothing is scheduled by it.
+
 ### 2.3 The terminal is a cell grid, not a byte stream
 
 The kernel owns a screen buffer of cells in linear memory. The renderer draws it. There is
@@ -182,6 +192,7 @@ wake(token, payload_ptr, payload_len)   // host signals an event
 tick(now_ms)                            // drains ready queue; returns ms-until-next-timer, or -1
 key(code, mods)                         // fast path, avoids allocation
 resize(cols, rows)                      // returns the screen descriptor's address, or 0
+ref(slot, obj)                          // host deposits a JS object in the table (§3.7)
 ```
 
 `resize` returns where the screen descriptor (§3.5) lives, which is how the host learns the
@@ -194,11 +205,16 @@ request was honoured.
 
 ```
 host_now(), host_random(ptr, len), host_log(ptr, len)
-host_fetch(token, url_ptr, url_len, opts_ptr)
 host_present(dirty_x, dirty_y, dirty_w, dirty_h)
 host_fs(op, token, req)                       // storage, async  (§5.2)
 host_fs_sync(op, handle, ptr, len, off) -> i32 // storage, sync   (§5.2)
+host_svc(op, token, req, ref)                 // host services, async (§3.7)
 ```
+
+`host_fetch` above was M6's, and it is not what M6 built: naming an import per operation is
+the style M5 replaced. `host_svc` carries fetch, WebSocket, the clipboard, file transfer and
+the wall clock over the same `req` record `host_fs` uses, with the object the operation acts
+on passed alongside as an `externref`.
 
 There is no `host_timer`. The kernel owns the timer queue, so `tick()`'s return value already
 says when the host must call back, and one `setTimeout` serves every sleeping task.
@@ -207,9 +223,13 @@ Storage is **multiplexed rather than named per operation**, which is what `host_
 and `host_storage_write` above became in M5. One import per *calling convention* — one
 asynchronous, one synchronous — is the shape §4.3 already fixes for the process ABI, and it
 keeps the exact-import assertion in the smoke test stable while operations are added. `req` is
-the address of a request record carrying the path, the flags, a reply buffer and the status;
-the kernel owns that record for as long as the host may touch it, which is past a cancelled
-await, so it outlives its awaiter rather than being freed under the host.
+the address of a request record carrying the string argument, the flags, a reply buffer and
+the status; the kernel owns that record for as long as the host may touch it, which is past a
+cancelled await, so it outlives its awaiter rather than being freed under the host.
+
+M6 generalised that record rather than writing a second one: it is `HostRequest` in
+`src/kernel/hostcall.h`, and the interface a call belongs to picks the import. Both
+asynchronous imports therefore have one wire format, one orphan list and one reaper.
 
 ### 3.5 The screen
 
@@ -291,14 +311,34 @@ discipline" belongs, and it is far nicer as a coroutine than as a termios state 
 ### 3.7 Holding JS objects
 
 Use an **`externref` table** rather than a hand-rolled map of integer IDs. Reference types
-are supported everywhere now: a `WebAssembly.Table` of `externref` that wasm indexes into and
-JS populates means a `Response`, a `FileSystemFileHandle`, or a `WebSocket` is just a slot
-index, with no serialisation. Wrap it in an RAII `JsRef` that frees the slot in its
-destructor.
+are supported everywhere now: a table of `externref` that wasm indexes into means a
+`Response`, a `FileSystemFileHandle`, or a `WebSocket` is just a slot index, with no
+serialisation. Wrap it in an RAII `JsRef` that frees the slot in its destructor.
 
-M5's OPFS handles are a plain JS array indexed by slot number, not this. The table arrives with
-M6, where `fetch` and `WebSocket` make more than one kind of object need holding; a filesystem
-handle is already only ever an integer on the wasm side, so it gains nothing from going first.
+M5's OPFS handles are a plain JS array indexed by slot number, not this. The table arrived
+with M6, where `fetch` and `WebSocket` make more than one kind of object need holding; a
+filesystem handle is already only ever an integer on the wasm side, so it gained nothing from
+going first.
+
+**The table is the kernel's, and the host never indexes it.** That is the one detail this
+section had backwards. `import_module`/`import_name` apply to functions only, so a table
+cannot be imported from JS; a module-defined one is what the toolchain supports. So the
+traffic runs the other way round:
+
+- The kernel reserves a slot and publishes the number in the request record.
+- The host, when its promise resolves, calls the `ref(slot, obj)` export to deposit the object.
+- To *use* it, the kernel reads the slot and passes the object as `host_svc`'s fourth
+  argument. JS sees the object, never the table.
+
+That also makes M8's capability story simpler than the original sketch: an instance's table is
+part of the instance, so an isolated process can only reach the objects its own kernel put
+there, with no per-instance table to hand out.
+
+A slot is owned. `JsRef` is move-only and clears its slot in its destructor; a request that
+reserved one owns it until `await_resume` hands it over, so a cancelled request frees the slot
+along with the record. Releasing a *service* object additionally tells the host to let go —
+a socket has event handlers holding it alive on the JS side — which is what `JsHandle` in
+`src/svc/svc.h` adds on top.
 
 ---
 
@@ -401,7 +441,13 @@ they were to hold does not exist yet:
 - **`BundleFs` reads one archive, not the Cache API.** The Cache API stores `Request`/`Response`
   pairs, which is worth having once `fetch` exists to produce them; that is M6. Until then the
   worker loads a single `bundle.bin` beside `kernel.wasm` at boot and hands the bytes over, and
-  the tree is unpacked in memory. The packer is `tools/pack.py`.
+  the tree is unpacked in memory. The packer is `tools/pack.py`. M6 built the `fetch` and left
+  the archive alone: a tree that never changes after the build has nothing to gain from a
+  cache with an eviction policy.
+- **`/mnt/import` is a directory, not a mount.** The picker hands over bytes, and bytes are not
+  a filesystem; `import` writes them into the root `MemFs` and everything above works as it
+  would for any other file. A read-through `Fs` over `File` objects would be the richer design
+  and buys nothing §5.4 asks for.
 - **`/bin` is `BinFs`, a filesystem over the program registry.** Programs are in-kernel
   coroutines until M8 gives them binaries, so `/bin` would otherwise be an empty directory that
   `ls` could not account for. A file there reads as the program's usage line.
@@ -470,6 +516,12 @@ The universally available escape hatch is the boring one: `<input type="file">` 
 and a Blob download for export. Wire it up early as `/mnt/import` and an `export` command. It
 works everywhere and covers "get my data out."
 
+Both landed in M6, and both live on the **page** rather than in the worker: a file picker and
+a download need the DOM, as does `navigator.clipboard`. `web/svc.js` relays those three across
+`postMessage` and answers by id, which is invisible from the kernel — a service operation is a
+token either way. The picker opens inside the transient activation of the keystroke that ran
+the command, which is why `import` works without a button of its own.
+
 ---
 
 ## 6. Milestones
@@ -483,7 +535,8 @@ numbering here is cited from source comments.
 
 ## 7. Repository layout
 
-As created in M0; `src/prog` and `src/user` arrived with M3 and `src/fs` with M5.
+As created in M0; `src/prog` and `src/user` arrived with M3, `src/fs` with M5 and `src/svc`
+with M6.
 
 ```
 doc/Concept.md          this document
@@ -494,13 +547,16 @@ CMakeLists.txt          the build
 cmake/                  the wasm32-unknown-unknown toolchain file
 src/kernel/             allocator, core types, Task, scheduler, Channel, Process
 src/kernel/coroutine.h  the freestanding <coroutine> shim (Appendix C)
-src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, host ABI
+src/kernel/hostcall.h   the asynchronous host request, shared by both interfaces
+src/kernel/jsref.h      the externref table and JsRef (§3.7)
+src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
+src/svc/                fetch, WebSocket, clipboard, file transfer, wall clock
 src/prog/               one file per program; self-registering
 src/user/               LineEditor, grammar, job runtime, shell, BinFs, boot
 bundle/                 the tree tools/pack.py packs into /usr
-test/                   in-wasm unit tests, the Node driver, the storage fake
-web/                    index.html, worker.js, host shim, storage shim, renderer
-tools/                  build scripts, bundle packer, size-budget check
+test/                   in-wasm unit tests, the Node driver, the storage and service fakes
+web/                    index.html, worker.js, host shim, storage and service shims, renderer
+tools/                  build scripts, bundle packer, size-budget check, chat server
 ```
 
 ---

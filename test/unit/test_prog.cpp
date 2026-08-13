@@ -8,9 +8,10 @@ namespace {
 
 // Every program in src/prog/. The count is the tripwire for a registrar the
 // linker dropped: those fail silently, and only a count notices.
-constexpr Str NAMES[] = { "cat",   "cd",   "clear", "df",    "echo",    "false", "grep",
-                          "head",  "help", "ls",    "mkdir", "mount",   "pwd",   "rm",
-                          "sleep", "tail", "touch", "true",  "version", "wc" };
+constexpr Str NAMES[] = { "cat",   "cd",     "chat",  "clear",  "curl",    "date", "df",
+                          "echo",  "export", "false", "grep",   "head",    "help", "import",
+                          "ls",    "mkdir",  "mount", "pbcopy", "pbpaste", "pwd",  "rm",
+                          "sleep", "tail",   "touch", "true",   "version", "wc" };
 
 i32 status;
 
@@ -88,7 +89,7 @@ void test_prog()
     CHECK(program_find("") == nullptr);
 
     screen_reset();
-    CHECK(screen_resize(80, 24)); // tall enough for help, wide enough not to wrap
+    CHECK(screen_resize(80, 32)); // tall enough for help, wide enough not to wrap
     Stdio io = stdio_console();
     char buf[64];
 
