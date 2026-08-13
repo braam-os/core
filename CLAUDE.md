@@ -8,11 +8,15 @@ M0 (nucleus) is done: CMake build, the coroutine shim, the allocator, `Str`/`Spa
 `Result`/`Option`, `host_log`, a Node test harness, and CI with a size budget. M1 (scheduler)
 is next.
 
-**[doc/Concept.md](doc/Concept.md) is the specification and the working plan.** Read it before
-doing anything substantive — it carries decisions whose rationale is not recoverable from the
-code. It is also a workbook: §6 holds milestones M0–M9 with checkbox acceptance criteria. Tick
-them as work lands, and when a design decision changes, amend Concept.md in the same commit
-that changes the code.
+**[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
+substantive — it carries decisions whose rationale is not recoverable from the code. It is
+stable: amend it only when a design decision changes, and then in the same commit that changes
+the code. Its section numbering is cited from source comments, so do not renumber.
+
+**[doc/Milestones.md](doc/Milestones.md) is the working plan** — M0–M9 with checkbox
+acceptance criteria. Tick them as work lands. This is the file that moves on an ordinary
+commit; note there how a milestone departed from its plan, but put reasoning in the release
+notes.
 
 **[doc/Release_Notes.md](doc/Release_Notes.md) records why the code is the way it is**, per
 milestone. Comments in the source stay terse and say *what*; the *why* goes here. Read the M0
@@ -62,7 +66,7 @@ back would be a regression: `--export-dynamic` (unreliable — exports are named
 with `BRAAM_EXPORT`) and `--allow-undefined` (without it, an accidental libc dependency is a
 link error rather than a runtime trap). See Concept.md §C.3.
 
-Verification is per-milestone — each milestone in Concept.md §6 states its own acceptance
+Verification is per-milestone — each milestone in Milestones.md states its own acceptance
 criterion — plus three CTest cases that run on every build: `smoke` asserts `kernel.wasm`'s
 exact import/export surface and that it boots, `unit` runs `tests.wasm` under Node, and `size`
 checks `tools/size_budget.txt`. New core code gets a case in [test/unit/](test/unit/).

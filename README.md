@@ -27,10 +27,10 @@ Early. Milestone M0 — the nucleus — is done: a freestanding wasm build, a ha
 that boots the kernel in a Web Worker and prints a line. `kernel.wasm` is 4 KB. M1, the
 scheduler, is next.
 
-[doc/Concept.md](doc/Concept.md) is the specification and the development plan, including the
-milestone sequence M0–M9 and the reasoning behind each decision. Read it first.
-[doc/Release_Notes.md](doc/Release_Notes.md) explains why the code that exists looks the way it
-does.
+[doc/Concept.md](doc/Concept.md) is the specification — the architecture and the reasoning
+behind each decision. Read it first. [doc/Milestones.md](doc/Milestones.md) is the plan: the
+milestone sequence M0–M9 with acceptance criteria. [doc/Release_Notes.md](doc/Release_Notes.md)
+explains why the code that exists looks the way it does.
 
 ## Building
 

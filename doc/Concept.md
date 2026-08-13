@@ -1,11 +1,12 @@
-# Braam — Concept and Development Workbook
+# Braam — Concept
 
 An interactive, CLI-oriented operating system that runs entirely inside a browser tab,
 written from scratch in freestanding C++20 and compiled to WebAssembly.
 
-This document is the project's single design reference and its working plan. It states the
-goal, sets out the architecture, records the decisions we have already made and why, and
-breaks the work into milestones with concrete acceptance criteria. Check the boxes as we go.
+This document is the project's single design reference. It states the goal, sets out the
+architecture, and records the decisions we have already made and why. It changes when a
+decision changes, and then in the same commit as the code. The working plan —
+milestones M0–M9 with their acceptance criteria — is in [Milestones.md](Milestones.md).
 
 ---
 
@@ -392,82 +393,10 @@ works everywhere and covers "get my data out."
 
 ## 6. Milestones
 
-Each milestone has one objective and one acceptance criterion. Tick them off as we go.
-
-### M0 — Nucleus — **done**
-Freestanding build, the coroutine shim, the allocator, `Str`/`Vec`, `host_log`.
-Set a binary-size budget now and track it in CI from the first commit.
-
-- [x] `make` produces a wasm binary with the Appendix C command line
-- [x] A static page loads a 4 KB wasm and logs a line to the console
-- [x] Size budget recorded (32 KiB) and enforced by CI
-
-CMake is the build system; the top-level `Makefile` is a wrapper over it (`all`, `run`, `serve`,
-`clean`). `Span<T>`, `Result<T, E>` and `Option<T>` came along with `Str`/`Vec`,
-since M1 needs them immediately; `String` and `HashMap` wait for M1, where the wake-token table
-will shape the latter. Appendix C's command line changed in three ways — see §C.3, and
-[Release_Notes.md](Release_Notes.md) for the reasoning behind each.
-
-### M1 — Scheduler
-`Task<T>`, ready queue, wake tokens, `tick()`, `sleep_ms`.
-`CancelToken` participates in every awaitable from this milestone on (§8.1).
-
-- [ ] Two coroutines interleave sleeps in the correct order
-- [ ] Cancelling a sleeping task unwinds it and runs its destructors
-
-### M2 — Screen and keys
-Cell grid, canvas renderer, damage rectangles, `Channel<Key>`, `OffscreenCanvas` transfer.
-
-- [ ] Typed characters appear on screen and the cursor moves
-- [ ] Window resize reflows and `resize(cols, rows)` reaches the kernel
-
-### M3 — Userland shell
-`LineEditor` coroutine with history and editing, tokeniser, program registry, argv, exit codes.
-
-- [ ] `echo hello` prints, `help` lists registered programs
-- [ ] Up-arrow recalls history; a nonzero exit code is observable
-
-### M4 — Streams
-`Channel<Bytes>` as stdio, pipes, redirection, cancellation on `^C`.
-
-- [ ] `ls | grep foo` works
-- [ ] `^C` interrupts a running pipeline and returns a prompt
-
-### M5 — Filesystem
-Mount table, `MemFs`, `BundleFs` from a fetched archive, `OpfsFs` with the open-file table.
-
-- [ ] Write a file, reload the page, the file is still there
-- [ ] `df` reports quota, usage, and persistent vs best-effort mode
-- [ ] With OPFS unavailable, the system boots on `MemFs` and says so
-
-### M6 — Host services
-`fetch`, timers, WebSocket, clipboard, the `externref` table and `JsRef`.
-
-- [ ] A `curl`-ish command fetches a URL and prints the body
-- [ ] A chat client works over a WebSocket
-- [ ] `/mnt/import` and `export` move files in and out
-
-### M7 — Depth
-A layout/widget layer over the cell grid (panes, a `less`, an editor), job control,
-`/proc`-style introspection, an embedding API for host pages.
-
-- [ ] A full-screen editor opens, edits, and saves a file
-- [ ] Jobs can be backgrounded and listed
-
-### M8 — Isolated processes
-The §4.3 ABI, per-process `WebAssembly.Instance`, per-PID import closures, per-process memory
-caps, module cache, cross-boundary copies (Appendix B).
-
-- [ ] A program runs as its own instance with a 16 MB cap and `memory.grow` fails past it
-- [ ] A process cannot issue a syscall on behalf of another PID
-- [ ] Tier selection comes from binary metadata; userland behaviour is unchanged
-
-### M9 — Liveness isolation
-The own-worker tier: worker pool, `worker.terminate()` as `SIGKILL`, module `postMessage`.
-Optionally, fuel injection as a metering alternative.
-
-- [ ] `while(1){}` in an untrusted program is killable without reloading the page
-- [ ] The shell stays responsive while such a program runs
+Moved to **[Milestones.md](Milestones.md)**: M0–M9, each with one objective and one acceptance
+criterion, checked off as work lands. They live apart from this document because they change on
+ordinary work commits and the design does not. This section keeps its number, since the
+numbering here is cited from source comments.
 
 ---
 
@@ -478,6 +407,7 @@ milestones.
 
 ```
 doc/Concept.md          this document
+doc/Milestones.md       the plan: M0–M9 and their acceptance criteria
 doc/Release_Notes.md    reasoning behind the code, milestone by milestone
 Makefile                wrapper: all, run, serve, clean
 CMakeLists.txt          the build
