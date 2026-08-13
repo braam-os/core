@@ -45,8 +45,11 @@ explains why the code that exists looks the way it does.
 
 ## Building
 
-Requires [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) — used as a clang distribution
-only, since none of its runtime or headers are linked — plus CMake, make and Node.
+Requires an LLVM with the wasm32 target, plus CMake, make and Node. On macOS that is
+`brew install llvm lld` — the linker is a separate formula. Nothing beyond the compiler is
+taken from it: no runtime and no headers are linked or included, which is also why
+[wasi-sdk](https://github.com/WebAssembly/wasi-sdk) at `/opt/wasi-sdk-33.0`, what CI uses,
+works interchangeably.
 
 ```
 make            # build the kernel and the tests
@@ -56,7 +59,7 @@ make clean
 ```
 
 The Makefile is a wrapper; CMake is the build system, generating Unix Makefiles. Pass flags
-through with `make CMAKE_ARGS=-DBRAAM_WASI_SDK=...` — for instance if the SDK is not at
+through with `make CMAKE_ARGS=-DBRAAM_LLVM=...` — for instance if the toolchain is not at
 `/opt/wasi-sdk-33.0`.
 
 The build leaves a self-contained static site in `build/web/`. It needs no server and no special

@@ -116,10 +116,11 @@ button is just `worker.terminate()` followed by a reboot.
 
 ### 3.1 Toolchain and language subset
 
-Target `wasm32-unknown-unknown`, freestanding. The installed toolchain is
-**`/opt/wasi-sdk-33.0`** (clang 22.1.0-wasi-sdk). We use it purely as a well-maintained
-clang; we link none of its runtime and, as it turns out, none of its headers either
-(see Appendix C).
+Target `wasm32-unknown-unknown`, freestanding. Any clang with the wasm32 target and `wasm-ld`
+will do, because we use it purely as a compiler: we link none of its runtime and, as it turns
+out, none of its headers either (see Appendix C). Homebrew's **`llvm`** and **`lld`** are the
+local default; CI pins **`/opt/wasi-sdk-33.0`** (clang 22.1.0-wasi-sdk), which is what
+Appendix C was verified against.
 
 ```
 /opt/wasi-sdk-33.0/bin/clang++ \

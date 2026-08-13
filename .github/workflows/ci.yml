@@ -51,7 +51,7 @@ jobs:
       # Same entry points a developer uses; the generator is Unix Makefiles,
       # so nothing beyond cmake, make and node is needed.
       - name: Build
-        run: make CMAKE_ARGS="-DBRAAM_WASI_SDK=$WASI_SDK_DIR -DBRAAM_WERROR=ON"
+        run: make CMAKE_ARGS="-DBRAAM_LLVM=$WASI_SDK_DIR -DBRAAM_WERROR=ON"
 
       - name: Test
         run: make run
