@@ -1,5 +1,6 @@
 // The kernel's exported surface. M1 added the scheduler's tick() and wake();
 // M2 adds key() and resize(), completing the five exports of Concept.md §3.4.
+// M3 boots the userland shell, which is now the only task init() spawns.
 
 #include "alloc.h"
 #include "fmt.h"
@@ -8,51 +9,21 @@
 #include "sched.h"
 #include "screen.h"
 #include "str.h"
-#include "task.h"
+#include "version.h"
 
-namespace {
+#include "user/shell.h"
 
-constexpr Str VERSION = "0.1.0-m2";
-
-// Two of these interleave their sleeps, so a bare page shows the scheduler
-// running without a shell to drive it. The shell replaces them in M3.
-Task<i32> demo(u32 first_ms, Str first, u32 second_ms, Str second) {
-    if ((co_await sleep_ms(first_ms)).is_err())
-        co_return 1;
-    log(first);
-    if ((co_await sleep_ms(second_ms)).is_err())
-        co_return 1;
-    log(second);
-    co_return 0;
-}
-
-// Echoes the keyboard onto the screen. The line discipline proper — history,
-// editing, completion — is userland's, and arrives with M3 (Concept.md §3.5).
-Task<i32> console() {
-    screen_cursor(true);
-    for (;;) {
-        Result<Key> r = co_await keys().recv();
-        if (r.is_err())
-            co_return 1;
-
-        Key k = r.value();
-        if (k.printable())
-            screen_put(k.code);
-        else if (k.code == KEY_ENTER)
-            screen_newline();
-        else if (k.code == KEY_BACKSPACE)
-            screen_backspace();
-        else if (k.code == 'l' && (k.mods & MOD_CTRL))
-            screen_clear();
-    }
-}
-
-} // namespace
+// Runs the static constructors, which is what builds the program registry
+// (Concept.md §3.6). --no-entry leaves it uncalled, so the kernel calls it
+// itself. The symbol is hidden, so this adds no export.
+extern "C" void __wasm_call_ctors();
 
 BRAAM_EXPORT("init") void init(u32 heap_base) {
     f64 started = host_now();
 
+    // The constructors run after heap_init, so one added later may allocate.
     heap_init(heap_base);
+    __wasm_call_ctors();
 
     // A grid exists from the first instruction, so the kernel is never in a
     // screenless state and the banner below has somewhere to go. The host
@@ -60,14 +31,10 @@ BRAAM_EXPORT("init") void init(u32 heap_base) {
     if (!screen_resize(80, 24))
         panic("braam: no screen");
 
-    if (!sched_spawn(demo(10, "demo a1", 20, "demo a2")) ||
-        !sched_spawn(demo(15, "demo b1", 10, "demo b2")) || !sched_spawn(console()))
-        panic("braam: the boot tasks would not spawn");
-
     HeapStats s = heap_stats();
-    Buf<160> line;
+    Buf<128> line;
     line.put("braam ")
-        .put(VERSION)
+        .put(BRAAM_VERSION)
         .put(" — heap at ")
         .put_hex(u32(heap_origin()))
         .put(", ")
@@ -80,6 +47,9 @@ BRAAM_EXPORT("init") void init(u32 heap_base) {
     log(line.str());
     screen_write(line.str());
     screen_newline();
+
+    if (!sched_spawn(shell()))
+        panic("braam: the shell would not spawn");
 }
 
 // Drains the ready queue and reports the delay until the next timer, or -1

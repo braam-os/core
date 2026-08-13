@@ -4,17 +4,22 @@ add_executable(tests
     unit/test_alloc.cpp
     unit/test_channel.cpp
     unit/test_coroutine.cpp
+    unit/test_edit.cpp
     unit/test_fmt.cpp
     unit/test_hash.cpp
+    unit/test_prog.cpp
     unit/test_result.cpp
     unit/test_sched.cpp
     unit/test_screen.cpp
+    unit/test_shell.cpp
     unit/test_str.cpp
+    unit/test_tokenize.cpp
     unit/test_string.cpp
     unit/test_task.cpp
+    unit/test_text.cpp
     unit/test_vec.cpp)
 
-target_link_libraries(tests PRIVATE braam_core braam_flags)
+target_link_libraries(tests PRIVATE braam_prog braam_user braam_core braam_flags)
 
 find_program(BRAAM_NODE node REQUIRED)
 

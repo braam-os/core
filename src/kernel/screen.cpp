@@ -2,6 +2,7 @@
 
 #include "alloc.h"
 #include "host.h"
+#include "text.h"
 #include "traits.h"
 
 namespace {
@@ -157,29 +158,10 @@ void screen_put(char32_t ch) {
 void screen_write(Str utf8) {
     usize i = 0;
     while (i < utf8.size()) {
-        u8 c = u8(utf8[i]);
         char32_t ch;
-        usize len;
-        if (c < 0x80) {
-            ch = c;
-            len = 1;
-        } else if ((c & 0xe0) == 0xc0) {
-            ch = c & 0x1f;
-            len = 2;
-        } else if ((c & 0xf0) == 0xe0) {
-            ch = c & 0x0f;
-            len = 3;
-        } else if ((c & 0xf8) == 0xf0) {
-            ch = c & 0x07;
-            len = 4;
-        } else {
-            i++; // a stray continuation byte
-            continue;
-        }
-        if (i + len > utf8.size())
-            return;
-        for (usize k = 1; k < len; k++)
-            ch = (ch << 6) | (u8(utf8[i + k]) & 0x3f);
+        usize len = utf8_decode(utf8, i, ch);
+        if (!len)
+            return; // a truncated sequence at the end
         i += len;
 
         if (ch == '\n')

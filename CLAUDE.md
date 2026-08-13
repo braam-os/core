@@ -9,7 +9,9 @@ M0 (nucleus) is done: CMake build, the coroutine shim, the allocator, `Str`/`Spa
 is done: `Task<T>`, the ready and timer queues, wake tokens, `tick()`/`wake()`, `sleep_ms`,
 `CancelToken`, `HashMap` and `String`. M2 (screen and keys) is done: the cell grid and its
 damage rectangle, `Channel<T>`, `Key`, the `key()`/`resize()` exports, the `host_present`
-import, and the canvas renderer in `web/render.js`. M3 (userland shell) is next.
+import, and the canvas renderer in `web/render.js`. M3 (userland shell) is done: the
+`LineEditor` coroutine, the tokeniser, the self-registering program registry, `Args`/`Stdio`,
+exit codes, and seven programs in `src/prog/`. M4 (streams) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -99,10 +101,12 @@ Further constraints that are easy to violate by habit:
   first; a naive `malloc` will dominate the profile.
 - **`memory.grow` detaches the `ArrayBuffer`**, killing cached `Uint8Array` views. Route JS-side
   access through a `view()` accessor that re-derives after growth.
-- **A namespace-scope global must be correct when zero-initialised and trivially destructible.**
-  `--no-entry` never calls `__wasm_call_ctors`, and a non-trivial destructor pulls in
+- **A namespace-scope global must be trivially destructible.** A non-trivial destructor pulls in
   `__cxa_atexit`, which nothing provides — a link error, deliberately. Either make the state a
-  POD (`Heap`, `Screen`, `Channel`) or put it behind a pointer built on first use (`Sched`).
+  POD (`Heap`, `Screen`, `Channel`, the program registry's list head) or put it behind a pointer
+  built on first use (`Sched`). Constructors, on the other hand, *do* run: since M3, `init()`
+  calls `__wasm_call_ctors()` itself, which is what builds the program registry. It calls it
+  **after** `heap_init`, so a constructor may allocate; nothing may run before the heap exists.
 
 ## Process model
 
@@ -125,8 +129,13 @@ built, so that M0–M7 work does not have to be unpicked later. Do not design ar
   [doc/Release_Notes.md](doc/Release_Notes.md) or another document, where they can be read as
   prose and revised in one place.
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
-- Layout: `src/kernel/`, `test/unit/`, `web/`, `tools/`, `cmake/`; `src/fs/`, `src/prog/` (one
-  self-registering file per program) and `src/user/` arrive with their milestones. Concept.md §7.
+- Layout: `src/kernel/`, `src/user/` (line editor, shell), `src/prog/` (one self-registering file
+  per program), `test/unit/`, `web/`, `tools/`, `cmake/`; `src/fs/` arrives with M5. Concept.md §7.
+- **`src/prog/` is an `OBJECT` library, not `STATIC`.** Nothing references those translation
+  units by name — they reach the link only through their static-init registrars, and
+  `--gc-sections` never extracts an unreferenced archive member. As an archive it would link
+  cleanly and produce an empty registry, silently. `test_prog` asserts the exact program count
+  for that reason.
 - Exports are declared with `BRAAM_EXPORT("name")`, imports with `BRAAM_IMPORT("name")` — never
   by linker flag. Either one changes the ABI, so update the expected surface in
   [test/run.mjs](test/run.mjs) in the same commit.

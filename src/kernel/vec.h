@@ -105,6 +105,36 @@ template <class T> struct Vec {
         p_[n_].~T();
     }
 
+    // Shifts the tail up by one. i == size() appends.
+    bool insert(usize i, T v) {
+        if (i > n_)
+            panic("Vec::insert past the end");
+        if (n_ == cap_ && !reserve(n_ + 1))
+            return false;
+        if (i == n_) {
+            new (p_ + n_) T(move(v));
+        } else {
+            new (p_ + n_) T(move(p_[n_ - 1]));
+            for (usize k = n_ - 1; k > i; k--)
+                p_[k] = move(p_[k - 1]);
+            p_[i] = move(v);
+        }
+        n_++;
+        return true;
+    }
+
+    // Removes n elements at i, shifting the tail down. n is clamped to the end.
+    void erase(usize i, usize n = 1) {
+        if (i > n_)
+            panic("Vec::erase past the end");
+        if (n > n_ - i)
+            n = n_ - i;
+        for (usize k = i; k + n < n_; k++)
+            p_[k] = move(p_[k + n]);
+        destroy_from(n_ - n);
+        n_ -= n;
+    }
+
     bool resize(usize n) {
         if (n > n_) {
             if (!reserve(n))

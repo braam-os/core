@@ -7,6 +7,206 @@ of the two needs amending.
 
 ---
 
+## M3 — Userland shell
+
+The `LineEditor` coroutine §3.5 promised, a tokeniser, the self-registering program registry of
+§3.6, argv and exit codes — and the first build where the thing on screen is an operating
+environment rather than a demonstration. 28,282 bytes of `kernel.wasm`, against a budget raised
+from 32 KiB to 256 KiB in this milestone.
+
+### Static initialisers now run, and one invariant is retired
+
+M0 left a question open — "self-registration needs `__wasm_call_ctors`, which `--no-entry` leaves
+uncalled, and that question is better settled in M3 where the program registry actually depends
+on it" — and this is where it is settled. `init()` calls `__wasm_call_ctors()` itself.
+
+The alternative was a linker-section table: a `constexpr` descriptor per program placed in a
+custom data section with `__attribute__((section, used, retain))`, walked between the
+linker-defined `__start_`/`__stop_` symbols. It needs no constructors at all, so it would have
+kept the invariant intact. It was not chosen because §3.6 says "populated at static-init time by
+an inline registrar" and there was no reason to route around the spec; because the section trick
+is a second, undocumented dependency on linker behaviour on top of the ones Appendix C already
+records; and because static init is a capability the whole system wants once, not a trick one
+subsystem uses.
+
+`__wasm_call_ctors` is synthesised by wasm-ld with hidden visibility, so a plain `extern "C"`
+declaration reaches it and **no export is added** — the exact-surface assertion in `run.mjs` is
+the guard on that claim, and it would have fired on the first build if the assumption were
+wrong. The call sits *after* `heap_init`, so a constructor added later may allocate; that
+ordering is the new invariant and it is commented at the call site.
+
+What does not change is the destructor half. `__cxa_atexit` is still unprovided, deliberately, so
+a namespace-scope global with a non-trivial destructor is still a link error. `Heap`, `Screen`,
+`Channel` and the registry's list head remain PODs; `Sched` remains behind a pointer. CLAUDE.md's
+statement of the rule has been amended, because its first clause — that `--no-entry` never calls
+`__wasm_call_ctors` — is now false of this kernel.
+
+`tests.wasm` calls it too, so the cases see the registry the shipping kernel sees. Its own case
+list stays explicit in `main.cpp`: the order is load-bearing where cases share global state, and
+converting it would be an unrelated refactor riding along in this milestone.
+
+### A sorted intrusive list, not a `HashMap`
+
+M1's notes anticipated the registry wanting `HashMap`'s FNV-1a overload for `Str` keys. It does
+not. `help` has to *enumerate* the registry and `HashMap` has no iteration API; `HashMap::insert`
+allocates, and a static-init registrar must not touch the heap before anyone has reasoned about
+whether it exists; and with seven programs a linear scan of `Str` compares is not measurable
+against the coroutine frame the lookup is about to allocate anyway.
+
+Insertion is sorted rather than push-front, which costs nothing at seven entries and buys
+something specific: the order of static initialisation across translation units is unspecified,
+so a push-front list would make `help`'s output depend on the link order, and therefore make it
+untestable. Sorted, `help` needs no sort of its own and the smoke test can assert the listing.
+
+### `src/prog/` is an OBJECT library, and that is not a detail
+
+Nothing in the system references `src/prog/echo.cpp` by name. Those translation units reach the
+link only through their registrars, and `--gc-sections` never extracts an archive member that no
+symbol references — the same trap `CMakeLists.txt` already documents for `main.cpp`. As a
+`STATIC` library, `src/prog/` would link cleanly and produce a kernel with an empty registry: no
+warning, no error, a shell where every command is "not found". CMake puts an OBJECT library's
+objects directly on the consuming link line, which is exactly the property required.
+
+Because that failure is silent, `test_prog` asserts the exact *count* of registered programs and
+their order, not that a few known names are present. A spot check would survive losing the
+programs it does not name.
+
+### The exit code goes in the prompt
+
+"A nonzero exit code is observable" has two obvious readings: a diagnostic line after every
+failure, or a status indicator in the prompt. The prompt wins on four counts. It is one screen
+read for the smoke test — `false` followed by a row reading `[1] $` proves the criterion in a
+single assertion, and `nosuch` followed by `[127] $` proves the not-found path in the same shape.
+It invents no stream semantics before M4 defines them: a diagnostic line for every nonzero status
+would be the shell writing to a stderr that does not yet mean anything, and no real shell does
+it. It costs nothing in the common case. And it composes forward, since a pipeline's status is
+its last command's and nothing about the prompt changes.
+
+The shell reads that status by `co_await`ing the program's `Task<i32>` rather than spawning it.
+That is not a style choice: `sched_tick` reaps a finished job and destroys it, so the promise's
+`i32` is unreachable after the fact, and awaiting is the only way to see it at all. Awaiting is
+also what propagates the `CancelState` into the program, and what makes the single-receiver rule
+on the keyboard hold — while a program runs the shell is suspended inside `co_await`, not on
+`keys()`, so nothing can displace anything. Keys typed during a program stay in the ring as
+typeahead.
+
+### `Vec<char32_t>` for the line, and a redraw that infers its own scrolling
+
+The line buffer is one codepoint per element, not UTF-8. In M3 one codepoint is one cell, so
+every editing operation and all of the redraw's column arithmetic is plain indexing; with a
+`String`, Left, Right, Backspace, kill-word and the wrap calculation would each need a codepoint
+scan, and mid-line insertion would need a byte shuffle regardless. The cost is four bytes per
+character against a span allocator, which is noise, and the single UTF-8 encode happens once, at
+Return. The payoff is that `String::insert`/`erase` never had to be written; `Vec::insert`/`erase`
+did, and they are useful to everything else.
+
+The screen has no erase-to-end-of-line, no insert-character and no scroll counter, so the editor
+repaints the whole line from an anchor on every keystroke and blanks the tail by hand, tracking
+how many cells the previous paint covered. The interesting part is keeping the anchor correct
+when a paint scrolls the grid: nothing reports a scroll, so the editor computes where the write
+*should* have ended — `y0 + (x0 + n - 1) / cols`, using the deferred wrap — and takes the
+shortfall against the actual `cursor_y` as the number of rows the grid moved. That is exact,
+because `screen_newline` is the only thing besides our own writes that can move the cursor.
+
+Two consequences worth stating. `screen_move` clamps to `cols - 1`, so the deferred-wrap column
+is unreachable by cursor addressing; the editor places a cursor at an exact multiple of `cols` at
+column 0 of the *next* row, which is not a compromise — after `wrap_pending` that is genuinely
+where the next character lands. And a line longer than the whole grid pushes its own prompt off
+the top, after which the anchor clamps at row 0 and the leftmost cells are wrong. Fixing that
+needs a line model the grid does not have, which is the M7 layout layer's; M3 accepts the
+cosmetic glitch and tests the case that matters, where the anchor follows a scroll correctly.
+
+An unconditional repaint is more work than the common case needs — appending at the end with no
+wrap is one `screen_put`. It is a few hundred cell writes coalesced into one damage rectangle and
+one `host_present` per tick, which is nothing at keyboard rates, and the optimisation can be
+added later against a test suite that already pins the behaviour down.
+
+### `Stream::Write` does its work in `await_suspend`
+
+§3.6 fixes the program signature as `Task<int>(Args, Stdio)`, and M4 will put a `Channel<Bytes>`
+behind `Stdio` where a write to a full pipe has to park. Writing `io.out.write(s)` as a plain
+call now would mean rewriting every call site in `src/prog/` then; writing it as `co_await
+io.out.write(s)` from the start costs a suspend point that is never taken.
+
+The work happens in `await_suspend`, which returns `false` to resume immediately, rather than in
+an `await_ready` that returns `true`. Only `await_suspend` receives the coroutine handle, and
+therefore the promise, and therefore the `CancelState` — an awaitable that completes in
+`await_ready` would be the one thing in the system that cannot see cancellation, which §8.1
+exists to forbid. A never-taken suspend point in exchange for the rule holding everywhere is a
+good trade.
+
+`Stream` is a function pointer plus a `void *`, not a virtual interface. There will be exactly
+two implementations, and a vtable costs a data section and an indirect-call table entry per
+implementation for no gain. `out` and `err` are the same sink in M3, because the split is
+meaningless until there is redirection to tell them apart.
+
+### The tokeniser has no quoting, on purpose
+
+Quote *removal* produces tokens that are not substrings of the input, which destroys the
+zero-copy property the whole argv path depends on — `Args` is a `Span<const Str>` over views into
+the shell's line buffer, and nothing copies. Supporting quotes would force an owning token store
+that M4's parser would then have to be built around. And quoting, escaping, `|` and `>` are one
+grammar: writing half of it now means writing it twice. The visible consequence is that `echo 'a
+b'` prints the quotes, which is stated in `echo`'s usage line rather than hidden.
+
+The lifetime that makes this work — `argv` borrowing from `line.text`, which is a named local in
+the shell's frame and stays alive across the `co_await` of the program — is commented in
+`shell.cpp`, because it is the single easiest thing for M4's pipelines to break.
+
+### What ^C does, and what it does not do yet
+
+Typed at the prompt, ^C writes `^C`, abandons the buffer and returns `LineEnd::Interrupt`; the
+shell prints a fresh prompt carrying 130. Typed while a program runs, it sits in the keyboard
+ring and is consumed as typeahead by the next `read_line`.
+
+Interrupting a *running* program is Milestones.md's M4 criterion and stays there. It needs the
+shell to watch the keyboard while a child runs — a second receiver on a single-receiver channel,
+or a `select`-shaped combinator — and both are streams work. What M3 owes is that the mechanism
+underneath is already in place, which is what the cancellation cases in `test_edit` and
+`test_shell` assert: `sched_cancel` on the shell unwinds through `co_await`ing a program, through
+a running `sleep`, and out of a `Recv` parked on the keyboard, with the channel left usable.
+
+`LineEnd` is a named enum rather than a bool for the same reason: M4 and M7 will add `Eof` and
+whatever a job-control shell needs, and the signature should not change when they do.
+
+### Smaller decisions
+
+`sleep` takes **milliseconds**. There is no float parser, the scheduler is a millisecond machine,
+and the smoke test needs an exact number to assert `tick()`'s return value against. The
+divergence from POSIX lives in the usage string.
+
+`read_line` is `Task<Result<Line>>` on the `LineEditor`, where §3.3 sketches `Task<Line>
+read_line(Tty&)`. §3.3's sketch already diverges from shipped signatures — it lists
+`Task<void> sleep_ms(u32)` where the kernel has `Task<Result<void>>` — so it is read as
+illustrative, and `Concept.md` is not amended. Nothing in M3 changed a design *decision*, which
+is the bar for touching the spec.
+
+`utf8_decode` moved out of `screen.cpp` into `src/kernel/text.h`, because the editor needs to
+decode history entries and two decoders in one system is one too many. The behaviour changed in
+one untested corner: a stray continuation byte now yields U+FFFD and draws, where it used to be
+skipped silently. Visible corruption beats invisible corruption.
+
+Ctrl-W is bound to kill-word and unit-tested, but `web/keys.js` deliberately leaves Ctrl+W to the
+browser, which closes the tab — a page that swallows it is a page you cannot leave. So
+Alt-Backspace is bound to the same action and is the one that actually reaches a browser. That is
+a keybinding decision, not a change to what `keys.js` forwards.
+
+### The budget moved
+
+M0 set 32 KiB and M1 and M2 stayed well inside it. M3 does not: the shell, the editor and seven
+programs took `kernel.wasm` from 14,011 to 28,282 bytes, about 86% of the old ceiling, with M4's
+streams and M5's filesystem still to come. The budget is now 256 KiB. That is a deliberate act,
+as the file's own comment requires, and the reasoning is that 32 KiB was a nucleus-sized number
+chosen when the nucleus was all there was; a self-contained operating environment with a
+filesystem and a program set is not a 32 KiB artifact, and a ceiling that has to be raised every
+milestone measures nothing. 256 KiB is still small enough that a regression of the kind the check
+exists to catch — a libc dependency, an accidental template explosion — moves it visibly.
+
+Roughly 4.4 KiB of the 28 KiB is the wasm `name` section. It is kept: `--strip-all` would remove
+it, and with it every symbol name in a browser stack trace.
+
+---
+
 ## M2 — Screen and keys
 
 The cell grid, its damage rectangle and the canvas renderer, `Channel<T>`, and the `key` and

@@ -53,11 +53,22 @@ drops from the top; re-wrapping logical lines waits for M7's layout layer.
 an 80×24 grid so the kernel is never screenless, and the host's first `resize` reflows the boot
 banner into the measured geometry. See [Release_Notes.md](Release_Notes.md).
 
-## M3 — Userland shell
+## M3 — Userland shell — **done**
 `LineEditor` coroutine with history and editing, tokeniser, program registry, argv, exit codes.
 
-- [ ] `echo hello` prints, `help` lists registered programs
-- [ ] Up-arrow recalls history; a nonzero exit code is observable
+- [x] `echo hello` prints, `help` lists registered programs
+- [x] Up-arrow recalls history; a nonzero exit code is observable
+
+Static initialisers now run: `init()` calls `__wasm_call_ctors` after `heap_init`, which is what
+lets a program register itself (Concept.md §3.6) and amends the invariant CLAUDE.md stated. The
+registry is a sorted intrusive list rather than a `HashMap`, since `help` needs iteration.
+The tokeniser splits on whitespace and nothing else — quoting belongs with M4's grammar, next to
+pipes and redirection. The exit code shows up in the prompt (`[1] $`) rather than in a
+diagnostic line. `sleep` takes milliseconds. ^C abandons the line being edited; ^C interrupting a
+*running* program is still M4's criterion, though the cancellation path it needs is already
+tested. Programs shipped: `clear`, `echo`, `false`, `help`, `sleep`, `true`, `version`.
+The size budget was raised from 32 KiB to 256 KiB; `kernel.wasm` is 28,282 bytes.
+See [Release_Notes.md](Release_Notes.md).
 
 ## M4 — Streams
 `Channel<Bytes>` as stdio, pipes, redirection, cancellation on `^C`.

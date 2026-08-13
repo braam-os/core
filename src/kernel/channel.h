@@ -88,6 +88,12 @@ template <class T, usize N = 64> struct Channel {
 
     Recv recv() { return Recv(*this); }
 
+    // Drops everything queued. For tests, so a case starts from nothing.
+    void clear() {
+        while (n_)
+            take();
+    }
+
 private:
     T take() {
         T v = move(slots_[head_]);

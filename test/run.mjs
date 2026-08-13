@@ -54,6 +54,25 @@ function cell(s, x, y) {
     return { ch: u32[0], fg: u32[1] & 0xff, bg: (u32[1] >>> 8) & 0xff };
 }
 
+// One row as text, trailing blanks trimmed.
+function row(s, y) {
+    let out = "";
+    for (let x = 0; x < s.cols; x++) {
+        const ch = cell(s, x, y).ch;
+        out += ch ? String.fromCodePoint(ch) : " ";
+    }
+    return out.replace(/ +$/, "");
+}
+
+function rows(s) {
+    return Array.from({ length: s.rows }, (_, y) => row(s, y));
+}
+
+// Named keys, from the enum in src/kernel/key.h — keep the two in step.
+const NAMED = 0x110000;
+const KEY = { ENTER: NAMED, BACKSPACE: NAMED + 1, UP: NAMED + 6, HOME: NAMED + 10 };
+const CTRL = 2;
+
 const module = new WebAssembly.Module(readFileSync(file));
 const instance = new WebAssembly.Instance(module, imports);
 memory = instance.exports.memory;
@@ -85,66 +104,124 @@ if (mode === "--kernel") {
     if (!logged[0].startsWith("braam "))
         fail(`unexpected boot line: ${logged[0]}`);
 
-    // The demo tasks run only when ticked, on a clock we supply, so their
-    // interleaving is exact rather than approximate. a sleeps 10 then 20,
-    // b sleeps 15 then 10.
-    const delays = [0, 10, 15, 25, 30].map((now) => instance.exports.tick(now));
-    const want_delays = [10, 5, 10, 5, -1];
-    if (delays.join() !== want_delays.join())
-        fail(`tick returned [${delays}], expected [${want_delays}]`);
+    // init spawns the shell and nothing else. The first tick draws its prompt
+    // and parks it on the keyboard, so there is nothing left pending.
+    if (instance.exports.tick(0) !== -1)
+        fail("the shell did not park on the keyboard");
 
-    const order = logged.slice(1).join(" ");
-    if (order !== "demo a1 demo b1 demo b2 demo a2")
-        fail(`the demo tasks ran out of order: ${order}`);
-
-    // M2, first criterion: a typed character reaches a cell and the cursor
-    // moves. resize() hands back the descriptor; nothing else tells JS where
-    // the grid is.
-    const addr = instance.exports.resize(20, 5);
+    // resize() hands back the descriptor; nothing else tells JS where the
+    // grid is.
+    const addr = instance.exports.resize(60, 16);
     if (addr === 0)
         fail("resize returned no screen descriptor");
 
     let s = descriptor(addr);
     if (s.magic !== SCREEN_MAGIC)
         fail(`screen magic is ${s.magic.toString(16)}, expected ${SCREEN_MAGIC.toString(16)}`);
-    if (s.cols !== 20 || s.rows !== 5)
-        fail(`resize(20, 5) gave ${s.cols}x${s.rows}`);
+    if (s.cols !== 60 || s.rows !== 16)
+        fail(`resize(60, 16) gave ${s.cols}x${s.rows}`);
 
     // A resize repaints everything, and the host ticks to let it out.
     presented.length = 0;
-    instance.exports.tick(35);
-    if (presented.length !== 1 || presented[0].w !== 20 || presented[0].h !== 5)
+    instance.exports.tick(1);
+    if (presented.length !== 1 || presented[0].w !== 60 || presented[0].h !== 16)
         fail(`the resize did not repaint the whole screen: ${JSON.stringify(presented)}`);
 
-    const home = s.cursor_y; // the banner left the cursor on its own line
-    presented.length = 0;
-    for (const ch of "hi")
-        instance.exports.key(ch.codePointAt(0), 0);
-    instance.exports.tick(40);
+    const type = (text) => {
+        for (const ch of text)
+            instance.exports.key(ch.codePointAt(0), 0);
+    };
+    const press = (code, mods = 0) => instance.exports.key(code, mods);
+    const submit = (text, now) => {
+        type(text);
+        press(KEY.ENTER);
+        instance.exports.tick(now);
+        return descriptor(addr);
+    };
 
+    // M1's coverage, now supplied by the shell instead of by demo tasks:
+    // `sleep` parks on the timer queue, and the delays tick reports are exact
+    // because the clock is ours. It exercises argv and the registry with it.
+    type("sleep 30");
+    press(KEY.ENTER);
+    const delays = [1000, 1010, 1030].map((now) => instance.exports.tick(now));
+    const want_delays = [30, 20, -1];
+    if (delays.join() !== want_delays.join())
+        fail(`tick returned [${delays}], expected [${want_delays}]`);
+
+    // M3, first criterion: `echo hello` prints and `help` lists the programs.
+    s = submit("echo hello", 1040);
+    if (!rows(s).includes("hello"))
+        fail(`echo did not print: ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`the prompt after a success is ${row(s, s.cursor_y)}, expected $`);
+
+    s = submit("help", 1050);
+    for (const name of ["clear", "echo", "false", "help", "sleep", "true", "version"])
+        if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
+            fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
+
+    // M3, second criterion, first half: a nonzero exit code is observable —
+    // the shell carries it in the next prompt.
+    s = submit("false", 1060);
+    if (!rows(s).includes("[1] $"))
+        fail(`a failing program left ${row(s, s.cursor_y)}, expected [1] $`);
+
+    s = submit("nosuch", 1070);
+    if (!rows(s).some((line) => line.startsWith("braam: nosuch: not found")))
+        fail(`an unknown command said nothing: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes("[127] $"))
+        fail(`an unknown command left ${row(s, s.cursor_y)}, expected [127] $`);
+
+    s = submit("true", 1080);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`a succeeding program left ${row(s, s.cursor_y)}, expected $`);
+
+    // M3, second criterion, second half: Up recalls history, Home reaches the
+    // start of the recalled line, and ^C abandons it.
+    press(KEY.UP);
+    instance.exports.tick(1090);
     s = descriptor(addr);
-    if (cell(s, 0, home).ch !== 0x68 || cell(s, 1, home).ch !== 0x69)
-        fail("the typed characters did not reach the cells");
-    if (s.cursor_x !== 2)
-        fail(`the cursor is at column ${s.cursor_x}, expected 2`);
+    if (!row(s, s.cursor_y).endsWith("true"))
+        fail(`Up recalled ${row(s, s.cursor_y)}, expected it to end in true`);
 
-    // One present per tick, covering the two written cells and both cursor
-    // positions — the cell it left must repaint, or it leaves a ghost.
+    press(KEY.HOME);
+    instance.exports.tick(1100);
+    s = descriptor(addr);
+    if (s.cursor_x !== 2)
+        fail(`Home left the cursor at column ${s.cursor_x}, expected 2`);
+
+    press("c".codePointAt(0), CTRL);
+    instance.exports.tick(1110);
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C left ${row(s, s.cursor_y)}, expected [130] $`);
+
+    // M2's coverage: one present per tick, covering every cell the editor drew
+    // and the cell the cursor left — that one must repaint or it ghosts.
+    presented.length = 0;
+    const x0 = s.cursor_x;
+    const y0 = s.cursor_y;
+    type("hi");
+    instance.exports.tick(1120);
+    s = descriptor(addr);
+    if (s.cursor_x !== x0 + 2)
+        fail(`the cursor is at column ${s.cursor_x}, expected ${x0 + 2}`);
     if (presented.length !== 1)
         fail(`expected one present, got ${presented.length}`);
     const r = presented[0];
-    if (r.x !== 0 || r.y !== home || r.w !== 3 || r.h !== 1)
-        fail(`present rect is ${r.x},${r.y} ${r.w}x${r.h}, expected 0,${home} 3x1`);
+    if (r.x > x0 || r.y > y0 || r.x + r.w < s.cursor_x + 1 || r.y + r.h <= y0)
+        fail(`present rect ${r.x},${r.y} ${r.w}x${r.h} misses ${x0}..${s.cursor_x},${y0}`);
 
-    // M2, second criterion: resize reflows, keeping the bottom of the screen.
+    // M2's second criterion: resize reflows, keeping the rows in use.
     if (instance.exports.resize(20, 2) === 0)
         fail("the reflowing resize failed");
     s = descriptor(addr);
     if (s.cols !== 20 || s.rows !== 2)
         fail(`resize(20, 2) gave ${s.cols}x${s.rows}`);
-    if (cell(s, 0, s.cursor_y).ch !== 0x68 || cell(s, 1, s.cursor_y).ch !== 0x69)
-        fail("the reflow did not keep the typed line");
-    if (s.cursor_x !== 2 || s.cursor_y >= s.rows)
+    if (!row(s, s.cursor_y).endsWith("hi"))
+        fail(`the reflow lost the line being edited: ${row(s, s.cursor_y)}`);
+    if (s.cursor_y >= s.rows)
         fail(`the cursor left the grid at ${s.cursor_x},${s.cursor_y}`);
 
     // A geometry the kernel will not honour is clamped, and reported back.

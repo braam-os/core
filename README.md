@@ -28,9 +28,12 @@ that boots the kernel in a Web Worker and prints a line. M1 — the scheduler �
 `Task<T>`, a ready queue, kernel-side timers, wake tokens, and cancellation that unwinds a
 sleeping task by returning through it. M2 — the screen and keyboard — is done as well: a grid of
 cells in linear memory that a canvas renderer reads directly, damage rectangles, `Channel<T>`,
-and a keyboard that speaks Unicode codepoints rather than control characters. Type into the page
-and the characters appear; resize the window and the screen reflows. `kernel.wasm` is 14 KB.
-M3, the userland shell, is next.
+and a keyboard that speaks Unicode codepoints rather than control characters. M3 — the userland
+shell — is done: a `LineEditor` coroutine with history and readline-style editing, a tokeniser, a
+program registry that each program adds itself to, argv and exit codes. Open the page and there
+is a prompt: `echo hello` prints, `help` lists the programs, Up recalls what you typed, and a
+failed command shows its status in the next prompt. `kernel.wasm` is 28 KB.
+M4, streams and pipes, is next.
 
 [doc/Concept.md](doc/Concept.md) is the specification — the architecture and the reasoning
 behind each decision. Read it first. [doc/Milestones.md](doc/Milestones.md) is the plan: the

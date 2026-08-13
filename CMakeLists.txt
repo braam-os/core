@@ -42,11 +42,14 @@ target_link_options(braam_flags INTERFACE
 target_include_directories(braam_flags INTERFACE ${CMAKE_SOURCE_DIR}/src)
 
 add_subdirectory(src/kernel)
+add_subdirectory(src/user)
+add_subdirectory(src/prog)
 
 # kernel.wasm — main.cpp holds the exports, so it links into the executable
-# directly; --gc-sections would not pull it out of an archive.
+# directly; --gc-sections would not pull it out of an archive. The same is true
+# of src/prog, which is why it is an OBJECT library.
 add_executable(kernel src/kernel/main.cpp)
-target_link_libraries(kernel PRIVATE braam_core braam_flags)
+target_link_libraries(kernel PRIVATE braam_prog braam_user braam_core braam_flags)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(BRAAM_SIZE_BUDGET_CHECK

@@ -72,6 +72,36 @@ void test_vec() {
     v.clear();
     CHECK(v.empty());
 
+    // insert and erase, which the line editor's buffer is built on.
+    v.clear();
+    for (u32 i = 0; i < 4; i++)
+        v.push(i); // 0 1 2 3
+    v.insert(0, 9);
+    CHECK_EQ(v.size(), 5);
+    CHECK_EQ(v[0], 9);
+    CHECK_EQ(v[4], 3);
+    v.insert(v.size(), 7);
+    CHECK_EQ(v.back(), 7);
+    v.insert(3, 8); // 9 0 1 8 2 3 7
+    CHECK_EQ(v[3], 8);
+    CHECK_EQ(v[4], 2);
+    CHECK_EQ(v.size(), 7);
+
+    v.erase(3);
+    CHECK_EQ(v.size(), 6); // 9 0 1 2 3 7
+    CHECK_EQ(v[3], 2);
+    v.erase(1, 3);
+    CHECK_EQ(v.size(), 3); // 9 3 7
+    CHECK_EQ(v[0], 9);
+    CHECK_EQ(v[1], 3);
+    CHECK_EQ(v[2], 7);
+    v.erase(1, 99); // clamped to the end
+    CHECK_EQ(v.size(), 1);
+    v.erase(0, 0);
+    CHECK_EQ(v.size(), 1);
+    v.erase(1); // at the end: a no-op
+    CHECK_EQ(v.size(), 1);
+
     // Non-trivial elements are destroyed exactly once, including on regrowth.
     live_count = 0;
     {
@@ -84,6 +114,13 @@ void test_vec() {
         CHECK_EQ(live_count, 99);
         t.resize(10);
         CHECK_EQ(live_count, 10);
+        t.erase(2, 3);
+        CHECK_EQ(live_count, 7);
+        CHECK_EQ(t[2].v, 5);
+        t.insert(0, Tracked(42));
+        CHECK_EQ(live_count, 8);
+        CHECK_EQ(t[0].v, 42);
+        CHECK_EQ(t[1].v, 0);
     }
     CHECK_EQ(live_count, 0);
 

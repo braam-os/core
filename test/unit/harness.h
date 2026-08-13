@@ -1,5 +1,5 @@
 // Assertions that report through host_log. Cases are listed explicitly in
-// main.cpp; static-init registration waits for __wasm_call_ctors in M3.
+// main.cpp, which fixes the order some of them depend on.
 #pragma once
 
 #include "kernel/str.h"
