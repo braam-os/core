@@ -22,6 +22,7 @@ enum class SvcOp : u32 {
     PickName,  // ref, flags = index -> buf
     PickRead,  // ref, flags = index, result = offset -> buf, as much as fits
     Save,      // arg = the file name, buf = the bytes
+    ClipWait,  // -> buf, once the user pastes
 };
 
 // A service operation. The record's inline string argument is a URL or a name.
@@ -71,3 +72,9 @@ Task<Result<WallClock>> svc_clock();
 
 Task<Result<String>> clip_read();
 Task<Result<void>> clip_write(Str text);
+
+// The clipboard the other way round: browsers only disclose it inside a user
+// gesture handler, and a command runs long after the keystroke that started it
+// has returned. So when clip_read() is refused, this parks until the user
+// pastes, which is a gesture no permission is needed for.
+Task<Result<String>> clip_wait();

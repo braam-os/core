@@ -522,6 +522,15 @@ a download need the DOM, as does `navigator.clipboard`. `web/svc.js` relays thos
 token either way. The picker opens inside the transient activation of the keystroke that ran
 the command, which is why `import` works without a button of its own.
 
+**Reading the clipboard does not fit that pattern, and cannot.** `navigator.clipboard.readText()`
+is only permitted from inside a user-gesture handler, and a command's request reaches the page
+after the keystroke's handler has returned — so the call is never in one. Safari refuses,
+Firefox does not offer it to page content, and Chrome prompts. The way out is that a **paste is
+itself the gesture**: the `paste` event hands the text to the page with no permission at all, in
+every browser. So a refused read becomes a wait for one, and `pbpaste` says so rather than
+failing. That is why `Ctrl+V` is on the reserved list in `web/keys.js` — the kernel must not eat
+the keystroke that produces the event.
+
 ---
 
 ## 6. Milestones

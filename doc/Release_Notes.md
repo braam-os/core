@@ -11,7 +11,7 @@ of the two needs amending.
 
 The tab reaches outside itself: HTTP, WebSocket, the clipboard, the user's own disk, and a
 clock that can name a day. Seven new commands, one new import, one new export, and the
-`externref` table Concept.md §3.7 has been promising since M0. 180,474 bytes of `kernel.wasm`,
+`externref` table Concept.md §3.7 has been promising since M0. 181,545 bytes of `kernel.wasm`,
 against an unchanged 256 KiB budget.
 
 `Concept.md` is amended in six places: §2.2 (no third synchronous exception, and why the new
@@ -128,6 +128,32 @@ token whether the answer comes from `fetch` in the worker or from a file picker 
 away. The picker opens inside the transient activation of the keystroke that ran the command,
 so `import` needs no button of its own; the page reads each file with `arrayBuffer()` and posts
 the bytes down, so the slot holds a plain array and reading a file back needs no further relay.
+
+### Reading the clipboard needs a gesture the command cannot have
+
+`pbpaste` failed in a browser with "permission denied", and the reason is not a bug that can be
+fixed where it appeared. `navigator.clipboard.readText()` is only permitted from inside a
+user-gesture handler. Our request reaches the page over `postMessage`, which is to say after
+the keystroke's handler has returned — so the call is *never* inside a gesture, no matter how
+promptly it arrives. Safari refuses outright, Firefox does not expose the API to page content,
+and Chrome prompts. `pbcopy` is unaffected because `writeText()` is far more permissive.
+
+Transient activation would not have saved it either: the five-second window governs things a
+page *initiates*, and a clipboard read is checked against the handler it is in.
+
+The escape is that a **paste is the gesture**. The `paste` event delivers the text with no
+permission at all, everywhere. So `ClipWait` is a fourteenth operation: `pbpaste` tries
+`clip_read()`, and on `Perm` prints "press ⌘V or ctrl-V to paste" on stderr and parks until the
+page's `paste` listener answers. Where `readText()` is allowed, nothing is printed and nothing
+changes.
+
+Three details fall out of it. `Ctrl+V` joined the reserved set in `web/keys.js`, since a
+keystroke the kernel eats produces no `paste` event — on macOS `⌘V` was already left alone,
+because `consumes()` never claims a `metaKey` chord. The held-text buffer in `web/svc.js` exists
+because the reply is sized twice like any other, and a paste cannot be asked for again: the same
+shape as a WebSocket message waiting at the head of its queue. And `^C` while parked is the
+ordinary orphan path — the page's waiter stays armed, the eventual paste replies to a token
+nothing waits on, and `host_orphan_reply` reaps the record; the smoke test walks exactly that.
 
 ### A response body streams; a message does not
 

@@ -145,8 +145,12 @@ is put back by hand, and the first where the child outlives its parent — so it
 screen rather than through stdout, whose pipe it does not own. `tools/wsd.mjs` is a
 dependency-free broadcast server so two tabs can chat with no internet; `make serve` starts it.
 
+`pbpaste` is the one command a browser can refuse outright: a clipboard read is only allowed
+inside a user-gesture handler, and a command's request arrives after that handler has returned.
+It falls back to waiting for a paste, which is a gesture needing no permission.
+
 Programs added: `chat`, `curl`, `date`, `export`, `import`, `pbcopy`, `pbpaste`, for
-twenty-seven. `kernel.wasm` went from 137,867 to 180,474 bytes against an unchanged 256 KiB
+twenty-seven. `kernel.wasm` went from 137,867 to 181,545 bytes against an unchanged 256 KiB
 budget. See [Release_Notes.md](Release_Notes.md).
 
 ## M7 — Depth

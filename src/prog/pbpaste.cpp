@@ -12,6 +12,16 @@ BRAAM_PROGRAM(prog_pbpaste, "pbpaste", "— write the clipboard to the output")
     Result<String> got = Err(Error::NoMemory);
     if (Task<Result<String>> t = clip_read())
         got = co_await t;
+
+    // Refused because this is not a user gesture, which it cannot be: the
+    // keystroke that ran the command returned before the request left. Asking
+    // for a paste turns that around — it is a gesture, and needs no permission.
+    if (got.is_err() && got.error() == Error::Perm) {
+        co_await io.err.write("pbpaste: press ⌘V or ctrl-V to paste\n");
+        if (Task<Result<String>> t = clip_wait())
+            got = co_await t;
+    }
+
     if (got.is_err()) {
         if (got.error() == Error::Cancelled)
             co_return 130;

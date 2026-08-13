@@ -519,6 +519,40 @@ if (mode === "--kernel") {
     if (!rows(s).includes("copied"))
         fail(`pbpaste printed nothing: ${JSON.stringify(rows(s))}`);
 
+    // A browser that will not read the clipboard outside a user gesture — which
+    // a command can never be. pbpaste asks for the one gesture that needs no
+    // permission and parks until it happens.
+    net.clipDenied = true;
+    s = submit("clear", 3055);
+    type("pbpaste");
+    press(KEY.ENTER);
+    if (instance.exports.tick(3056) !== -1)
+        fail("pbpaste did not park on the paste");
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.startsWith("pbpaste: press ")))
+        fail(`pbpaste did not ask for a gesture: ${JSON.stringify(rows(s))}`);
+    if (!net.paste("pasted by hand"))
+        fail("pbpaste was not waiting for a paste");
+    instance.exports.tick(3057);
+    s = descriptor(addr);
+    if (!rows(s).includes("pasted by hand"))
+        fail(`the paste never arrived: ${JSON.stringify(rows(s))}`);
+
+    // ^C while it waits gets the prompt back, and leaves the arming behind it
+    // to be reaped when the paste finally lands.
+    type("pbpaste");
+    press(KEY.ENTER);
+    instance.exports.tick(3058);
+    press("c".codePointAt(0), CTRL);
+    if (instance.exports.tick(3059) !== -1)
+        fail("^C left the paste wait scheduled");
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C on pbpaste left ${row(s, s.cursor_y)}, expected [130] $`);
+    net.paste("too late");
+    instance.exports.tick(3060);
+    net.clipDenied = false;
+
     s = submit("clear", 3053);
     s = submit("date -u", 3054);
     if (!rows(s).some((line) => /^\w\w\w \w\w\w \d\d \d\d:\d\d:\d\d \+0000 \d{4}$/.test(line)))

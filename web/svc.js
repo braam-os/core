@@ -24,6 +24,7 @@ export const OP = {
     PICK_NAME: 11,
     PICK_READ: 12,
     SAVE: 13,
+    CLIP_WAIT: 14,
 };
 
 const utf8 = new TextEncoder();
@@ -135,11 +136,25 @@ async function peek(s) {
     return s.queue.length ? s.queue[0] : null;
 }
 
+// A clipboard reply is sized twice like every other variable-length one, and
+// neither the async API nor a paste can be asked a second time — so the text is
+// held until the kernel has room for it.
+async function clipboard(r, held, key, get) {
+    if (held[key] === null)
+        held[key] = await get();
+    const bytes = utf8.encode(held[key]);
+    r.write(bytes);
+    if (r.get("bufLen") !== 0 || bytes.length === 0)
+        held[key] = null;
+}
+
 // Builds the import. `deposit` hands an object to the kernel's externref table;
 // `relay` asks the page for something only the DOM can do; `reply` delivers a
 // finished request. As in fs.js, `reply` must never run inside the import call
 // itself — every path below goes through a promise, so it cannot.
 export function makeSvcImport(mem, deposit, relay, reply) {
+    const held = { read: null, wait: null };
+
     async function perform(r, op, ref) {
         switch (op) {
         case OP.CLOCK: {
@@ -224,7 +239,11 @@ export function makeSvcImport(mem, deposit, relay, reply) {
         }
 
         case OP.CLIP_READ:
-            r.write(utf8.encode(await relay({ svc: "clipRead" })));
+            await clipboard(r, held, "read", () => relay({ svc: "clipRead" }));
+            return;
+
+        case OP.CLIP_WAIT:
+            await clipboard(r, held, "wait", () => relay({ svc: "clipWait" }));
             return;
 
         case OP.CLIP_WRITE:

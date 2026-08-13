@@ -23,6 +23,8 @@ export class FakeNet {
                 { status: 200, headers: "content-type: text/plain\n", body: "hi there\n" }],
         ]);
         this.clipboard = "";
+        this.clipDenied = false; // as a browser that will not read it outside a gesture
+        this.pasted = null;      // {r, token} for a pbpaste waiting on the user
         this.picked = [{ name: "notes.txt", bytes: utf8.encode("picked\n") }];
         this.saved = [];    // {name, bytes}
         this.sockets = [];
@@ -32,10 +34,23 @@ export class FakeNet {
     reset() {
         this.sockets.length = 0;
         this.saved.length = 0;
+        this.clipDenied = false;
+        this.pasted = null;
     }
 }
 
 export function makeFakeSvc(mem, net, kernel) {
+    // The gesture a browser insists on before it will disclose the clipboard.
+    net.paste = (text) => {
+        if (!net.pasted)
+            return false;
+        const { r, token } = net.pasted;
+        net.pasted = null;
+        r.write(utf8.encode(text));
+        kernel().wake(token, 0, 0);
+        return true;
+    };
+
     // Answers a parked receive, from a send or from the socket going away.
     function settle(s) {
         if (!s.waiting)
@@ -136,8 +151,15 @@ export function makeFakeSvc(mem, net, kernel) {
             return PARKED;
 
         case OP.CLIP_READ:
+            if (net.clipDenied)
+                throw { braam: E.PERM };
             r.write(utf8.encode(net.clipboard));
             return;
+
+        // Answered by paste(), which stands in for the user pressing ⌘V.
+        case OP.CLIP_WAIT:
+            net.pasted = { r, token };
+            return PARKED;
 
         case OP.CLIP_WRITE:
             net.clipboard = r.text();

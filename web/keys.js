@@ -21,7 +21,9 @@ const CODES = new Map(NAMES.map((name, i) => [name, NAMED + i]));
 
 // Browser shortcuts the page has no business eating. Ctrl+L is not among them:
 // clearing the screen is what it means in a terminal, and the kernel binds it.
-const RESERVED = new Set(["r", "R", "t", "T", "w", "W", "n", "N"]);
+// Ctrl+V is, because the paste event it produces is the only way a page may
+// read the clipboard without a permission — see `pbpaste`.
+const RESERVED = new Set(["r", "R", "t", "T", "w", "W", "n", "N", "v", "V"]);
 
 export function normalise(event) {
     let mods = 0;

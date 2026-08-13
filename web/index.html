@@ -152,10 +152,35 @@ function save(name, bytes) {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+// Reading the clipboard is only allowed from inside a user-gesture handler, and
+// a command reaches this page long after its keystroke returned — so the async
+// API is refused by design in some browsers. A paste is itself the gesture, and
+// needs no permission at all, so a refused read waits for one.
+let pasteWaiter = null;
+
+addEventListener("paste", (event) => {
+    if (!pasteWaiter)
+        return;
+    const resolve = pasteWaiter;
+    pasteWaiter = null;
+    event.preventDefault();
+    resolve(event.clipboardData ? event.clipboardData.getData("text") : "");
+});
+
+function awaitPaste() {
+    return new Promise((resolve) => {
+        if (pasteWaiter)
+            pasteWaiter(""); // a superseded wait answers empty rather than hanging
+        pasteWaiter = resolve;
+    });
+}
+
 async function service(data) {
     switch (data.svc) {
     case "clipRead":
         return await navigator.clipboard.readText();
+    case "clipWait":
+        return await awaitPaste();
     case "clipWrite":
         await navigator.clipboard.writeText(data.text);
         return null;

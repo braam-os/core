@@ -73,6 +73,15 @@ Task<Result<String>> clip_read()
     co_return co_await t;
 }
 
+Task<Result<String>> clip_wait()
+{
+    SvcCall c(SvcOp::ClipWait);
+    Task<Result<String>> t = svc_blob(c);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
 Task<Result<void>> clip_write(Str text)
 {
     SvcCall c(SvcOp::ClipWrite, "", 0);
