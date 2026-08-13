@@ -5,14 +5,17 @@
 #include "str.h"
 #include "types.h"
 
-template <usize N> struct Buf {
-    Buf &put(Str s) {
+template <usize N>
+struct Buf {
+    Buf &put(Str s)
+    {
         for (usize i = 0; i < s.size(); i++)
             put(s[i]);
         return *this;
     }
 
-    Buf &put(char c) {
+    Buf &put(char c)
+    {
         if (n_ < N)
             b_[n_++] = c;
         else
@@ -20,7 +23,8 @@ template <usize N> struct Buf {
         return *this;
     }
 
-    Buf &put(u32 v) {
+    Buf &put(u32 v)
+    {
         char t[10];
         usize k = 0;
         do {
@@ -34,7 +38,8 @@ template <usize N> struct Buf {
 
     Buf &put(usize v) { return put(u32(v)); }
 
-    Buf &put(int v) {
+    Buf &put(int v)
+    {
         if (v < 0) {
             put('-');
             return put(u32(-(v + 1)) + 1);
@@ -42,7 +47,8 @@ template <usize N> struct Buf {
         return put(u32(v));
     }
 
-    Buf &put_hex(u32 v) {
+    Buf &put_hex(u32 v)
+    {
         put("0x");
         for (int shift = 28; shift >= 0; shift -= 4)
             put("0123456789abcdef"[(v >> shift) & 0xF]);
@@ -53,13 +59,14 @@ template <usize N> struct Buf {
 
     bool overflowed() const { return full_; }
 
-    void clear() {
-        n_ = 0;
+    void clear()
+    {
+        n_    = 0;
         full_ = false;
     }
 
 private:
     char b_[N];
-    usize n_ = 0;
+    usize n_   = 0;
     bool full_ = false;
 };

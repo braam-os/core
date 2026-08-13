@@ -3,12 +3,16 @@
 
 #include "types.h"
 
-template <class T> struct Span {
+template <class T>
+struct Span {
     constexpr Span() = default;
 
     constexpr Span(T *p, usize n) : p_(p), n_(n) {}
 
-    template <usize N> constexpr Span(T (&a)[N]) : p_(a), n_(N) {}
+    template <usize N>
+    constexpr Span(T (&a)[N]) : p_(a), n_(N)
+    {
+    }
 
     constexpr operator Span<const T>() const { return Span<const T>(p_, n_); }
 
@@ -24,7 +28,8 @@ template <class T> struct Span {
 
     constexpr T *end() const { return p_ + n_; }
 
-    constexpr Span subspan(usize pos, usize n = ~usize(0)) const {
+    constexpr Span subspan(usize pos, usize n = ~usize(0)) const
+    {
         if (pos > n_)
             pos = n_;
         usize avail = n_ - pos;
@@ -32,7 +37,7 @@ template <class T> struct Span {
     }
 
 private:
-    T *p_ = nullptr;
+    T *p_    = nullptr;
     usize n_ = 0;
 };
 

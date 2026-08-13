@@ -6,25 +6,30 @@
 #include "types.h"
 
 namespace std {
-template <class R, class...> struct coroutine_traits {
+template <class R, class...>
+struct coroutine_traits {
     using promise_type = typename R::promise_type;
 };
 
-template <class Promise = void> struct coroutine_handle;
+template <class Promise = void>
+struct coroutine_handle;
 
-template <> struct coroutine_handle<void> {
+template <>
+struct coroutine_handle<void> {
     constexpr coroutine_handle() noexcept = default;
 
     constexpr coroutine_handle(nullptr_t) noexcept {}
 
-    coroutine_handle &operator=(nullptr_t) noexcept {
+    coroutine_handle &operator=(nullptr_t) noexcept
+    {
         frame = nullptr;
         return *this;
     }
 
     constexpr void *address() const noexcept { return frame; }
 
-    static constexpr coroutine_handle from_address(void *a) noexcept {
+    static constexpr coroutine_handle from_address(void *a) noexcept
+    {
         coroutine_handle h;
         h.frame = a;
         return h;
@@ -40,7 +45,8 @@ template <> struct coroutine_handle<void> {
 
     void destroy() const { __builtin_coro_destroy(frame); }
 
-    friend constexpr bool operator==(coroutine_handle a, coroutine_handle b) noexcept {
+    friend constexpr bool operator==(coroutine_handle a, coroutine_handle b) noexcept
+    {
         return a.frame == b.frame;
     }
 
@@ -48,30 +54,35 @@ protected:
     void *frame = nullptr;
 };
 
-template <class Promise> struct coroutine_handle : coroutine_handle<> {
+template <class Promise>
+struct coroutine_handle : coroutine_handle<> {
     using coroutine_handle<>::coroutine_handle;
 
-    static coroutine_handle from_promise(Promise &p) {
+    static coroutine_handle from_promise(Promise &p)
+    {
         coroutine_handle h;
         h.frame = __builtin_coro_promise(reinterpret_cast<char *>(&p), alignof(Promise), true);
         return h;
     }
 
-    static constexpr coroutine_handle from_address(void *a) noexcept {
+    static constexpr coroutine_handle from_address(void *a) noexcept
+    {
         coroutine_handle h;
         h.frame = a;
         return h;
     }
 
     // The conversion to coroutine_handle<> comes from the public base.
-    Promise &promise() const {
+    Promise &promise() const
+    {
         return *static_cast<Promise *>(__builtin_coro_promise(frame, alignof(Promise), false));
     }
 };
 
 struct noop_coroutine_promise {};
 
-template <> struct coroutine_handle<noop_coroutine_promise> : coroutine_handle<> {
+template <>
+struct coroutine_handle<noop_coroutine_promise> : coroutine_handle<> {
     constexpr explicit operator bool() const noexcept { return true; }
 
     constexpr bool done() const noexcept { return false; }
@@ -90,7 +101,8 @@ private:
 
 using noop_coroutine_handle = coroutine_handle<noop_coroutine_promise>;
 
-inline noop_coroutine_handle noop_coroutine() noexcept {
+inline noop_coroutine_handle noop_coroutine() noexcept
+{
     return {};
 }
 

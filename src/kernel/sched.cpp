@@ -10,7 +10,7 @@ namespace {
 
 struct Timer {
     f64 deadline = 0;
-    Waiter *w = nullptr;
+    Waiter *w    = nullptr;
 };
 
 struct Job {
@@ -25,13 +25,14 @@ struct Sched {
     Vec<Timer> timers;
     HashMap<u32, Waiter *> waits;
     Vec<Job *> jobs;
-    u32 next_pid = 1;
+    u32 next_pid   = 1;
     u32 next_token = 1;
-    f64 now = 0;
+    f64 now        = 0;
 
     // Destroying a job destroys its suspended frames, whose awaiters
     // deregister from the queues above; those must still be alive here.
-    ~Sched() {
+    ~Sched()
+    {
         for (Job *j : jobs) {
             j->~Job();
             heap_free(j);
@@ -43,7 +44,8 @@ struct Sched {
 // static init, which --no-entry never runs.
 Sched *g = nullptr;
 
-Sched &sched() {
+Sched &sched()
+{
     if (!g) {
         g = static_cast<Sched *>(heap_alloc(sizeof(Sched)));
         if (!g)
@@ -53,12 +55,14 @@ Sched &sched() {
     return *g;
 }
 
-void push_ready(std::coroutine_handle<> h) {
+void push_ready(std::coroutine_handle<> h)
+{
     if (!sched().ready.push(h))
         panic("sched: ready queue out of memory");
 }
 
-std::coroutine_handle<> pop_ready() {
+std::coroutine_handle<> pop_ready()
+{
     Sched &s = sched();
     if (s.head >= s.ready.size()) {
         s.ready.clear();
@@ -74,16 +78,18 @@ std::coroutine_handle<> pop_ready() {
 }
 
 // Sorted by deadline, earliest last, so firing pops from the back.
-bool insert_timer(Waiter *w, f64 deadline) {
+bool insert_timer(Waiter *w, f64 deadline)
+{
     Sched &s = sched();
-    if (!s.timers.push(Timer{deadline, w}))
+    if (!s.timers.push(Timer{ deadline, w }))
         return false;
     for (usize i = s.timers.size() - 1; i > 0 && s.timers[i - 1].deadline < deadline; i--)
         swap(s.timers[i - 1], s.timers[i]);
     return true;
 }
 
-void remove_timer(Waiter *w) {
+void remove_timer(Waiter *w)
+{
     Sched &s = sched();
     for (usize i = 0; i < s.timers.size(); i++) {
         if (s.timers[i].w != w)
@@ -95,7 +101,8 @@ void remove_timer(Waiter *w) {
     }
 }
 
-Job *find_job(u32 pid) {
+Job *find_job(u32 pid)
+{
     for (Job *j : sched().jobs)
         if (j->pid == pid)
             return j;
@@ -104,18 +111,19 @@ Job *find_job(u32 pid) {
 
 } // namespace
 
-u32 sched_spawn(Task<i32> t) {
+u32 sched_spawn(Task<i32> t)
+{
     if (!t)
         return 0;
 
     Sched &s = sched();
-    Job *j = static_cast<Job *>(heap_alloc(sizeof(Job)));
+    Job *j   = static_cast<Job *>(heap_alloc(sizeof(Job)));
     if (!j)
         return 0;
     new (j) Job();
 
-    j->pid = s.next_pid++;
-    j->root = move(t);
+    j->pid                            = s.next_pid++;
+    j->root                           = move(t);
     j->root.handle().promise().cancel = &j->cancel;
     if (!s.jobs.push(j)) {
         j->~Job();
@@ -126,7 +134,8 @@ u32 sched_spawn(Task<i32> t) {
     return j->pid;
 }
 
-void sched_cancel(u32 pid) {
+void sched_cancel(u32 pid)
+{
     Job *j = find_job(pid);
     if (!j || j->cancel.cancelled)
         return;
@@ -142,13 +151,15 @@ void sched_cancel(u32 pid) {
     }
 }
 
-bool sched_alive(u32 pid) {
+bool sched_alive(u32 pid)
+{
     return find_job(pid) != nullptr;
 }
 
-i32 sched_tick(f64 now_ms) {
+i32 sched_tick(f64 now_ms)
+{
     Sched &s = sched();
-    s.now = now_ms;
+    s.now    = now_ms;
 
     while (!s.timers.empty() && s.timers.back().deadline <= now_ms) {
         Waiter *w = s.timers.back().w;
@@ -188,15 +199,16 @@ i32 sched_tick(f64 now_ms) {
     return i32(d + 0.999); // round up, so the host never wakes early
 }
 
-void sched_wake(u32 token, u32 ptr, u32 len) {
-    Sched &s = sched();
+void sched_wake(u32 token, u32 ptr, u32 len)
+{
+    Sched &s      = sched();
     Waiter **slot = s.waits.find(token);
     if (!slot)
         return; // nothing waits on it: a late or cancelled event
 
     Waiter *w = *slot;
     s.waits.remove(token);
-    w->listed = false;
+    w->listed      = false;
     w->payload_ptr = ptr;
     w->payload_len = len;
     if (w->cancel && w->cancel->waiting == w)
@@ -204,15 +216,18 @@ void sched_wake(u32 token, u32 ptr, u32 len) {
     push_ready(w->h);
 }
 
-f64 sched_now() {
+f64 sched_now()
+{
     return sched().now;
 }
 
-usize sched_pending() {
+usize sched_pending()
+{
     return sched().jobs.size();
 }
 
-void sched_reset() {
+void sched_reset()
+{
     if (!g)
         return;
     Sched *s = g;
@@ -221,15 +236,17 @@ void sched_reset() {
     g = nullptr;
 }
 
-u32 sched_token() {
+u32 sched_token()
+{
     Sched &s = sched();
-    u32 t = s.next_token++;
+    u32 t    = s.next_token++;
     if (s.next_token == 0)
         s.next_token = 1; // 0 means "not registered"
     return t;
 }
 
-bool sched_wait_timer(Waiter *w, u32 ms) {
+bool sched_wait_timer(Waiter *w, u32 ms)
+{
     Sched &s = sched();
     if (!insert_timer(w, s.now + f64(ms)))
         return false;
@@ -239,7 +256,8 @@ bool sched_wait_timer(Waiter *w, u32 ms) {
     return true;
 }
 
-bool sched_wait_token(Waiter *w) {
+bool sched_wait_token(Waiter *w)
+{
     Sched &s = sched();
     if (!s.waits.insert(w->token, w))
         return false;
@@ -251,7 +269,8 @@ bool sched_wait_token(Waiter *w) {
 
 // Called from every awaiter's destructor, so destroying a suspended frame
 // never leaves a pointer into it behind.
-void sched_unwait(Waiter *w) {
+void sched_unwait(Waiter *w)
+{
     if (!g)
         return;
     if (w->timed) {
@@ -266,6 +285,7 @@ void sched_unwait(Waiter *w) {
         w->cancel->waiting = nullptr;
 }
 
-Task<Result<void>> sleep_ms(u32 ms) {
+Task<Result<void>> sleep_ms(u32 ms)
+{
     co_return co_await Sleep(ms);
 }

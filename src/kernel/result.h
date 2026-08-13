@@ -27,24 +27,28 @@ struct NoneTag {};
 
 inline constexpr NoneTag None{};
 
-template <class T> struct Option {
+template <class T>
+struct Option {
     constexpr Option() : none_{}, has_(false) {}
 
     constexpr Option(NoneTag) : none_{}, has_(false) {}
 
     constexpr Option(T v) : val_(move(v)), has_(true) {}
 
-    Option(const Option &o) : none_{}, has_(o.has_) {
+    Option(const Option &o) : none_{}, has_(o.has_)
+    {
         if (has_)
             new (&val_) T(o.val_);
     }
 
-    Option(Option &&o) : none_{}, has_(o.has_) {
+    Option(Option &&o) : none_{}, has_(o.has_)
+    {
         if (has_)
             new (&val_) T(move(o.val_));
     }
 
-    Option &operator=(Option o) {
+    Option &operator=(Option o)
+    {
         reset();
         if (o.has_) {
             new (&val_) T(move(o.val_));
@@ -59,13 +63,15 @@ template <class T> struct Option {
 
     constexpr explicit operator bool() const { return has_; }
 
-    T &value() {
+    T &value()
+    {
         if (!has_)
             panic("Option::value on None");
         return val_;
     }
 
-    const T &value() const {
+    const T &value() const
+    {
         if (!has_)
             panic("Option::value on None");
         return val_;
@@ -74,7 +80,8 @@ template <class T> struct Option {
     T value_or(T alt) const { return has_ ? val_ : move(alt); }
 
 private:
-    void reset() {
+    void reset()
+    {
         if (has_) {
             val_.~T();
             has_ = false;
@@ -91,34 +98,41 @@ private:
 
 // ------------------------------------------------------------ Result<T, E>
 
-template <class E> struct ErrTag {
+template <class E>
+struct ErrTag {
     E e;
 };
 
-template <class E> constexpr ErrTag<E> Err(E e) {
-    return ErrTag<E>{e};
+template <class E>
+constexpr ErrTag<E> Err(E e)
+{
+    return ErrTag<E>{ e };
 }
 
-template <class T, class E = Error> struct Result {
+template <class T, class E = Error>
+struct Result {
     constexpr Result(T v) : val_(move(v)), ok_(true) {}
 
     constexpr Result(ErrTag<E> e) : err_(e.e), ok_(false) {}
 
-    Result(const Result &o) : ok_(o.ok_) {
+    Result(const Result &o) : ok_(o.ok_)
+    {
         if (ok_)
             new (&val_) T(o.val_);
         else
             new (&err_) E(o.err_);
     }
 
-    Result(Result &&o) : ok_(o.ok_) {
+    Result(Result &&o) : ok_(o.ok_)
+    {
         if (ok_)
             new (&val_) T(move(o.val_));
         else
             new (&err_) E(move(o.err_));
     }
 
-    Result &operator=(Result o) {
+    Result &operator=(Result o)
+    {
         destroy();
         ok_ = o.ok_;
         if (ok_)
@@ -136,19 +150,22 @@ template <class T, class E = Error> struct Result {
 
     constexpr explicit operator bool() const { return ok_; }
 
-    T &value() {
+    T &value()
+    {
         if (!ok_)
             panic("Result::value on an error");
         return val_;
     }
 
-    const T &value() const {
+    const T &value() const
+    {
         if (!ok_)
             panic("Result::value on an error");
         return val_;
     }
 
-    E error() const {
+    E error() const
+    {
         if (ok_)
             panic("Result::error on a value");
         return err_;
@@ -157,7 +174,8 @@ template <class T, class E = Error> struct Result {
     T value_or(T alt) const { return ok_ ? val_ : move(alt); }
 
 private:
-    void destroy() {
+    void destroy()
+    {
         if (ok_)
             val_.~T();
         else
@@ -172,7 +190,8 @@ private:
     bool ok_;
 };
 
-template <class E> struct Result<void, E> {
+template <class E>
+struct Result<void, E> {
     constexpr Result() : ok_(true) {}
 
     constexpr Result(ErrTag<E> e) : err_(e.e), ok_(false) {}
@@ -183,12 +202,14 @@ template <class E> struct Result<void, E> {
 
     constexpr explicit operator bool() const { return ok_; }
 
-    void value() const {
+    void value() const
+    {
         if (!ok_)
             panic("Result::value on an error");
     }
 
-    E error() const {
+    E error() const
+    {
         if (ok_)
             panic("Result::error on a value");
         return err_;

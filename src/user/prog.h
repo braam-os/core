@@ -22,7 +22,7 @@ struct Args {
 
     Str name() const { return v.empty() ? Str() : v[0]; }
 
-    Args tail() const { return Args{v.subspan(1)}; }
+    Args tail() const { return Args{ v.subspan(1) }; }
 };
 
 // A byte sink. In M3 the only sink is the screen; M4 puts a Channel<Bytes>
@@ -32,7 +32,7 @@ struct Stream {
     using WriteFn = Result<usize> (*)(void *ctx, Str s);
 
     WriteFn fn = nullptr;
-    void *ctx = nullptr;
+    void *ctx  = nullptr;
 
     // Awaitable from day one, so M4's blocking pipe write changes no caller.
     // The work happens in await_suspend rather than await_ready because only
@@ -46,7 +46,9 @@ struct Stream {
 
         bool await_ready() const noexcept { return false; }
 
-        template <class P> bool await_suspend(std::coroutine_handle<P> h) {
+        template <class P>
+        bool await_suspend(std::coroutine_handle<P> h)
+        {
             CancelState *c = h.promise().cancel;
             if (c && c->cancelled)
                 r = Err(Error::Cancelled);
@@ -58,7 +60,7 @@ struct Stream {
         Result<usize> await_resume() const { return r; }
     };
 
-    Write write(Str s) const { return Write{fn, ctx, s}; }
+    Write write(Str s) const { return Write{ fn, ctx, s }; }
 };
 
 // Concept.md §3.6's stdio. stdin arrives with M4: in M3 the shell owns the
@@ -90,8 +92,8 @@ struct ProgramRegistrar {
 };
 
 // Defines a program and registers it. The body sees `args` and `io`.
-#define BRAAM_PROGRAM(fn, prog_name, prog_usage)                                              \
-    static Task<i32> fn(Args, Stdio);                                                         \
-    static Program fn##_desc{prog_name, prog_usage, fn, nullptr};                             \
-    [[maybe_unused]] __attribute__((used)) static const ProgramRegistrar fn##_reg{fn##_desc}; \
+#define BRAAM_PROGRAM(fn, prog_name, prog_usage)                                                \
+    static Task<i32> fn(Args, Stdio);                                                           \
+    static Program fn##_desc{ prog_name, prog_usage, fn, nullptr };                             \
+    [[maybe_unused]] __attribute__((used)) static const ProgramRegistrar fn##_reg{ fn##_desc }; \
     static Task<i32> fn([[maybe_unused]] Args args, [[maybe_unused]] Stdio io)

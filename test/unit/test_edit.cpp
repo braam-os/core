@@ -1,5 +1,4 @@
 #include "harness.h"
-
 #include "kernel/key.h"
 #include "kernel/sched.h"
 #include "kernel/screen.h"
@@ -17,15 +16,16 @@ LineEnd got_how;
 bool done, failed;
 Error got_err;
 
-Task<i32> reader(Str prompt) {
+Task<i32> reader(Str prompt)
+{
     Result<Line> r = co_await ed->read_line(prompt);
     if (r.is_err()) {
-        failed = true;
+        failed  = true;
         got_err = r.error();
         co_return 1;
     }
     got_how = r.value().how;
-    got_n = r.value().text.size();
+    got_n   = r.value().text.size();
     if (got_n > sizeof(got))
         got_n = sizeof(got);
     __builtin_memcpy(got, r.value().text.data(), got_n);
@@ -33,16 +33,18 @@ Task<i32> reader(Str prompt) {
     co_return 0;
 }
 
-Str text() {
+Str text()
+{
     return Str(got, got_n);
 }
 
 u32 pid;
 
 // Starts a fresh read_line and runs it up to its first suspension.
-void start(Str prompt) {
+void start(Str prompt)
+{
     done = failed = false;
-    got_n = 0;
+    got_n         = 0;
     sched_reset();
     keys().clear();
     pid = sched_spawn(reader(prompt));
@@ -50,24 +52,27 @@ void start(Str prompt) {
     sched_tick(0);
 }
 
-void press(u32 code, u32 mods = 0) {
-    keys().try_send(Key{code, mods});
+void press(u32 code, u32 mods = 0)
+{
+    keys().try_send(Key{ code, mods });
     sched_tick(0);
 }
 
-void type(Str s) {
+void type(Str s)
+{
     for (usize i = 0; i < s.size(); i++)
         press(u32(u8(s[i])));
 }
 
 // The text of one row, with trailing blanks trimmed.
-Str row(u32 y) {
+Str row(u32 y)
+{
     static char buf[SCREEN_MAX_COLS];
     const Cell *cells = screen_cells();
-    usize n = 0;
+    usize n           = 0;
     for (u32 x = 0; x < screen().cols && n < sizeof(buf); x++) {
         char32_t ch = cells[y * screen().cols + x].ch;
-        buf[n++] = ch && ch < 0x80 ? char(ch) : ' ';
+        buf[n++]    = ch && ch < 0x80 ? char(ch) : ' ';
     }
     while (n && buf[n - 1] == ' ')
         n--;
@@ -76,7 +81,8 @@ Str row(u32 y) {
 
 } // namespace
 
-void test_edit() {
+void test_edit()
+{
     test_begin("edit");
 
     LineEditor editor;

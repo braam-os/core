@@ -1,18 +1,19 @@
 #include "harness.h"
-
 #include "kernel/alloc.h"
 #include "kernel/screen.h"
 #include "kernel/str.h"
 
 namespace {
 
-char32_t at(u32 x, u32 y) {
+char32_t at(u32 x, u32 y)
+{
     return screen_cells()[y * screen().cols + x].ch;
 }
 
 } // namespace
 
-void test_screen() {
+void test_screen()
+{
     test_begin("screen");
 
     const Screen &s = screen();

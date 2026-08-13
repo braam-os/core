@@ -9,11 +9,12 @@
 
 struct CancelState;
 
-template <class T = void> struct Task;
+template <class T = void>
+struct Task;
 
 struct TaskPromiseBase {
     std::coroutine_handle<> continuation = nullptr;
-    CancelState *cancel = nullptr;
+    CancelState *cancel                  = nullptr;
 
     std::suspend_always initial_suspend() noexcept { return {}; }
 
@@ -22,7 +23,8 @@ struct TaskPromiseBase {
         bool await_ready() const noexcept { return false; }
 
         template <class P>
-        std::coroutine_handle<> await_suspend(std::coroutine_handle<P> h) const noexcept {
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<P> h) const noexcept
+        {
             std::coroutine_handle<> c = h.promise().continuation;
             if (!c)
                 return std::noop_coroutine();
@@ -37,7 +39,8 @@ struct TaskPromiseBase {
     void unhandled_exception() {}
 };
 
-template <class T> struct TaskPromise : TaskPromiseBase {
+template <class T>
+struct TaskPromise : TaskPromiseBase {
     Option<T> value;
 
     Task<T> get_return_object();
@@ -45,15 +48,17 @@ template <class T> struct TaskPromise : TaskPromiseBase {
     void return_value(T v) { value = Option<T>(move(v)); }
 };
 
-template <> struct TaskPromise<void> : TaskPromiseBase {
+template <>
+struct TaskPromise<void> : TaskPromiseBase {
     Task<void> get_return_object();
 
     void return_void() {}
 };
 
-template <class T> struct Task {
+template <class T>
+struct Task {
     using promise_type = TaskPromise<T>;
-    using Handle = std::coroutine_handle<promise_type>;
+    using Handle       = std::coroutine_handle<promise_type>;
 
     Task() = default;
 
@@ -61,20 +66,22 @@ template <class T> struct Task {
 
     Task(Task &&o) noexcept : h_(o.h_) { o.h_ = Handle(); }
 
-    Task &operator=(Task &&o) noexcept {
+    Task &operator=(Task &&o) noexcept
+    {
         if (this != &o) {
             if (h_)
                 h_.destroy();
-            h_ = o.h_;
+            h_   = o.h_;
             o.h_ = Handle();
         }
         return *this;
     }
 
-    Task(const Task &) = delete;
+    Task(const Task &)            = delete;
     Task &operator=(const Task &) = delete;
 
-    ~Task() {
+    ~Task()
+    {
         if (h_)
             h_.destroy();
     }
@@ -86,9 +93,10 @@ template <class T> struct Task {
     Handle handle() const { return h_; }
 
     // Gives up ownership of the frame; the caller must destroy it.
-    Handle release() {
+    Handle release()
+    {
         Handle h = h_;
-        h_ = Handle();
+        h_       = Handle();
         return h;
     }
 
@@ -100,28 +108,33 @@ template <class T> struct Task {
         bool await_ready() const noexcept { return !h || h.done(); }
 
         template <class P>
-        std::coroutine_handle<> await_suspend(std::coroutine_handle<P> caller) noexcept {
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<P> caller) noexcept
+        {
             h.promise().continuation = caller;
-            h.promise().cancel = caller.promise().cancel;
+            h.promise().cancel       = caller.promise().cancel;
             return h;
         }
 
-        T await_resume() {
+        T await_resume()
+        {
             if constexpr (!is_same<T, void>)
                 return move(h.promise().value.value());
         }
     };
 
-    Awaiter operator co_await() { return Awaiter{h_}; }
+    Awaiter operator co_await() { return Awaiter{ h_ }; }
 
 private:
     Handle h_;
 };
 
-template <class T> Task<T> TaskPromise<T>::get_return_object() {
+template <class T>
+Task<T> TaskPromise<T>::get_return_object()
+{
     return Task<T>(std::coroutine_handle<TaskPromise<T>>::from_promise(*this));
 }
 
-inline Task<void> TaskPromise<void>::get_return_object() {
+inline Task<void> TaskPromise<void>::get_return_object()
+{
     return Task<void>(std::coroutine_handle<TaskPromise<void>>::from_promise(*this));
 }

@@ -1,5 +1,4 @@
 #include "harness.h"
-
 #include "kernel/alloc.h"
 #include "kernel/key.h"
 #include "kernel/sched.h"
@@ -10,26 +9,29 @@ namespace {
 
 u32 pid;
 
-void press(u32 code, u32 mods = 0) {
-    keys().try_send(Key{code, mods});
+void press(u32 code, u32 mods = 0)
+{
+    keys().try_send(Key{ code, mods });
     sched_tick(0);
 }
 
 // Types a line and submits it, then ticks far enough for a sleep to expire.
-void run(Str s) {
+void run(Str s)
+{
     for (usize i = 0; i < s.size(); i++)
         press(u32(u8(s[i])));
     press(KEY_ENTER);
     sched_tick(100000);
 }
 
-Str row(u32 y) {
+Str row(u32 y)
+{
     static char buf[SCREEN_MAX_COLS];
     const Cell *cells = screen_cells();
-    usize n = 0;
+    usize n           = 0;
     for (u32 x = 0; x < screen().cols && n < sizeof(buf); x++) {
         char32_t ch = cells[y * screen().cols + x].ch;
-        buf[n++] = ch && ch < 0x80 ? char(ch) : ' ';
+        buf[n++]    = ch && ch < 0x80 ? char(ch) : ' ';
     }
     while (n && buf[n - 1] == ' ')
         n--;
@@ -37,14 +39,16 @@ Str row(u32 y) {
 }
 
 // Whether any row on screen reads exactly this.
-bool has_row(Str want) {
+bool has_row(Str want)
+{
     for (u32 y = 0; y < screen().rows; y++)
         if (row(y) == want)
             return true;
     return false;
 }
 
-bool some_row_starts(Str want) {
+bool some_row_starts(Str want)
+{
     for (u32 y = 0; y < screen().rows; y++)
         if (row(y).starts_with(want))
             return true;
@@ -53,14 +57,15 @@ bool some_row_starts(Str want) {
 
 usize boot_cost; // heap taken by the shell itself, grid excluded
 
-void boot(u32 cols, u32 rows) {
+void boot(u32 cols, u32 rows)
+{
     sched_reset();
     keys().clear();
     screen_reset();
     CHECK(screen_resize(cols, rows));
 
     usize before = heap_stats().bytes_in_use;
-    pid = sched_spawn(shell());
+    pid          = sched_spawn(shell());
     CHECK(pid != 0);
     sched_tick(0);
     boot_cost = heap_stats().bytes_in_use - before;
@@ -68,7 +73,8 @@ void boot(u32 cols, u32 rows) {
 
 } // namespace
 
-void test_shell() {
+void test_shell()
+{
     test_begin("shell");
 
     // The shell's frame, the editor's, and the scheduler's job record all come

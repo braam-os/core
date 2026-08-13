@@ -12,6 +12,7 @@ static_assert(is_trivially_destructible<Channel<Key>>, "a global must not need a
 
 } // namespace
 
-Channel<Key> &keys() {
+Channel<Key> &keys()
+{
     return g_keys;
 }

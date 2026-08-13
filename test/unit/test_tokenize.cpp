@@ -1,19 +1,20 @@
 #include "harness.h"
-
 #include "user/tokenize.h"
 
 namespace {
 
 // Every token must be a view into the line, not a copy: the shell's argv
 // borrows from a buffer that outlives it.
-void check_views(Str line, const Vec<Str> &argv) {
+void check_views(Str line, const Vec<Str> &argv)
+{
     for (usize i = 0; i < argv.size(); i++)
         CHECK(argv[i].data() >= line.data() && argv[i].data() + argv[i].size() <= line.end());
 }
 
 } // namespace
 
-void test_tokenize() {
+void test_tokenize()
+{
     test_begin("tokenize");
 
     Vec<Str> argv;

@@ -12,7 +12,7 @@ struct Waiter;
 // One per task tree. Killing means signalling it; every await point checks it
 // and unwinds by returning (Concept.md §3.6, §8.1).
 struct CancelState {
-    bool cancelled = false;
+    bool cancelled  = false;
     Waiter *waiting = nullptr; // the awaiter this tree is suspended on
 };
 
@@ -27,13 +27,13 @@ struct CancelToken {
 struct Waiter {
     std::coroutine_handle<> h;
     CancelState *cancel = nullptr;
-    u32 token = 0;
-    u32 payload_ptr = 0;
-    u32 payload_len = 0;
-    bool timed = false;     // in the timer queue
-    bool listed = false;    // in the wake table, under token
-    bool cancelled = false; // woken by a cancellation rather than an event
-    bool failed = false;    // could not be registered
+    u32 token           = 0;
+    u32 payload_ptr     = 0;
+    u32 payload_len     = 0;
+    bool timed          = false; // in the timer queue
+    bool listed         = false; // in the wake table, under token
+    bool cancelled      = false; // woken by a cancellation rather than an event
+    bool failed         = false; // could not be registered
 };
 
 // What wake(token, ptr, len) delivers.
@@ -60,15 +60,17 @@ void sched_unwait(Waiter *w);
 struct Sleep {
     explicit Sleep(u32 ms) : ms_(ms) {}
 
-    Sleep(const Sleep &) = delete;
+    Sleep(const Sleep &)            = delete;
     Sleep &operator=(const Sleep &) = delete;
 
     ~Sleep() { sched_unwait(&w_); }
 
     bool await_ready() const noexcept { return false; }
 
-    template <class P> bool await_suspend(std::coroutine_handle<P> h) {
-        w_.h = h;
+    template <class P>
+    bool await_suspend(std::coroutine_handle<P> h)
+    {
+        w_.h      = h;
         w_.cancel = h.promise().cancel;
         if (w_.cancel && w_.cancel->cancelled) {
             w_.cancelled = true;
@@ -81,7 +83,8 @@ struct Sleep {
         return true;
     }
 
-    Result<void> await_resume() const {
+    Result<void> await_resume() const
+    {
         if (w_.cancelled || (w_.cancel && w_.cancel->cancelled))
             return Err(Error::Cancelled);
         if (w_.failed)
@@ -99,7 +102,7 @@ private:
 struct Wake {
     Wake() { w_.token = sched_token(); }
 
-    Wake(const Wake &) = delete;
+    Wake(const Wake &)            = delete;
     Wake &operator=(const Wake &) = delete;
 
     ~Wake() { sched_unwait(&w_); }
@@ -108,8 +111,10 @@ struct Wake {
 
     bool await_ready() const noexcept { return false; }
 
-    template <class P> bool await_suspend(std::coroutine_handle<P> h) {
-        w_.h = h;
+    template <class P>
+    bool await_suspend(std::coroutine_handle<P> h)
+    {
+        w_.h      = h;
         w_.cancel = h.promise().cancel;
         if (w_.cancel && w_.cancel->cancelled) {
             w_.cancelled = true;
@@ -122,12 +127,13 @@ struct Wake {
         return true;
     }
 
-    Result<Payload> await_resume() const {
+    Result<Payload> await_resume() const
+    {
         if (w_.cancelled || (w_.cancel && w_.cancel->cancelled))
             return Err(Error::Cancelled);
         if (w_.failed)
             return Err(Error::NoMemory);
-        return Payload{w_.payload_ptr, w_.payload_len};
+        return Payload{ w_.payload_ptr, w_.payload_len };
     }
 
 private:

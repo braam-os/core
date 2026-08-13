@@ -7,13 +7,15 @@
 
 namespace {
 
-bool is_word(char32_t c) {
+bool is_word(char32_t c)
+{
     return c != ' ' && c != '\t';
 }
 
 } // namespace
 
-void LineEditor::place_cursor() {
+void LineEditor::place_cursor()
+{
     const Screen &s = screen();
     if (!s.cols)
         return;
@@ -27,7 +29,8 @@ void LineEditor::place_cursor() {
 
 // One unconditional repaint from the anchor. There is no erase-to-end-of-line,
 // so the tail of a shortened line is blanked by hand.
-void LineEditor::redraw() {
+void LineEditor::redraw()
+{
     const Screen &s = screen();
     if (!s.cols)
         return;
@@ -41,7 +44,7 @@ void LineEditor::redraw() {
         screen_put(' ');
 
     usize total = buf_.size() > painted_ ? buf_.size() : painted_;
-    painted_ = buf_.size();
+    painted_    = buf_.size();
 
     // Nothing counts scrolls, so infer them: the writes above should have
     // ended on this row, and a shortfall is exactly how far the grid moved.
@@ -54,7 +57,8 @@ void LineEditor::redraw() {
     place_cursor();
 }
 
-bool LineEditor::set_text(Str utf8) {
+bool LineEditor::set_text(Str utf8)
+{
     buf_.clear();
     usize i = 0;
     char32_t ch;
@@ -67,7 +71,8 @@ bool LineEditor::set_text(Str utf8) {
     return true;
 }
 
-bool LineEditor::set_text(const Vec<char32_t> &from) {
+bool LineEditor::set_text(const Vec<char32_t> &from)
+{
     buf_.clear();
     if (!buf_.reserve(from.size()))
         return false;
@@ -77,7 +82,8 @@ bool LineEditor::set_text(const Vec<char32_t> &from) {
     return true;
 }
 
-bool LineEditor::text_of(const Vec<char32_t> &from, String &out) const {
+bool LineEditor::text_of(const Vec<char32_t> &from, String &out) const
+{
     out.clear();
     char b[4];
     for (usize i = 0; i < from.size(); i++)
@@ -86,7 +92,8 @@ bool LineEditor::text_of(const Vec<char32_t> &from, String &out) const {
     return true;
 }
 
-bool LineEditor::remember(Str s) {
+bool LineEditor::remember(Str s)
+{
     if (s.empty() || (!history_.empty() && history_.back() == s))
         return true;
 
@@ -99,7 +106,8 @@ bool LineEditor::remember(Str s) {
 }
 
 // Back over any spaces, then back over the word before them.
-usize LineEditor::word_start() const {
+usize LineEditor::word_start() const
+{
     usize i = cur_;
     while (i && !is_word(buf_[i - 1]))
         i--;
@@ -108,12 +116,13 @@ usize LineEditor::word_start() const {
     return i;
 }
 
-Task<Result<Line>> LineEditor::read_line(Str prompt) {
+Task<Result<Line>> LineEditor::read_line(Str prompt)
+{
     buf_.clear();
     pending_.clear();
-    cur_ = 0;
+    cur_     = 0;
     painted_ = 0;
-    hist_ = history_.size();
+    hist_    = history_.size();
 
     // The prompt goes out first and the anchor is where it ends — on a column
     // screen_move can reach, which the deferred wrap column is not.
@@ -136,9 +145,9 @@ Task<Result<Line>> LineEditor::read_line(Str prompt) {
             co_return Err(r.error());
         }
 
-        Key k = r.value();
+        Key k     = r.value();
         bool ctrl = (k.mods & MOD_CTRL) != 0;
-        bool alt = (k.mods & MOD_ALT) != 0;
+        bool alt  = (k.mods & MOD_ALT) != 0;
 
         if (k.printable()) {
             if (!buf_.insert(cur_, k.code))
@@ -192,8 +201,8 @@ Task<Result<Line>> LineEditor::read_line(Str prompt) {
         } else if (ctrl && k.code == 'l') {
             screen_clear();
             screen_write(prompt);
-            x0_ = screen().cursor_x;
-            y0_ = screen().cursor_y;
+            x0_      = screen().cursor_x;
+            y0_      = screen().cursor_y;
             painted_ = 0;
         } else if (k.code == KEY_UP) {
             if (!hist_)
@@ -221,7 +230,8 @@ Task<Result<Line>> LineEditor::read_line(Str prompt) {
     }
 }
 
-bool LineEditor::set_pending() {
+bool LineEditor::set_pending()
+{
     pending_.clear();
     if (!pending_.reserve(buf_.size()))
         return false;

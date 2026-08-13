@@ -3,7 +3,8 @@
 
 // Two passes over the registry: the widest name, then the padded listing. The
 // registry is kept sorted, so this needs no sort of its own.
-BRAAM_PROGRAM(prog_help, "help", "list the programs") {
+BRAAM_PROGRAM(prog_help, "help", "list the programs")
+{
     usize width = 0;
     for (const Program *p = program_first(); p; p = p->next)
         if (p->name.size() > width)

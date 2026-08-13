@@ -1,9 +1,9 @@
 #include "harness.h"
-
 #include "kernel/str.h"
 #include "kernel/string.h"
 
-void test_string() {
+void test_string()
+{
     test_begin("string");
 
     String s;

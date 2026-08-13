@@ -2,7 +2,8 @@
 
 #include "kernel/text.h"
 
-Result<void> tokenize(Str line, Vec<Str> &argv) {
+Result<void> tokenize(Str line, Vec<Str> &argv)
+{
     usize i = 0;
     while (i < line.size()) {
         while (i < line.size() && is_space(line[i]))

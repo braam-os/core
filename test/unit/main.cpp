@@ -2,7 +2,6 @@
 // kernel.wasm so test code never counts against the size budget.
 
 #include "harness.h"
-
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/host.h"
@@ -30,7 +29,8 @@ void test_shell();
 extern "C" void __wasm_call_ctors();
 
 // Returns the number of failed checks; the harness treats nonzero as failure.
-BRAAM_EXPORT("run_tests") u32 run_tests() {
+BRAAM_EXPORT("run_tests") u32 run_tests()
+{
     heap_init(0);
     __wasm_call_ctors();
 
@@ -53,7 +53,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests() {
     test_shell();
 
     u32 failures = test_failures();
-    HeapStats s = heap_stats();
+    HeapStats s  = heap_stats();
     Buf<160> line;
     line.put(failures ? "FAILED: " : "ok: ")
         .put(failures)

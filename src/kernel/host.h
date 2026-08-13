@@ -12,11 +12,13 @@ BRAAM_IMPORT("now") f64 host_now();
 // memory (Concept.md §3.5). Notifies, and so returns nothing.
 BRAAM_IMPORT("present") void host_present(u32 x, u32 y, u32 w, u32 h);
 
-inline void log(Str s) {
+inline void log(Str s)
+{
     host_log(s.data(), s.size());
 }
 
-[[noreturn]] inline void panic(Str s) {
+[[noreturn]] inline void panic(Str s)
+{
     host_log(s.data(), s.size());
     __builtin_trap();
 }

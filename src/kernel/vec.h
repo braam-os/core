@@ -7,29 +7,32 @@
 #include "traits.h"
 #include "types.h"
 
-template <class T> struct Vec {
+template <class T>
+struct Vec {
     Vec() = default;
 
-    Vec(Vec &&o) noexcept : p_(o.p_), n_(o.n_), cap_(o.cap_) {
-        o.p_ = nullptr;
-        o.n_ = 0;
+    Vec(Vec &&o) noexcept : p_(o.p_), n_(o.n_), cap_(o.cap_)
+    {
+        o.p_   = nullptr;
+        o.n_   = 0;
         o.cap_ = 0;
     }
 
-    Vec &operator=(Vec &&o) noexcept {
+    Vec &operator=(Vec &&o) noexcept
+    {
         if (this != &o) {
             release();
-            p_ = o.p_;
-            n_ = o.n_;
-            cap_ = o.cap_;
-            o.p_ = nullptr;
-            o.n_ = 0;
+            p_     = o.p_;
+            n_     = o.n_;
+            cap_   = o.cap_;
+            o.p_   = nullptr;
+            o.n_   = 0;
             o.cap_ = 0;
         }
         return *this;
     }
 
-    Vec(const Vec &) = delete;
+    Vec(const Vec &)            = delete;
     Vec &operator=(const Vec &) = delete;
 
     ~Vec() { release(); }
@@ -62,7 +65,8 @@ template <class T> struct Vec {
 
     operator Span<const T>() const { return Span<const T>(p_, n_); }
 
-    bool reserve(usize want) {
+    bool reserve(usize want)
+    {
         if (want <= cap_)
             return true;
         usize cap = cap_ ? cap_ : 4;
@@ -77,12 +81,13 @@ template <class T> struct Vec {
             p_[i].~T();
         }
         heap_free(p_);
-        p_ = q;
+        p_   = q;
         cap_ = cap;
         return true;
     }
 
-    bool push(T v) {
+    bool push(T v)
+    {
         if (n_ == cap_ && !reserve(n_ + 1))
             return false;
         new (p_ + n_) T(move(v));
@@ -90,7 +95,9 @@ template <class T> struct Vec {
         return true;
     }
 
-    template <class... A> bool emplace(A &&...a) {
+    template <class... A>
+    bool emplace(A &&...a)
+    {
         if (n_ == cap_ && !reserve(n_ + 1))
             return false;
         new (p_ + n_) T(forward<A>(a)...);
@@ -98,7 +105,8 @@ template <class T> struct Vec {
         return true;
     }
 
-    void pop() {
+    void pop()
+    {
         if (n_ == 0)
             panic("Vec::pop on an empty vector");
         n_--;
@@ -106,7 +114,8 @@ template <class T> struct Vec {
     }
 
     // Shifts the tail up by one. i == size() appends.
-    bool insert(usize i, T v) {
+    bool insert(usize i, T v)
+    {
         if (i > n_)
             panic("Vec::insert past the end");
         if (n_ == cap_ && !reserve(n_ + 1))
@@ -124,7 +133,8 @@ template <class T> struct Vec {
     }
 
     // Removes n elements at i, shifting the tail down. n is clamped to the end.
-    void erase(usize i, usize n = 1) {
+    void erase(usize i, usize n = 1)
+    {
         if (i > n_)
             panic("Vec::erase past the end");
         if (n > n_ - i)
@@ -135,7 +145,8 @@ template <class T> struct Vec {
         n_ -= n;
     }
 
-    bool resize(usize n) {
+    bool resize(usize n)
+    {
         if (n > n_) {
             if (!reserve(n))
                 return false;
@@ -148,27 +159,30 @@ template <class T> struct Vec {
         return true;
     }
 
-    void clear() {
+    void clear()
+    {
         destroy_from(0);
         n_ = 0;
     }
 
 private:
-    void destroy_from(usize from) {
+    void destroy_from(usize from)
+    {
         if constexpr (!is_trivially_destructible<T>)
             for (usize i = from; i < n_; i++)
                 p_[i].~T();
     }
 
-    void release() {
+    void release()
+    {
         destroy_from(0);
         heap_free(p_);
-        p_ = nullptr;
-        n_ = 0;
+        p_   = nullptr;
+        n_   = 0;
         cap_ = 0;
     }
 
-    T *p_ = nullptr;
-    usize n_ = 0;
+    T *p_      = nullptr;
+    usize n_   = 0;
     usize cap_ = 0;
 };

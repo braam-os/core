@@ -8,7 +8,8 @@
 #include "tokenize.h"
 #include "tty.h"
 
-Task<i32> shell() {
+Task<i32> shell()
+{
     LineEditor ed;
     Stdio io = stdio_console();
     Vec<Str> argv;
@@ -64,6 +65,6 @@ Task<i32> shell() {
         // carries the cancel state down into the program. It is also why
         // nothing else is ever parked on the keyboard while a program runs:
         // a Channel has one receiver, and this coroutine is not it.
-        status = co_await prog->run(Args{argv}, io);
+        status = co_await prog->run(Args{ argv }, io);
     }
 }

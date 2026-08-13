@@ -1,8 +1,8 @@
 #include "harness.h"
-
 #include "kernel/alloc.h"
 
-void test_alloc() {
+void test_alloc()
+{
     test_begin("alloc");
 
     // Size classes round up as documented, and large requests take whole spans.
@@ -34,7 +34,7 @@ void test_alloc() {
 
     // bytes_in_use returns to its starting point across an alloc/free cycle.
     usize before = heap_stats().bytes_in_use;
-    void *big = heap_alloc(200000);
+    void *big    = heap_alloc(200000);
     CHECK(big != nullptr);
     CHECK_EQ(reinterpret_cast<usize>(big) & 0xFFFFu, 0); // span-aligned
     CHECK_EQ(heap_stats().bytes_in_use, before + 4 * 65536);

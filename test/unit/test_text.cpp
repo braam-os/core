@@ -1,5 +1,4 @@
 #include "harness.h"
-
 #include "kernel/screen.h"
 #include "kernel/text.h"
 
@@ -7,7 +6,8 @@ namespace {
 
 // Encodes, then reads the codepoint back out of the grid through
 // screen_write's decoder — the two halves have to agree.
-void round_trip(char32_t ch, usize want_len) {
+void round_trip(char32_t ch, usize want_len)
+{
     char b[4];
     usize n = utf8_encode(ch, b);
     CHECK_EQ(n, want_len);
@@ -19,7 +19,8 @@ void round_trip(char32_t ch, usize want_len) {
 
 } // namespace
 
-void test_text() {
+void test_text()
+{
     test_begin("text");
 
     CHECK(is_space(' '));

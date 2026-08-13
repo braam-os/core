@@ -1,8 +1,8 @@
 #include "harness.h"
-
 #include "kernel/str.h"
 
-void test_str() {
+void test_str()
+{
     test_begin("str");
 
     Str s = "hello, world";

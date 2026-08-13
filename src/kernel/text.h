@@ -6,11 +6,13 @@
 #include "str.h"
 #include "types.h"
 
-constexpr bool is_space(char c) {
+constexpr bool is_space(char c)
+{
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
 }
 
-constexpr bool is_digit(char c) {
+constexpr bool is_digit(char c)
+{
     return c >= '0' && c <= '9';
 }
 

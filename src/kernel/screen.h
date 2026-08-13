@@ -16,9 +16,9 @@ struct Cell {
 static_assert(sizeof(Cell) == 8, "the renderer strides by 8 bytes");
 
 enum : u8 {
-    ATTR_BOLD = 1,
+    ATTR_BOLD      = 1,
     ATTR_UNDERLINE = 2,
-    ATTR_REVERSE = 4,
+    ATTR_REVERSE   = 4,
 };
 
 enum : u8 {

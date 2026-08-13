@@ -1,8 +1,8 @@
 #include "harness.h"
-
 #include "kernel/fmt.h"
 
-void test_fmt() {
+void test_fmt()
+{
     test_begin("fmt");
 
     Buf<64> b;

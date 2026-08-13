@@ -11,26 +11,28 @@
 struct String {
     String() = default;
 
-    String(String &&o) noexcept : p_(o.p_), n_(o.n_), cap_(o.cap_) {
-        o.p_ = nullptr;
-        o.n_ = 0;
+    String(String &&o) noexcept : p_(o.p_), n_(o.n_), cap_(o.cap_)
+    {
+        o.p_   = nullptr;
+        o.n_   = 0;
         o.cap_ = 0;
     }
 
-    String &operator=(String &&o) noexcept {
+    String &operator=(String &&o) noexcept
+    {
         if (this != &o) {
             heap_free(p_);
-            p_ = o.p_;
-            n_ = o.n_;
-            cap_ = o.cap_;
-            o.p_ = nullptr;
-            o.n_ = 0;
+            p_     = o.p_;
+            n_     = o.n_;
+            cap_   = o.cap_;
+            o.p_   = nullptr;
+            o.n_   = 0;
             o.cap_ = 0;
         }
         return *this;
     }
 
-    String(const String &) = delete;
+    String(const String &)            = delete;
     String &operator=(const String &) = delete;
 
     ~String() { heap_free(p_); }
@@ -57,7 +59,8 @@ struct String {
 
     operator Str() const { return str(); }
 
-    bool reserve(usize want) {
+    bool reserve(usize want)
+    {
         if (want <= cap_)
             return true;
         usize cap = cap_ ? cap_ : 16;
@@ -69,19 +72,21 @@ struct String {
             return false;
         __builtin_memcpy(q, p_, n_);
         heap_free(p_);
-        p_ = q;
+        p_   = q;
         cap_ = cap;
         return true;
     }
 
-    bool push(char c) {
+    bool push(char c)
+    {
         if (n_ == cap_ && !reserve(n_ + 1))
             return false;
         p_[n_++] = c;
         return true;
     }
 
-    bool append(Str s) {
+    bool append(Str s)
+    {
         if (!reserve(n_ + s.size()))
             return false;
         __builtin_memcpy(p_ + n_, s.data(), s.size());
@@ -89,12 +94,14 @@ struct String {
         return true;
     }
 
-    bool assign(Str s) {
+    bool assign(Str s)
+    {
         n_ = 0;
         return append(s);
     }
 
-    void pop() {
+    void pop()
+    {
         if (n_ == 0)
             panic("String::pop on an empty string");
         n_--;
@@ -107,7 +114,7 @@ struct String {
     friend bool operator!=(const String &a, Str b) { return !(a.str() == b); }
 
 private:
-    char *p_ = nullptr;
-    usize n_ = 0;
+    char *p_   = nullptr;
+    usize n_   = 0;
     usize cap_ = 0;
 };

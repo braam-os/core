@@ -2,8 +2,9 @@
 
 // There is no quoting yet, so a quote is a literal character. Quoting arrives
 // with M4's grammar, alongside pipes and redirection.
-BRAAM_PROGRAM(prog_echo, "echo", "[-n] [word...] — write the arguments") {
-    usize i = 1;
+BRAAM_PROGRAM(prog_echo, "echo", "[-n] [word...] — write the arguments")
+{
+    usize i      = 1;
     bool newline = true;
     if (i < args.size() && args[i] == "-n") {
         newline = false;

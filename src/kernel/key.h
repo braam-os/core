@@ -8,9 +8,9 @@
 
 enum : u32 {
     MOD_SHIFT = 1,
-    MOD_CTRL = 2,
-    MOD_ALT = 4,
-    MOD_META = 8,
+    MOD_CTRL  = 2,
+    MOD_ALT   = 4,
+    MOD_META  = 8,
 };
 
 // Printable keys carry their Unicode codepoint. Named keys sit above the
@@ -50,7 +50,8 @@ struct Key {
     u32 mods = 0;
 
     // A codepoint that draws, with no modifier that would make it a command.
-    bool printable() const {
+    bool printable() const
+    {
         return code >= ' ' && code != 0x7f && code < KEY_NAMED &&
                !(mods & (MOD_CTRL | MOD_ALT | MOD_META));
     }

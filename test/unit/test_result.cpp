@@ -1,33 +1,37 @@
 #include "harness.h"
-
 #include "kernel/result.h"
 
 namespace {
-Result<u32> halve(u32 n) {
+Result<u32> halve(u32 n)
+{
     if (n % 2)
         return Err(Error::Invalid);
     return n / 2;
 }
 
 // TRY propagates the error out of the enclosing function unchanged.
-Result<u32> quarter(u32 n) {
+Result<u32> quarter(u32 n)
+{
     u32 half = TRY(halve(n));
     return TRY(halve(half));
 }
 
-Result<void> require_even(u32 n) {
+Result<void> require_even(u32 n)
+{
     if (n % 2)
         return Err(Error::Invalid);
     return {};
 }
 
-Result<u32> checked(u32 n) {
+Result<u32> checked(u32 n)
+{
     TRY_VOID(require_even(n));
     return n;
 }
 } // namespace
 
-void test_result() {
+void test_result()
+{
     test_begin("result");
 
     Option<u32> none;

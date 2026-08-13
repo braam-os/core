@@ -1,5 +1,4 @@
 #include "harness.h"
-
 #include "kernel/alloc.h"
 #include "kernel/span.h"
 #include "kernel/vec.h"
@@ -25,7 +24,8 @@ struct Tracked {
 };
 } // namespace
 
-void test_vec() {
+void test_vec()
+{
     test_begin("vec");
 
     Vec<u32> v;

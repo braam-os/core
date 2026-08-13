@@ -1,9 +1,9 @@
 #include "harness.h"
-
 #include "kernel/hash.h"
 #include "kernel/str.h"
 
-void test_hash() {
+void test_hash()
+{
     test_begin("hash");
 
     HashMap<u32, u32> m;

@@ -1,6 +1,7 @@
 #include "text.h"
 
-usize utf8_encode(char32_t ch, char *out) {
+usize utf8_encode(char32_t ch, char *out)
+{
     u32 v = u32(ch);
     if (v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff))
         v = 0xfffd;
@@ -27,7 +28,8 @@ usize utf8_encode(char32_t ch, char *out) {
     return 4;
 }
 
-usize utf8_decode(Str s, usize at, char32_t &out) {
+usize utf8_decode(Str s, usize at, char32_t &out)
+{
     if (at >= s.size())
         return 0;
 
@@ -35,16 +37,16 @@ usize utf8_decode(Str s, usize at, char32_t &out) {
     char32_t ch;
     usize len;
     if (c < 0x80) {
-        ch = c;
+        ch  = c;
         len = 1;
     } else if ((c & 0xe0) == 0xc0) {
-        ch = c & 0x1f;
+        ch  = c & 0x1f;
         len = 2;
     } else if ((c & 0xf0) == 0xe0) {
-        ch = c & 0x0f;
+        ch  = c & 0x0f;
         len = 3;
     } else if ((c & 0xf8) == 0xf0) {
-        ch = c & 0x07;
+        ch  = c & 0x07;
         len = 4;
     } else {
         out = 0xfffd;
@@ -60,7 +62,8 @@ usize utf8_decode(Str s, usize at, char32_t &out) {
     return len;
 }
 
-Option<u32> parse_u32(Str s) {
+Option<u32> parse_u32(Str s)
+{
     if (s.empty())
         return None;
 

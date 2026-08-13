@@ -1,5 +1,4 @@
 #include "harness.h"
-
 #include "kernel/alloc.h"
 #include "kernel/task.h"
 
@@ -7,19 +6,22 @@ namespace {
 
 u32 body_ran;
 
-Task<u32> answer() {
+Task<u32> answer()
+{
     body_ran++;
     co_return 42;
 }
 
-Task<void> bump() {
+Task<void> bump()
+{
     body_ran++;
     co_return;
 }
 
 // Awaiting a child enters it by symmetric transfer and comes back with its
 // value; the child's frame is destroyed with its Task at the end of the await.
-Task<u32> nested() {
+Task<u32> nested()
+{
     co_await bump();
     u32 v = co_await answer();
     co_return v + 1;
@@ -33,7 +35,8 @@ struct Guard {
     ~Guard() { live_guards--; }
 };
 
-Task<u32> guarded() {
+Task<u32> guarded()
+{
     Guard g;
     co_await std::suspend_always{};
     co_return 0;
@@ -41,17 +44,19 @@ Task<u32> guarded() {
 
 // Defeats the compiler's coroutine heap-allocation elision, so the frame
 // really comes from the kernel heap.
-__attribute__((noinline)) Task<u32> escaping() {
+__attribute__((noinline)) Task<u32> escaping()
+{
     return answer();
 }
 
 } // namespace
 
-void test_task() {
+void test_task()
+{
     test_begin("task");
 
     // Lazy: nothing runs until the handle is resumed.
-    body_ran = 0;
+    body_ran    = 0;
     Task<u32> t = answer();
     CHECK(bool(t));
     CHECK(!t.done());
@@ -62,7 +67,7 @@ void test_task() {
     CHECK_EQ(t.handle().promise().value.value(), 42);
 
     // A void task carries no value, and a moved-from task owns nothing.
-    Task<void> v = bump();
+    Task<void> v     = bump();
     Task<void> moved = move(v);
     CHECK(!bool(v));
     CHECK(v.done());
@@ -70,7 +75,7 @@ void test_task() {
     CHECK(moved.done());
 
     // Chaining: one resume of the root runs the whole tree to completion.
-    body_ran = 0;
+    body_ran    = 0;
     Task<u32> n = nested();
     n.handle().resume();
     CHECK(n.done());

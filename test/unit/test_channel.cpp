@@ -1,5 +1,4 @@
 #include "harness.h"
-
 #include "kernel/alloc.h"
 #include "kernel/channel.h"
 #include "kernel/sched.h"
@@ -13,18 +12,21 @@ using Chan = Channel<u32, 4>;
 char trace[32];
 usize trace_n;
 
-void mark(char c) {
+void mark(char c)
+{
     if (trace_n < sizeof(trace))
         trace[trace_n++] = c;
 }
 
-Str traced() {
+Str traced()
+{
     return Str(trace, trace_n);
 }
 
 // The channel outlives every task that references it: it is a local of
 // test_channel(), and sched_reset() destroys the frames first.
-Task<i32> drain(Chan &c, u32 n) {
+Task<i32> drain(Chan &c, u32 n)
+{
     for (u32 i = 0; i < n; i++) {
         Result<u32> r = co_await c.recv();
         if (r.is_err()) {
@@ -45,7 +47,8 @@ struct Guard {
 };
 
 // Holds a destructor across the suspension, which cancellation must run.
-Task<i32> guarded(Chan &c) {
+Task<i32> guarded(Chan &c)
+{
     Guard g;
     Result<u32> r = co_await c.recv();
     if (r.is_err()) {
@@ -58,7 +61,8 @@ Task<i32> guarded(Chan &c) {
 
 } // namespace
 
-void test_channel() {
+void test_channel()
+{
     test_begin("channel");
 
     // A value already queued is taken without suspending.
@@ -125,8 +129,8 @@ void test_channel() {
     // Cancelling a parked receiver unwinds it and runs its destructors; the
     // awaiter deregisters, so a later send finds nobody and keeps its value.
     sched_reset();
-    trace_n = 0;
-    live_guards = 0;
+    trace_n      = 0;
+    live_guards  = 0;
     usize in_use = heap_stats().bytes_in_use;
     {
         Chan c;
