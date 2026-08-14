@@ -78,6 +78,7 @@ make and node, with no ninja. The top-level `Makefile` wraps it and configures o
 make            # build kernel.wasm, the /usr/bin binaries and tests.wasm
 make run        # ctest
 make serve      # serve build/web/ and open a browser
+make release    # pack build/web/ as build/braam-<version>.zip
 make clean      # rm -rf build
 ```
 
@@ -85,7 +86,15 @@ Overrides: `JOBS=1` for a serial build (the default is the CPU count), `GENERATO
 is installed and you want the ~30% faster build, `BUILD=<dir>` for the build tree.
 
 `build/web/` is assembled by its own always-run `web` target, not by the kernel's `POST_BUILD`,
-so editing a file under `web/` and running `make` refreshes what `make serve` serves.
+so editing a file under `web/` and running `make` refreshes what `make serve` serves. It is
+assembled by `copy_directory`, which never *deletes*: a file removed from `web/` lingers in an
+old build tree, and `make release` would pack it. Cut a release from a clean tree.
+
+`make release` runs `tools/release.py` over `build/web/`, naming the archive after
+`BRAAM_VERSION`, which the script reads out of `src/kernel/version.h` at run time rather than
+at configure time — a CMake `file(STRINGS)` would go stale, since editing a header does not
+re-run cmake. The archive is deterministic: sorted entries and one fixed timestamp, so the same
+tree gives the same bytes.
 
 `CMAKE_ARGS` passes flags to the configure step, which only happens on a fresh tree or after
 `make clean` — so `make CMAKE_ARGS="-DBRAAM_WERROR=ON"` on an already-configured tree does
@@ -278,8 +287,6 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   routing and a window manager in the shell; that is why `chat` writes to the screen.
 - **Two tier-3 fidelity losses (§4.3):** a binary that will not instantiate reads as a crash
   rather than as a refusal, and `Sys::Now` is relative.
-- **`BRAAM_VERSION` in `src/kernel/version.h` still reads `0.1.0-m7`** — it predates M8 and M9,
-  and feeds the boot banner, `version` and `/proc`.
 
 ## Conventions
 

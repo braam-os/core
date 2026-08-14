@@ -95,6 +95,7 @@ works interchangeably.
 make            # build the kernel, the binaries and the tests
 make run        # run the tests
 make serve      # serve the site and open it in a browser
+make release    # pack the site as build/braam-<version>.zip
 make clean
 ```
 
@@ -110,7 +111,11 @@ Node, `unit` runs the in-wasm unit tests, and `size` enforces the per-binary bud
 with no thread in it.
 
 The build leaves a self-contained static site in `build/web/`. It needs no server and no
-special headers, so copying that directory anywhere is a deployment.
+special headers, so copying that directory anywhere is a deployment. `make release` packs
+exactly that directory as `build/braam-<version>.zip`, which unpacks to one
+`braam-<version>/` directory — put it in a web root and the site is at
+`https://example.org/braam-<version>/`. Nothing in it configures the server: the loader falls
+back to a buffered instantiate where the host does not serve `.wasm` as `application/wasm`.
 
 ## Layout
 

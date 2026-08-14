@@ -7,6 +7,42 @@ of the two needs amending.
 
 ---
 
+## 0.1.0 — Packaging
+
+`make release` packs `build/web/` into `build/braam-<version>.zip`. The version string, which
+had read `0.1.0-m7` since M7 and predated two milestones, becomes `0.1.0`: it names the archive
+now, so a stale one would be a stale release, not merely a stale banner.
+
+There was nothing to build. `build/web/` has been a complete deployment since M0 — every URL in
+it resolves against `import.meta.url`, so the tree works at any path — and M7 made assembling it
+a target of its own. What was missing was one archive to hand to a web host, and the whole of it
+is `tools/release.py` beside `pack.py`, a custom target beside `serve`, and two lines of
+Makefile.
+
+The archive nests under `braam-<version>/` rather than unpacking loose. A zip that unpacks loose
+is unpackable only into a directory the deployer prepared and named; a versioned one can be
+unpacked in a web root as it is, two releases never collide on disk, and the directory says which
+one is serving. It costs the deployer a `mv` when the URL must stay put, which is the smaller
+inconvenience and a reversible one.
+
+The version is read out of `src/kernel/version.h` by the script, at run time. Reading it at
+configure time with `file(STRINGS)` was the obvious shape and is wrong: editing a header does not
+re-run cmake, so the archive would go on carrying the previous version until someone
+reconfigured — a silent error whose symptom is a correct-looking file name.
+
+Determinism is three lines — sort the entries, fix the timestamp at 1980-01-01, fix the mode —
+and it buys the ability to answer "is what is deployed what I built?" with `md5`. Without it two
+packs of one tree differ, so the question can only be answered file by file after unpacking.
+
+Nothing in the archive configures the server, and nothing needs to. Streaming instantiation wants
+`application/wasm` and plenty of static hosts do not send it, which `web/worker.js` has handled
+since M2 by falling back to a buffered instantiate. That fallback is what makes "copy it anywhere"
+true, and it is why there is no `.htaccess` in the zip to go stale against a host that never
+reads it.
+
+`LICENSE` travels with the site. The zip is a copy of the software in the sense the MIT text
+means, and the notice is 1 KB.
+
 ## M9 — Liveness isolation
 
 `while(1){}` is killable. A binary can ask to run in a Web Worker of its own, and a process

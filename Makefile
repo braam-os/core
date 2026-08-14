@@ -17,7 +17,7 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 # macOS ships `open`, most Linux desktops `xdg-open`.
 BROWSER := $(firstword $(foreach c,open xdg-open,$(shell command -v $(c) 2>/dev/null)))
 
-.PHONY: all run serve wsd clean
+.PHONY: all run serve wsd release clean
 
 all: $(BUILD)/CMakeCache.txt
 	@cmake --build $(BUILD) -j $(JOBS)
@@ -34,6 +34,11 @@ endif
 	@BRAAM_WS_PORT=$(WS_PORT) node tools/wsd.mjs & \
 	 trap "kill $$! 2>/dev/null" EXIT INT TERM; \
 	 cmake --build $(BUILD) --target serve
+
+# build/web/ as a zip, to unpack on a web server. Pack a clean tree: the web
+# target copies into build/web/ and never deletes from it.
+release: all
+	@cmake --build $(BUILD) --target release
 
 # The chat server on its own, for a browser that is already open.
 wsd:

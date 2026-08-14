@@ -109,6 +109,17 @@ add_custom_target(serve
     USES_TERMINAL
     COMMENT "Serving ${CMAKE_BINARY_DIR}/web at http://localhost:8080/")
 
+# The deployable archive: build/web/ as it stands, under one versioned
+# directory. Not in ALL — an ordinary build should not repack it.
+add_custom_target(release
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/release.py
+            ${CMAKE_BINARY_DIR}/web ${CMAKE_BINARY_DIR}
+            --version-file ${CMAKE_SOURCE_DIR}/src/kernel/version.h
+            --extra ${CMAKE_SOURCE_DIR}/LICENSE
+    DEPENDS web
+    VERBATIM
+    COMMENT "Packing ${CMAKE_BINARY_DIR}/web into a deployable archive")
+
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(test)
