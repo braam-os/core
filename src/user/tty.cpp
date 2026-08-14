@@ -12,9 +12,17 @@ Result<usize> to_screen(void *, Str s)
     return s.size();
 }
 
-// Pointers, so the globals stay trivially destructible (CLAUDE.md).
+// Pointers and words, so the globals stay trivially destructible (CLAUDE.md).
+// Each route names its holder: the pid for the two a process claims, and the
+// claim object itself for the cooked one, whose claimant is a builtin.
 KeyRing *g_raw = nullptr;
-Pipe *g_cooked = nullptr;
+u32 g_raw_pid  = 0;
+
+FullScreen *g_alt = nullptr;
+u32 g_alt_pid     = 0;
+
+Pipe *g_cooked          = nullptr;
+InputClaim *g_cooked_by = nullptr;
 
 } // namespace
 
@@ -24,34 +32,49 @@ Stdio stdio_console()
     return Stdio{ null_source(), s, s };
 }
 
-KeyInput::KeyInput()
+KeyInput::KeyInput(u32 pid)
 {
+    // Refused before anything is allocated: a claim that nested would leave the
+    // pump pointing at a ring whose owner may die first.
+    if (g_raw) {
+        err_ = Error::Perm;
+        return;
+    }
     ring_ = static_cast<KeyRing *>(heap_alloc(sizeof(KeyRing)));
     if (!ring_)
         return;
     new (ring_) KeyRing();
-    prev_ = g_raw;
-    g_raw = ring_;
+    g_raw     = ring_;
+    g_raw_pid = pid;
 }
 
 KeyInput::~KeyInput()
 {
     if (!ring_)
         return;
-    if (g_raw == ring_)
-        g_raw = prev_;
+    if (g_raw == ring_) {
+        g_raw     = nullptr;
+        g_raw_pid = 0;
+    }
     ring_->~KeyRing();
     heap_free(ring_);
 }
 
-InputClaim::InputClaim(Pipe *to) : prev_(g_cooked)
+InputClaim::InputClaim(Pipe *to)
 {
-    g_cooked = to;
+    if (g_cooked_by)
+        return;
+    g_cooked_by = this;
+    g_cooked    = to;
+    held_       = true;
 }
 
 InputClaim::~InputClaim()
 {
-    g_cooked = prev_;
+    if (g_cooked_by != this)
+        return;
+    g_cooked_by = nullptr;
+    g_cooked    = nullptr;
 }
 
 KeyRing *tty_raw()
@@ -64,11 +87,28 @@ Pipe *tty_cooked()
     return g_cooked;
 }
 
+u32 tty_keys_owner()
+{
+    return g_raw_pid;
+}
+
+u32 tty_screen_owner()
+{
+    return g_alt_pid;
+}
+
 // ------------------------------------------------------------ the alternate
 // screen
 
-FullScreen::FullScreen()
+FullScreen::FullScreen(u32 pid)
 {
+    // Before the snapshot, or a second claimant would save the blanked grid the
+    // first is painting and give *that* back to the shell.
+    if (g_alt) {
+        err_ = Error::Perm;
+        return;
+    }
+
     const Screen &s = screen();
     if (!s.cols || !s.rows || !screen_cells())
         return;
@@ -85,6 +125,9 @@ FullScreen::FullScreen()
     cursor_y_  = s.cursor_y;
     cursor_on_ = s.cursor_on != 0;
 
+    g_alt     = this;
+    g_alt_pid = pid;
+
     screen_cursor(false);
     screen_clear();
 }
@@ -93,6 +136,11 @@ FullScreen::~FullScreen()
 {
     if (!saved_)
         return;
+
+    if (g_alt == this) {
+        g_alt     = nullptr;
+        g_alt_pid = 0;
+    }
 
     const Screen &s = screen();
 

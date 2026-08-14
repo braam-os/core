@@ -805,7 +805,16 @@ killed process runs no destructor of its own, so a program that had taken the sc
 `^C` would otherwise leave the shell painting into a grid it does not own. Giving them back is
 politeness; the destructor is the guarantee.
 
-One claim of each per process: a second `ScreenEnter` is `Err(Perm)` rather than nesting.
+**One holder of each, system-wide, named by pid.** A second `ScreenEnter` or `KeyClaim` is
+`Err(Perm)` rather than nesting, whether it comes from the process that already holds the route or
+from another one — a parent and its child included. A claim clears its route only if it is still
+the holder, so the two may be destroyed in either order. Nesting would mean restoring a
+predecessor that has already gone, and for `ScreenEnter` it would mean snapshotting the blanked
+grid the first claimant is painting, which loses the shell's screen instead of giving it back.
+
+`ScreenBlit` is held to the same rule: from a process without the screen it is `Err(Perm)`, since
+otherwise it would paint over whichever process does hold it. `ScreenClear` is not — `clear` and
+`watch` blank the shell's own screen without ever claiming it.
 
 **Geometry rides on every key.** `KeyRead` answers with `code`, `mods`, `cols` and `rows`
 together, so a program that repaints per keystroke handles a resize without an event to subscribe
@@ -957,11 +966,6 @@ The honest closing. Each of these is absent on purpose, with the argument record
   own: once a path is absolute, `open` resolves it with the kernel's full authority. Fixing that
   needs a per-process mount view, which is a milestone's worth of work in the VFS rather than a
   line in the dispatcher.
-- **One process at a time may hold the screen, and the code does not enforce it.**
-  `ScreenEnter`'s `Err(Perm)` is per-process, and `KeyInput`/`InputClaim` restore a saved
-  predecessor and so assume they are destroyed in the order they were made. Two claimants was
-  already reachable before spawning existed; a parent and its child make it natural. The claim
-  belongs on the kernel as one pid, and is not there yet.
 - **A descriptor can be closed under a parked syscall**, for a `Body` or a `Socket`: one task
   reading while another closes the fd. The pipe ends take a counted reference for the length of
   the call and the older kinds do not.

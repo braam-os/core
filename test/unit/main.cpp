@@ -22,6 +22,7 @@ void test_fmt();
 void test_channel();
 void test_io();
 void test_screen();
+void test_tty();
 void test_text();
 void test_builtin();
 void test_procfs();
@@ -81,6 +82,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_io();
     test_screen();
     test_text(); // after screen: it round-trips through the grid
+    test_tty();  // after screen: FullScreen snapshots the grid
     test_pane();
     test_textbuf();
     test_path();

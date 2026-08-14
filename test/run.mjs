@@ -774,6 +774,22 @@ if (mode === "--kernel") {
     if (row(s, s.cursor_y) !== "$")
         fail(`less did not give the screen back: ${JSON.stringify(rows(s))}`);
 
+    // Two claimants at once, which spawning made natural and a pipeline of two
+    // pagers reaches from the prompt. The terminal has one holder: whichever
+    // stage asks second is refused, rather than snapshotting the blanked grid
+    // the first is painting and handing that back as the shell's screen.
+    s = submit("clear", 3061);
+    s = submit("less /share/doc/README | less", 3062);
+    if (!rows(s).some((line) => line.includes("q quits")))
+        fail(`neither pager took the screen: ${JSON.stringify(rows(s))}`);
+    press("q".codePointAt(0));
+    run(3063);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line === "less: no keyboard"))
+        fail(`the second claimant was not refused: ${JSON.stringify(rows(s))}`);
+    if (!row(s, s.cursor_y).endsWith("$"))
+        fail(`the screen did not come back: ${JSON.stringify(rows(s))}`);
+
     // M7, second criterion: a job is backgrounded and listed, and its finish
     // is announced at the next prompt.
     s = submit("clear", 3081);

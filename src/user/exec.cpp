@@ -1308,22 +1308,24 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                     p.alt = nullptr;
                 }
             } else if (key ? p.keys != nullptr : p.alt != nullptr) {
-                status = -i32(Error::Perm); // one claim of each, per process
+                status = -i32(Error::Perm); // this process already holds it
                 break;
             } else if (key) {
-                p.keys = heap_new<KeyInput>();
+                // Whether another process holds it is the claim's own answer,
+                // so Perm and NoMemory are told apart by the constructor.
+                p.keys = heap_new<KeyInput>(p.pid);
                 if (!p.keys || !p.keys->ok()) {
+                    status = -i32(p.keys ? p.keys->error() : Error::NoMemory);
                     heap_delete(p.keys);
                     p.keys = nullptr;
-                    status = -i32(Error::NoMemory);
                     break;
                 }
             } else {
-                p.alt = heap_new<FullScreen>();
+                p.alt = heap_new<FullScreen>(p.pid);
                 if (!p.alt || !p.alt->ok()) {
+                    status = -i32(p.alt ? p.alt->error() : Error::NoMemory);
                     heap_delete(p.alt);
-                    p.alt  = nullptr;
-                    status = -i32(Error::NoMemory);
+                    p.alt = nullptr;
                     break;
                 }
             }
@@ -1362,6 +1364,12 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
         }
 
         case Sys::ScreenBlit: {
+            // The claim is what a blit is for: a process that does not hold the
+            // screen would be painting over whichever one does.
+            if (!p.alt) {
+                status = -i32(Error::Perm);
+                break;
+            }
             usize head = SYS_BLIT_HEAD * 4;
             if (payload.size() < head) {
                 status = -i32(Error::Invalid);

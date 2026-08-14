@@ -8,8 +8,12 @@
 // The keyboard is the other way round: it is one Channel with one receiver
 // (channel.h), and while a pipeline runs that receiver is the tty pump. A
 // full-screen program therefore does not take the keyboard — it asks the pump
-// to route to it, which is what the two claims below are. Both are RAII and
-// both restore whatever was in force before, so a claim nests.
+// to route to it, which is what the two claims below are.
+//
+// Each of the three routes — raw keys, the screen, cooked bytes — has one
+// holder at a time, kernel-side. A second claim is refused with Err(Perm)
+// rather than nested, and a claim clears the route only if it is still the
+// holder. The two a process makes are named by its pid.
 #pragma once
 
 #include "io.h"
@@ -34,7 +38,7 @@ using KeyRing = Channel<Key, KEY_RING>;
 // The ring is a heap block because a KeyRing inside a coroutine frame would
 // push it past the allocator's top size class and cost a whole 64 KiB span.
 struct KeyInput {
-    KeyInput();
+    explicit KeyInput(u32 pid);
 
     KeyInput(const KeyInput &)            = delete;
     KeyInput &operator=(const KeyInput &) = delete;
@@ -43,13 +47,17 @@ struct KeyInput {
 
     bool ok() const { return ring_ != nullptr; }
 
+    // Why it was refused: Perm when another pid holds the keyboard, NoMemory
+    // when the ring would not allocate.
+    Error error() const { return err_; }
+
     // Await it directly: `Result<Key> r = co_await keys.next();`, treating
     // Err(Again) as a stray wake, the way every other reader does.
     KeyRing::Recv next() { return ring_->recv(); }
 
 private:
     KeyRing *ring_ = nullptr;
-    KeyRing *prev_ = nullptr;
+    Error err_     = Error::NoMemory;
 };
 
 // The alternate screen, as RAII: whoever holds this has the grid for as long
@@ -63,19 +71,22 @@ private:
 // because all three answer the same question — who owns the terminal while a
 // program has it.
 struct FullScreen {
-    FullScreen();
+    explicit FullScreen(u32 pid);
 
     FullScreen(const FullScreen &)            = delete;
     FullScreen &operator=(const FullScreen &) = delete;
 
     ~FullScreen();
 
-    // False when the snapshot would not allocate. The caller should give up:
-    // taking the screen without being able to give it back is worse than not
-    // running at all.
+    // False when another pid holds the screen, or when the snapshot would not
+    // allocate. The caller should give up: taking the screen without being
+    // able to give it back is worse than not running at all.
     bool ok() const { return saved_ != nullptr; }
 
+    Error error() const { return err_; }
+
 private:
+    Error err_   = Error::NoMemory;
     Cell *saved_ = nullptr;
     u32 cols_ = 0, rows_ = 0;
     u32 cursor_x_ = 0, cursor_y_ = 0;
@@ -94,10 +105,19 @@ struct InputClaim {
 
     ~InputClaim();
 
+    // False when the route is already claimed. There is no pid here: the only
+    // claimant is `fg`, a builtin, which is a pipeline stage rather than a
+    // process, so the claim itself is the owner.
+    bool ok() const { return held_; }
+
 private:
-    Pipe *prev_ = nullptr;
+    bool held_ = false;
 };
 
 // What the pump consults, in this order. Both are null when nothing is claimed.
 KeyRing *tty_raw();
 Pipe *tty_cooked();
+
+// Who holds each of the two claims a process makes, or 0 when it is free.
+u32 tty_keys_owner();
+u32 tty_screen_owner();

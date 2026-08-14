@@ -61,7 +61,16 @@ Task<i32> builtin_fg(Args args, Stdio io)
     if (!t)
         co_return 1;
 
+    // One holder of the route, so a second `fg` is refused rather than left to
+    // restore a predecessor that may already be gone. The job is disowned
+    // rather than killed: it was running in the background before we asked, and
+    // being refused is no reason to end it.
     InputClaim claim(jobs_input(id));
+    if (!claim.ok()) {
+        adopted.killed = false;
+        co_await io.err.write("fg: the terminal is taken\n");
+        co_return 1;
+    }
 
     Result<i32> r = co_await t;
 

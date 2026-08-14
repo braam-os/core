@@ -30,6 +30,7 @@ add_executable(tests
     unit/test_task.cpp
     unit/test_text.cpp
     unit/test_textbuf.cpp
+    unit/test_tty.cpp
     unit/test_vec.cpp
     unit/test_vfs.cpp)
 

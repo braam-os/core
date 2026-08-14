@@ -247,6 +247,13 @@ Further constraints that are easy to violate by habit:
   claimant. And since `CancelState::waiting` is one slot, no task can be parked on a pipe and on
   the keyboard at once — which is why `less` reads its input to the end before it paints.
 
+  Each of the three routes has **one holder, and a second claim is `Err(Perm)` rather than a
+  nested one**: the two a process makes are named by its pid, `InputClaim` by the claim object,
+  since `fg` is a builtin with no pid. A claim clears its route only if it is still the holder, so
+  a parent and its child may die in either order. Nesting meant restoring a predecessor that may
+  already be gone — a freed key ring, a dead job's pipe, or for `FullScreen` a snapshot of the
+  blank grid the first claimant was painting.
+
   The same rule is why a `Sys::Spawn` **moves** a descriptor into the child rather than
   duplicating it: one end, one owner, so two blocked senders cannot be arranged from userland.
   Within a process, a second concurrent use of a pipe end is `Err(Perm)` for the same reason —
@@ -361,18 +368,19 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   milestone's worth of work in the VFS. `cd` is still a builtin because what it moves is the
   *shell's* cwd, which is what a typed command inherits; `/proc/cwd` is that one, and a process's
   own is a line in its `/proc/<pid>`.
-- **The screen claim is not enforced the way it is documented.** `ScreenEnter`'s `Err(Perm)` is
-  per-process rather than global, and `KeyInput`/`InputClaim` restore a saved predecessor and so
-  assume LIFO destruction. Two claimants was already reachable; a parent and its child make it
-  natural. The claim wants to be one pid on the kernel, and is not one yet.
+- **Ordinary output is not held to the screen claim.** `ScreenBlit` is refused from a process
+  that does not hold the screen, but a background job still writes to the grid through `stdout`
+  and `ScreenClear` is open to anyone — `clear` and `watch` call it without claiming. Gating that
+  is per-job output routing, not a claim.
 - **A `Body` or a `Socket` can be closed under a parked read** by another task of the same
   process. The pipe ends take a counted reference for the length of the call; the older kinds do
   not.
 - **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection was
   considered and not built.
 - **`Pane` is a primitive, not a multiplexer.** Two jobs visible at once needs per-pane output
-  routing and a window manager in the shell. One process at a time may hold the screen: a second
-  `ScreenEnter` is refused with `Err(Perm)` rather than left to nest politely.
+  routing and a window manager in the shell. One process at a time holds the screen — a second
+  `ScreenEnter` is `Err(Perm)` rather than nesting politely — and giving it back to a parent when
+  a child is done is the window manager's problem, not the claim's.
 - **Every command costs an instantiation** — roughly a millisecond, plus reading the image out of
   `BundleFs`, where an applet cost nothing. The host caches the compiled `Module` by path, so the
   bytes still cross the VFS on every `exec` and only the compile is saved.

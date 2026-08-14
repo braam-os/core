@@ -331,6 +331,15 @@ pump**: `KeyInput` for raw keys with no echo, `InputClaim` to send the cooked by
 job's stdin, which is what `fg` needs. `^C` is never routed; it cancels the pipeline whatever
 is claimed, so a program that has taken the screen and stopped answering stays killable.
 
+**Each of the three routes — raw keys, the screen, cooked bytes — has one holder at a time, on
+the kernel.** A second claim is `Err(Perm)`; it does not nest. The two a process makes are named
+by its pid, and a claim clears its route only if it is still the holder, so a parent and a child
+may die in either order. Nesting would mean restoring a predecessor that has already gone: a
+freed key ring for `KeyInput`, a dead job's pipe for `InputClaim`, and for `FullScreen` a
+snapshot of the blanked grid the first claimant was painting — the shell's screen thrown away
+rather than given back. Painting is held to the same rule: a `ScreenBlit` from a process that
+does not hold the screen is refused (§4.3).
+
 ### 3.6 Kernel objects
 
 - **`Channel<T>`** — an async MPSC queue with bounded capacity: `co_await ch.recv()` and

@@ -7,6 +7,70 @@ of the two needs amending.
 
 ---
 
+## One claimant, named by pid
+
+The terminal's three routes through the tty pump — raw keys, the screen, cooked bytes — now have
+one holder each, on the kernel. A second claim is `Err(Perm)` rather than a nested one, a claim
+clears its route only if it is still the holder, and the two a process makes carry its pid. This
+is the change the previous section left undone, and it changed no ABI: the same five terminal
+operations, the same wire format, and nothing in `src/cmd/`, because `less` and `edit` already
+treat a refused claim as fatal and say `less: no keyboard`.
+
+**Nesting was a stack with no owner.** `KeyInput` saved the predecessor's ring and `InputClaim`
+the predecessor's pipe, so both were correct exactly as long as claims were destroyed in the order
+they were made. Nothing enforced that and nothing could: a claim's lifetime is its process's
+kernel-side record, and two processes die in whichever order they die. Out of order, `~KeyInput`
+restored a ring its owner had already freed and the pump `try_send`s keystrokes into it;
+`~InputClaim` had no guard at all and restored a pipe belonging to a job that had finished. Both
+are use-after-free, reachable from the prompt with `fg %1 &` twice.
+
+`FullScreen` was worse for being subtler. It saved no predecessor because it saves the *cells*, so
+a second claimant snapshotted the blank grid the first had just cleared and handed *that* back on
+the way out. The shell's screen was not corrupted so much as quietly replaced by nothing — and
+`ScreenEnter`'s `Err(Perm)` did not catch it, because it tested the claiming process's own record
+rather than the route.
+
+**Refusal rather than a queue or a stack.** The alternative was to make the claim a real stack
+with owners, so a child could take the screen and give it back to its parent. That is a window
+manager's problem with a window manager's answer, and `Pane` is a primitive rather than a
+multiplexer for the same reason (Concept.md §3.5). Refusal is the answer that costs one branch and
+cannot be got wrong: whoever asks second is told no, and finds out by the same `Err(Perm)` a
+program already handles.
+
+**The pid is on the two a process makes, and not on the third.** `KeyInput` and `FullScreen` are
+built by the `Sys::KeyClaim`/`Sys::ScreenEnter` arm of `exec.cpp`, which has the pid in hand on
+`Proc`. `InputClaim`'s only claimant is `fg`, a builtin — a pipeline stage rather than a process,
+with no `Proc` and no pid it can name itself with, since the scheduler's ready queue holds bare
+coroutine handles and there is no `sched_current()` to add cheaply. So the cooked route is owned by
+the claim object instead: same rule, same refusal, an identity that is a pointer rather than a
+number. A refused `fg` disowns rather than kills the job it was about to adopt, because the job was
+running before it asked and being told no is not a reason to end it.
+
+**`ScreenBlit` is checked; `ScreenClear` is not.** A blit is what the claim exists for, so a blit
+from a process without the screen is `Err(Perm)` — it would be painting over whichever process
+does hold it. `ScreenClear` stays open because `clear` and `watch` blank the shell's own screen
+without ever claiming it, and refusing them would be a change to two programs to enforce a rule
+about a third. Ordinary output is the same story a level down: a background job still writes to
+the grid through `stdout`, and gating *that* is output routing, not a claim.
+
+**The release stays in `~Proc`.** Moving it into `exec_process`'s `End`, where a process
+demonstrably dies, would give the screen back promptly — and would free a `KeyRing` with a
+cancelled `KeyRead` server still parked on it, since `End` queues the cancellation rather than
+unwinding it. So the release still lags a process's death by the tick or two the last server takes
+to unwind, exactly as it did before. What changed is what that window costs: a claim arriving
+inside it is refused, where before it was granted and corrupted the grid.
+
+Two tests, because the two halves are testable in different places. `test/unit/test_tty.cpp`
+drives the claim types directly — the in-wasm tests cannot run a program, and it builds the
+out-of-order case on the heap because a scope cannot express it. `test/run.mjs` covers the
+syscall path with `less /share/doc/README | less`, two pagers in one pipeline, which is how a
+second claimant is reached from the prompt without writing a program for it. It asserts that one
+of them took the screen, that the other said `less: no keyboard`, and that the shell's screen
+came back — not *which* stage won, since that is scheduler order rather than contract. Before the
+change the second claimant snapshotted the blank grid and the prompt came back to nothing.
+
+---
+
 ## Processes that spawn processes
 
 Five operations — `chdir`, `pipe`, `spawn`, `wait`, `kill` — take the §4.3 table from
@@ -97,11 +161,9 @@ stages. §3.6's structured concurrency, put back by hand a second time.
 Two things were found while doing it and deliberately not folded in, because each is its own
 change and neither is made worse by this one.
 
-`KeyInput` and `InputClaim` restore a saved predecessor and so assume they are destroyed in the
-order they were made, and `ScreenEnter`'s `Err(Perm)` is per-process rather than global — so
-CLAUDE.md's "one process at a time may hold the screen" is not what the code enforces. Two
-claimants was already reachable; a parent and a child make it natural. The claim wants to be one
-pid on the kernel.
+The terminal claim assumed it would be destroyed in the order it was made, and `ScreenEnter`'s
+`Err(Perm)` was per-process rather than global — a parent and a child made two claimants natural
+where they had only been reachable. That is the section above, done since.
 
 And a `Body` or a `Socket` can still have its descriptor closed by one task while another is
 parked reading it. The pipe ends take a counted reference for the length of the call; the older
@@ -715,8 +777,10 @@ taken the entire screen and stopped answering must stay killable by the key that
 everything, and that is M4's acceptance criterion as much as it is a safety rule. `edit` quits
 with `^Q` for the same reason, and ^C throws the buffer away.
 
-The claim is RAII and restores whatever was in force before, so claims nest — which is what
-lets `edit` run as a stage of a pipeline whose pump is already routing for something else.
+The claim is RAII, which is what gives the route back when a claimant is killed rather than
+asking it to be polite. M7 made it restore whatever was in force before, on the reasoning that
+claims should nest; that was wrong, and "One claimant, named by pid" above says why and replaces
+it with a single holder that refuses the second.
 
 ### The single waiting slot decides the shape of `less` and of `fg`
 
