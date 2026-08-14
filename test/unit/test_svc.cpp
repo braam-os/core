@@ -20,6 +20,8 @@ WallClock clock_read;
 Error failure;
 bool heard_ping;
 bool answered;
+bool recv_closed;
+usize live_dropped;
 
 Task<i32> ask_clock()
 {
@@ -68,6 +70,30 @@ Task<i32> ask_socket()
     co_return 0;
 }
 
+// What a Close under a parked read rests on: the host lets go at once, and the
+// slot stays reserved until the handle does. A slot freed with the object would
+// be handed straight back out, and a request already issued names it.
+Task<i32> ask_dropped_socket()
+{
+    Result<WebSocket> open = Err(Error::NoMemory);
+    if (Task<Result<WebSocket>> t = ws_open("ws://loop"))
+        open = co_await t;
+    if (open.is_err()) {
+        failure = open.error();
+        co_return 1;
+    }
+
+    open.value().sock.drop();
+    live_dropped = jsref_live();
+
+    if (Task<Result<String>> t = ws_recv(open.value())) {
+        Result<String> got = co_await t;
+        recv_closed        = got.is_err() && got.error() == Error::Closed;
+    }
+    answered = true;
+    co_return 0;
+}
+
 } // namespace
 
 void test_svc()
@@ -95,6 +121,21 @@ void test_svc()
     CHECK_EQ(sched_tick(0), -1);
     CHECK(answered);
     CHECK(heard_ping);
+    CHECK_EQ(jsref_live(), live);
+    CHECK_EQ(host_orphans(), 0);
+
+    // Dropped but not released: the socket answers a read with Err(Closed),
+    // which is what a reader parked on a closed descriptor unwinds on, and the
+    // slot is still counted until the handle goes.
+    sched_reset();
+    answered     = false;
+    recv_closed  = false;
+    live_dropped = 0;
+    CHECK(sched_spawn(ask_dropped_socket()) != 0);
+    CHECK_EQ(sched_tick(0), -1);
+    CHECK(answered);
+    CHECK(recv_closed);
+    CHECK_EQ(live_dropped, live + 1);
     CHECK_EQ(jsref_live(), live);
     CHECK_EQ(host_orphans(), 0);
 

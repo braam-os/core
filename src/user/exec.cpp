@@ -18,15 +18,8 @@ namespace {
 // A pipe between two processes: the shell's Pipe on the heap and refcounted,
 // because its two ends are two descriptors that close in either order and may
 // by then be held by two different processes.
-//
-// `busy_r` and `busy_w` are the tripwire Channel's rules need. A second blocked
-// sender panics and a second suspended receiver is displaced silently
-// (channel.h), and either would be a user program reaching a kernel invariant,
-// so a second concurrent user of an end is refused instead.
 struct ProcPipe {
-    u32 refs    = 1;
-    bool busy_r = false;
-    bool busy_w = false;
+    u32 refs = 1;
     Pipe ch;
 };
 
@@ -42,13 +35,21 @@ void pipe_release(ProcPipe *q)
 struct PipeEnd {
     ~PipeEnd()
     {
+        shut();
+        if (q)
+            pipe_release(q);
+    }
+
+    // Hangs the end up without letting go of the channel, so a Close still
+    // gives the other end its end of input while a parked call finishes.
+    void shut()
+    {
         if (!q)
             return;
         if (writer)
             q->ch.close();
         else
             q->ch.hangup();
-        pipe_release(q);
     }
 
     ProcPipe *q = nullptr;
@@ -70,7 +71,38 @@ struct Handle {
     Handle(const Handle &)            = delete;
     Handle &operator=(const Handle &) = delete;
 
+    // Closes what is behind the descriptor, leaving the block for whoever is
+    // still pointing at it. Separate from ~Handle because a Close must reach
+    // the host now, while the block and its externref slot wait.
+    void shut()
+    {
+        switch (kind) {
+        case Kind::File:
+            file.reset();
+            break;
+        case Kind::Body:
+            res.body.drop();
+            break;
+        case Kind::Socket:
+            sock.sock.drop();
+            break;
+        case Kind::PickSet:
+            pick.set.drop();
+            break;
+        case Kind::PickFile:
+            break; // it owns nothing; its set is a descriptor of its own
+        case Kind::PipeRead:
+        case Kind::PipeWrite:
+            pipe.shut();
+            break;
+        }
+    }
+
     Kind kind;
+    bool busy_r = false; // one reader and one writer at a time (HandleBusy)
+    bool busy_w = false;
+    u32 refs    = 1; // the table's, plus one for each syscall in flight
+
     FileIo file;      // File
     HttpResponse res; // Body
     WebSocket sock;   // Socket
@@ -81,33 +113,50 @@ struct Handle {
     u64 off  = 0;     // Body and PickFile: how far it has been read
 };
 
+void handle_release(Handle *h)
+{
+    if (h && --h->refs == 0)
+        heap_delete(h);
+}
+
 // A counted reference for the length of one syscall: a read that parks must not
-// have its channel freed under it by a Close in another task of the process.
-struct PipeRef {
-    explicit PipeRef(ProcPipe *p) : q(p) { q->refs++; }
-
-    PipeRef(const PipeRef &)            = delete;
-    PipeRef &operator=(const PipeRef &) = delete;
-
-    ~PipeRef() { pipe_release(q); }
-
-    ProcPipe *q;
-};
-
-// Arms the one-user guard for the length of a syscall, and disarms it however
-// the syscall leaves — including a frame destroyed while parked.
-struct PipeBusy {
-    explicit PipeBusy(ProcPipe *p, bool w) : q(p), writer(w)
+// have its descriptor freed under it by a Close in another task of the process.
+// Null-tolerant, for the set a PickFile reads through.
+struct HandleRef {
+    explicit HandleRef(Handle *q) : h(q)
     {
-        (writer ? q->busy_w : q->busy_r) = true;
+        if (h)
+            h->refs++;
     }
 
-    PipeBusy(const PipeBusy &)            = delete;
-    PipeBusy &operator=(const PipeBusy &) = delete;
+    HandleRef(const HandleRef &)            = delete;
+    HandleRef &operator=(const HandleRef &) = delete;
 
-    ~PipeBusy() { (writer ? q->busy_w : q->busy_r) = false; }
+    ~HandleRef() { handle_release(h); }
 
-    ProcPipe *q;
+    Handle *h;
+};
+
+// Arms the one-user-per-direction guard for the length of a syscall, and
+// disarms it however the syscall leaves — including a frame destroyed while
+// parked. On a pipe end it is the tripwire Channel's rules need: a second
+// blocked sender panics and a second suspended receiver is displaced silently
+// (channel.h), either of which would be a user program reaching a kernel
+// invariant. On the host kinds the reason is weaker but real — svc_blob's
+// sized-twice reply is not re-entrant per object, and `off` would advance
+// twice — so a second concurrent user is refused rather than raced.
+struct HandleBusy {
+    explicit HandleBusy(Handle *q, bool w) : h(q), writer(w)
+    {
+        (writer ? h->busy_w : h->busy_r) = true;
+    }
+
+    HandleBusy(const HandleBusy &)            = delete;
+    HandleBusy &operator=(const HandleBusy &) = delete;
+
+    ~HandleBusy() { (writer ? h->busy_w : h->busy_r) = false; }
+
+    Handle *h;
     bool writer;
 };
 
@@ -161,7 +210,7 @@ struct Proc {
             heap_delete(c);
         heap_delete(staging);
         for (Handle *h : fds)
-            heap_delete(h);
+            handle_release(h);
         // Last, because a File handle's ~FileIo closes through the VFS and a
         // redirected one lives in the same block as the pipes.
         io.release();
@@ -366,7 +415,7 @@ struct Spawned {
     ~Spawned()
     {
         for (Handle *h : moved)
-            heap_delete(h);
+            handle_release(h);
         parent_io.release();
     }
 
@@ -520,8 +569,14 @@ Task<i32> proc_spawn_child(Proc &p, Str payload)
     if (s->exe.builtin)
         co_return -i32(Error::Perm); // a builtin is the shell's, not a program
 
-    // From here to sched_spawn there is no await, which is what makes taking
-    // the handles atomic against another task of this process closing one.
+    // From here to the end there is no await, which is what makes the take
+    // atomic against another task of this process closing a descriptor.
+    //
+    // Validated first and taken last, so every refusal below leaves the
+    // parent's table as it found it. The duplicate check above is what keeps
+    // that safe: two slots naming one descriptor would validate twice and be
+    // committed into two moved[] entries, which ~Spawned would release twice.
+    Handle *take[3] = {};
     for (usize i = 0; i < 3; i++) {
         if (want[i] < SYS_FD_MIN)
             continue;
@@ -534,24 +589,23 @@ Task<i32> proc_spawn_child(Proc &p, Str payload)
         Handle::Kind want_kind = i == 0 ? Handle::Kind::PipeRead : Handle::Kind::PipeWrite;
         if (h->kind != Handle::Kind::File && h->kind != want_kind)
             co_return -i32(Error::Perm);
-        p.fds[want[i] - SYS_FD_MIN] = nullptr;
-        s->moved[i]                 = h;
+        // Nothing this process is inside a syscall on: moving it would leave a
+        // parked reader of the parent's on an end the child now owns, which is
+        // the second receiver the move exists to make unrepresentable.
+        if (h->refs > 1)
+            co_return -i32(Error::Perm);
+        take[i] = h;
     }
 
-    s->parent_io = p.io;
-    s->parent_io.retain();
-    s->io.hold  = spawn_hold;
-    s->io.owner = s;
-    s->io.in    = want[0] == SYS_STDIN ? p.io.in : handle_source(*s->moved[0]);
-    s->io.out   = want[1] == SYS_STDOUT   ? p.io.out
-                  : want[1] == SYS_STDERR ? p.io.err
-                                          : handle_sink(*s->moved[1]);
-    s->io.err   = want[2] == SYS_STDOUT   ? p.io.out
-                  : want[2] == SYS_STDERR ? p.io.err
-                                          : handle_sink(*s->moved[2]);
+    // Room for the child's entry before the spawn, so the push below cannot
+    // fail once there is a pid to record.
+    if (!p.children.reserve(p.children.size() + 1))
+        co_return -i32(Error::NoMemory);
 
     // The scheduler's name is a view into the child's own word store, which
     // outlives the task holding it — the same contract a pipeline stage has.
+    // The task is lazy and only queued here, so its stdio is built below,
+    // before anything can resume it.
     u32 pid = sched_spawn(spawn_run(SpawnRef(s)), s->words[0]);
     if (!pid)
         co_return -i32(Error::NoMemory);
@@ -568,6 +622,25 @@ Task<i32> proc_spawn_child(Proc &p, Str payload)
         sched_cancel(pid);
         co_return -i32(Error::NoMemory);
     }
+
+    for (usize i = 0; i < 3; i++) {
+        if (!take[i])
+            continue;
+        p.fds[want[i] - SYS_FD_MIN] = nullptr;
+        s->moved[i]                 = take[i];
+    }
+
+    s->parent_io = p.io;
+    s->parent_io.retain();
+    s->io.hold  = spawn_hold;
+    s->io.owner = s;
+    s->io.in    = want[0] == SYS_STDIN ? p.io.in : handle_source(*s->moved[0]);
+    s->io.out   = want[1] == SYS_STDOUT   ? p.io.out
+                  : want[1] == SYS_STDERR ? p.io.err
+                                          : handle_sink(*s->moved[1]);
+    s->io.err   = want[2] == SYS_STDOUT   ? p.io.out
+                  : want[2] == SYS_STDERR ? p.io.err
+                                          : handle_sink(*s->moved[2]);
     co_return i32(pid);
 }
 
@@ -718,6 +791,12 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 status = -i32(Error::Invalid);
                 break;
             }
+            if (h->busy_w) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            HandleRef hold(h);
+            HandleBusy busy(h, true);
 
             // Writing to a socket sends a message; there is nothing else a
             // descriptor of that kind could mean.
@@ -734,13 +813,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             // stdout is when stdout *is* a pipe — the shell's own stages have
             // been doing it since M4.
             if (h->kind == Handle::Kind::PipeWrite) {
-                if (h->pipe.q->busy_w) {
-                    status = -i32(Error::Perm);
-                    break;
-                }
-                PipeRef hold(h->pipe.q);
-                PipeBusy busy(h->pipe.q, true);
-                Stream out      = pipe_sink(hold.q->ch);
+                Stream out      = pipe_sink(h->pipe.q->ch);
                 Result<usize> r = Err(Error::Again);
                 while (r.is_err() && r.error() == Error::Again)
                     r = co_await out.write(payload);
@@ -787,18 +860,18 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 status = -i32(Error::Invalid);
                 break;
             }
+            if (h->busy_r) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            HandleRef hold(h);
+            HandleBusy busy(h, false);
 
             // The read end of a pipe. Err(Closed) is status 0 here as it is
             // everywhere else: the writer's end went, and that is an end of
             // input rather than a failure.
             if (h->kind == Handle::Kind::PipeRead) {
-                if (h->pipe.q->busy_r) {
-                    status = -i32(Error::Perm);
-                    break;
-                }
-                PipeRef hold(h->pipe.q);
-                PipeBusy busy(h->pipe.q, false);
-                Source in        = pipe_source(hold.q->ch);
+                Source in        = pipe_source(h->pipe.q->ch);
                 Result<String> r = Err(Error::Again);
                 while (r.is_err() && r.error() == Error::Again)
                     r = co_await in.read();
@@ -817,6 +890,12 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             // fetched body, a socket and a picked file all arrive through the
             // operation a file already had. An empty chunk is the end of it.
             if (h->kind != Handle::Kind::File) {
+                // The set a PickFile reads through is a second descriptor, and
+                // another task may close that one instead. Resolved before the
+                // await, so a set closed first is still Err(Invalid).
+                Handle *set = h->kind == Handle::Kind::PickFile ? proc_handle(p, h->set) : nullptr;
+                HandleRef keep(set);
+
                 Result<String> r = Err(Error::Perm);
                 if (h->kind == Handle::Kind::Body) {
                     if (Task<Result<String>> t = http_read(h->res))
@@ -825,7 +904,6 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                     if (Task<Result<String>> t = ws_recv(h->sock))
                         r = co_await t;
                 } else if (h->kind == Handle::Kind::PickFile) {
-                    Handle *set = proc_handle(p, h->set);
                     if (!set || set->kind != Handle::Kind::PickSet)
                         r = Err(Error::Invalid);
                     else if (Task<Result<String>> t = pick_read(set->pick, h->ix, h->off))
@@ -890,7 +968,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             h->file.fd = r.value();
             status     = proc_bind(p, h);
             if (status < 0) {
-                heap_delete(h); // closes it
+                handle_release(h); // closes it
                 status = -i32(Error::NoMemory);
             }
             break;
@@ -902,9 +980,13 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 status = -i32(Error::Invalid);
                 break;
             }
-            heap_delete(h);
+            // The number is free at once, and what the descriptor is on is shut
+            // at once — that is what answers a read parked on it. Only the
+            // block, and the externref slot in it, waits for the last call.
             p.fds[fd - SYS_FD_MIN] = nullptr;
-            status                 = 0;
+            h->shut();
+            handle_release(h);
+            status = 0;
             break;
         }
 
@@ -1131,7 +1213,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
 
             status = proc_bind(p, h);
             if (status < 0 || !ok) {
-                heap_delete(h);
+                handle_release(h);
                 status = -i32(Error::NoMemory);
                 break;
             }
@@ -1162,7 +1244,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             h->sock = move(r.value());
             status  = proc_bind(p, h);
             if (status < 0) {
-                heap_delete(h);
+                handle_release(h);
                 status = -i32(Error::NoMemory);
             }
             break;
@@ -1218,10 +1300,11 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             h->pick     = move(r.value());
             status      = proc_bind(p, h);
             if (status < 0) {
-                heap_delete(h);
+                handle_release(h);
                 status = -i32(Error::NoMemory);
                 break;
             }
+            HandleRef hold(h); // the loop below awaits, and h is now closeable
 
             // The names come back with the set, since a program needs every
             // one of them before it opens any: one round trip, not N.
@@ -1268,7 +1351,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             h->ix  = ix;
             status = proc_bind(p, h);
             if (status < 0) {
-                heap_delete(h);
+                handle_release(h);
                 status = -i32(Error::NoMemory);
             }
             break;
@@ -1409,7 +1492,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             Handle *r   = q ? heap_new<Handle>(Handle::Kind::PipeRead) : nullptr;
             Handle *w   = r ? heap_new<Handle>(Handle::Kind::PipeWrite) : nullptr;
             if (!w) {
-                heap_delete(r);
+                handle_release(r);
                 heap_delete(q);
                 status = -i32(Error::NoMemory);
                 break;
@@ -1424,8 +1507,8 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             if (wfd < 0) {
                 if (rfd >= 0)
                     p.fds[usize(rfd) - SYS_FD_MIN] = nullptr;
-                heap_delete(r);
-                heap_delete(w);
+                handle_release(r);
+                handle_release(w);
                 status = -i32(Error::NoMemory);
                 break;
             }

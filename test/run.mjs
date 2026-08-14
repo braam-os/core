@@ -640,7 +640,26 @@ if (mode === "--kernel") {
     if (!net.sockets[1].closed)
         fail("chat did not drop its socket on the way out");
 
-
+    // A descriptor closed under a parked read, which is the one sequence a
+    // program can arrange: chat's receiver is parked on the socket while the
+    // root task reads what is typed, and end of input closes that socket. The
+    // close is served while the read is parked, because the root task waits for
+    // its reply. What comes back is chat's own status, not a crash.
+    s = submit("clear", 3034);
+    type("chat ws://loop me");
+    press(KEY.ENTER);
+    run(3035);
+    if (net.sockets.length !== 3)
+        fail(`chat opened ${net.sockets.length} sockets, expected 3`);
+    s = submit("still here", 3036); // the receiver parks again after this
+    press("d".codePointAt(0), CTRL);
+    if (run(3037) !== -1)
+        fail("end of input left the chat receiver scheduled");
+    s = descriptor(addr);
+    if (!net.sockets[2].closed)
+        fail("chat did not close its socket at end of input");
+    if (row(s, s.cursor_y) !== "$")
+        fail(`^D on chat left ${JSON.stringify(rows(s))}, expected a bare prompt`);
 
     // M6, third criterion: /mnt/import takes what the picker hands over, and
     // export sends a file back out through the browser.

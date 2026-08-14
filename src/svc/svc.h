@@ -61,7 +61,19 @@ struct JsHandle {
     JsHandle(JsHandle &&)            = default;
     JsHandle &operator=(JsHandle &&) = default;
 
-    ~JsHandle() { svc_drop(ref_.slot()); }
+    ~JsHandle() { drop(); }
+
+    // Lets go of the object without freeing the slot. A Close under a parked
+    // call has to reach the host at once, but a request already issued names
+    // the slot and svc_blob may re-issue it, so the slot stays reserved until
+    // the last holder is gone.
+    void drop()
+    {
+        if (!dropped_) {
+            svc_drop(ref_.slot());
+            dropped_ = true;
+        }
+    }
 
     bool ok() const { return ref_.ok(); }
 
@@ -69,6 +81,7 @@ struct JsHandle {
 
 private:
     JsRef ref_;
+    bool dropped_ = false;
 };
 
 struct WallClock {

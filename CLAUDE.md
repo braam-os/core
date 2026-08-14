@@ -255,9 +255,15 @@ Further constraints that are easy to violate by habit:
   blank grid the first claimant was painting.
 
   The same rule is why a `Sys::Spawn` **moves** a descriptor into the child rather than
-  duplicating it: one end, one owner, so two blocked senders cannot be arranged from userland.
-  Within a process, a second concurrent use of a pipe end is `Err(Perm)` for the same reason —
-  `Channel::park_sender` panics, and a second receiver is displaced silently, which is worse.
+  duplicating it: one end, one owner, so two blocked senders cannot be arranged from userland —
+  and why one a syscall of the parent is parked on cannot be moved at all. Within a process, a
+  second concurrent use of a *descriptor* in the same direction is `Err(Perm)`, for two different
+  reasons: on a pipe end `Channel::park_sender` panics and a second receiver is displaced
+  silently, and on the host kinds `svc_blob`'s sized-twice reply is not re-entrant per object.
+- **A descriptor is held for the length of a syscall.** `Handle` is refcounted, so `Close` frees
+  the number and *shuts* what is behind it at once — that is what answers a parked read — while
+  the block and its externref slot wait for the last call. The slot must not come back before
+  then: `jsref_release` recycles it, and `HostCall::issue()` re-reads it on the second attempt.
 - **Every awaiter deregisters in its destructor.** `sched_unwait` from `~Awaiter` is what makes
   destroying a suspended frame safe rather than a dangling `Waiter *` in the wake table. An
   awaitable that parks and has no destructor is a use-after-free waiting to happen.
@@ -372,9 +378,6 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   that does not hold the screen, but a background job still writes to the grid through `stdout`
   and `ScreenClear` is open to anyone — `clear` and `watch` call it without claiming. Gating that
   is per-job output routing, not a claim.
-- **A `Body` or a `Socket` can be closed under a parked read** by another task of the same
-  process. The pipe ends take a counted reference for the length of the call; the older kinds do
-  not.
 - **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection was
   considered and not built.
 - **`Pane` is a primitive, not a multiplexer.** Two jobs visible at once needs per-pane output

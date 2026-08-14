@@ -7,6 +7,99 @@ of the two needs amending.
 
 ---
 
+## A descriptor is held for the length of a syscall
+
+The gap the previous change left open — a `Body` or a `Socket` closed by one task while another
+is parked reading it — is closed, and closed for every kind at once rather than for the two the
+note named. The rule is the one the pipe ends already had, moved up a level:
+
+> A `Handle` is born with one reference, held by the descriptor table. A syscall performed on it
+> takes one more for the length of the call. `Close` frees the number and shuts what is behind the
+> descriptor **at once**; the block, and the externref slot in it, goes when the last reference
+> does.
+
+Nothing about the wire moved: no wasm ABI, no §4.3 operation, no `PROC_ABI`, and no JavaScript.
+
+**It was worse than a stale write.** `h->off += r.value().size()` through a freed block was the
+visible half, and `proc_bind` reuses a freed slot before it grows the table, so a `Close`+`Open`
+pair under a parked read could land that write on a live descriptor's offset. The half that
+decided the shape of the fix is one level down. `~Handle` reaches `~JsHandle`, which tells the
+host to let go, and *then* `~JsRef`, which nulls the table entry and pushes the slot onto a LIFO
+free list — so the next `ws_open` or `fetch` anywhere in the system takes that slot straight back.
+Meanwhile `HostCall::issue()` re-reads `jsref_get` on **every** attempt, and `svc_blob` issues
+twice whenever the reply does not fit in 512 bytes, which is the path `ws_recv` and `pick_name`
+take for anything long. The window between the first attempt suspending and the second issuing is
+exactly where another task's `Close` runs, so a parked socket read could be re-issued against
+another process's socket. That is why deferring the free was not enough on its own and the slot
+had to stay reserved.
+
+**Shutting is therefore separate from freeing**, and that separation is load bearing in the other
+direction too. `Close` on a pipe end must still `close()`/`hangup()` at once, because that is what
+wakes the other end; deferring it to the last reference would have left a reader parked for ever
+on a pipe whose writer had just gone. So `Handle::shut()` does what the destructor used to do —
+`FileIo::reset`, `JsHandle::drop`, `PipeEnd::shut` — and the destructor now only releases. A
+parked call sees the end it should: a dropped socket answers `Err(Closed)`, a cancelled body an
+empty chunk, a hung-up pipe end of input, all of which were already status 0 on this wire.
+`JsHandle::drop()` is the new seam, and it is idempotent because the destructor still calls it.
+
+**`PickFile` was missing from the recorded gap** and had the hazard twice: it shares the `off`
+write, and it reads through a *second* descriptor. Resolving the set by number rather than by
+pointer was already deliberate — closing the set first should be `Err(Invalid)` at the next read —
+so the lookup stays where it was and only the reference is new. A set closed *before* a read is
+still refused; a set closed *during* one is held to the end of it.
+
+**The busy guard came along, and its reason is not the pipes' reason.** `busy_r`/`busy_w` moved
+off `ProcPipe` onto `Handle`, so one reader and one writer at a time is now the rule for every
+kind. On a pipe end that is a kernel invariant: `Channel` panics on a second blocked sender and
+displaces a second suspended receiver silently. On the host kinds nothing panics — two outstanding
+calls against one slot are well formed — and the honest statement is weaker: `svc_blob`'s
+sized-twice reply is not re-entrant per object, so a second reader consumes the message the first
+sized itself for and the first exhausts its two attempts into `Err(Io)`; and `off` would advance
+twice. A defined refusal beats a race a program cannot avoid other than by not running it. The
+guard is per *direction* and had to be: a `Socket` is one `Handle` serving both, and `chat`'s
+receiver reads it while the root task writes it, so a `refs > 1` test would have broken `chat` on
+the first message typed.
+
+**Two refusals were added to `Sys::Spawn`.** A descriptor a syscall of the parent is inside of
+cannot be moved into a child: refcounting makes that case memory-safe without making it correct,
+since a parked reader in the parent plus the child's stdio is the second receiver the move exists
+to make unrepresentable. And the take is now all-or-nothing.
+
+**The take, and why the commit moved to the end.** The old loop nulled the parent's slots as it
+went, so a refusal on the second or third left the first already moved into a `Spawned` about to
+be destroyed — the parent silently lost a descriptor on a spawn that failed. It was reachable with
+two verdicts already and the new one made three. The fix is a validate pass where the loop was and
+a commit pass at the very end of the function, past `sched_spawn` and past the child's entry being
+recorded, so every failure leaves the parent's table exactly as it found it. That works because
+`sched_spawn` only *queues* the task — a `Task` is lazy, which the surrounding code already relied
+on when it assigned `s->pid` after the spawn — and because there is no await anywhere from the
+validate pass to the end, so nothing can resume the child in between. A restore guard was the
+obvious alternative and is worse: it would hand a descriptor back to the parent while a cancelled
+child job still named it through its stdio, which is the two-owners case this change is otherwise
+closing. `p.children.reserve` before the spawn is what removes the one failure that would
+otherwise have sat between the two passes.
+
+The duplicate-descriptor check at the top of the syscall is now load bearing in a way it was not:
+before, two slots naming one descriptor were refused as a side effect of the nulling. After the
+split they would validate twice and be committed into two `moved[]` entries, which `~Spawned`
+would release twice, so the up-front check is the only thing refusing them and says so.
+
+**What the tests pin.** The unit case is the one that fails without the fix: a socket the host has
+been told to let go of still answers a read, and its slot is still counted until the handle goes.
+The `chat` case is a characterisation — end of input now closes the connection in the program
+rather than leaving it to teardown, which is a better program and also the one sequence a shipped
+binary can arrange, since the receiver is parked on that socket while the root task waits for the
+`Close` reply. Neither of the two new `Sys::Spawn` refusals is reachable from `/bin`: no shipped
+program names two descriptors in a spawn, and none both spawns and reads from a second task. They
+are pinned by the ABI and by this note, not by the suite.
+
+**The cost.** Two bools and a `u32` on `Handle`, a `bool` on `JsHandle`, a seven-way `shut()` and
+one free function, against the deletion of `PipeRef`, `PipeBusy` and two `ProcPipe` fields —
+1,524 bytes on the kernel, which is 70% of its budget rather than 69%, and 189 on `chat` for the
+close it now makes itself.
+
+---
+
 ## One claimant, named by pid
 
 The terminal's three routes through the tty pump — raw keys, the screen, cooked bytes — now have

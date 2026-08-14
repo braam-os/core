@@ -68,8 +68,14 @@ Task<i32> proc_main(Args args)
         Result<bool> r = co_await lines.next(line);
         if (r.is_err())
             co_return r.error() == Error::Cancelled ? 130 : 1;
-        if (!r.value())
+        if (!r.value()) {
+            // End of input closes the connection rather than leaving it to the
+            // process's teardown — and the receiver is parked on that socket,
+            // so this closes a descriptor another task is inside a read of.
+            if (Task<void> c = close_fd(u32(sock.value())))
+                co_await c;
             co_return 0;
+        }
 
         String out;
         if (!nick.empty() && (!out.append(nick) || !out.append(": ")))

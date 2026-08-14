@@ -615,7 +615,7 @@ calls is an ABI nothing tests.
 ### Asynchronous — `sys_async(op, token, ptr, len)`
 
 Reply is `i32 status` then data. A negative status is `-Error`. Served in
-`proc_syscall`, `src/user/exec.cpp:275-881`.
+`proc_syscall`, `src/user/exec.cpp:761-1618`.
 
 | # | Name | Op-word arg | Payload | Status | Data |
 |---|---|---|---|---|---|
@@ -725,7 +725,7 @@ so a process writing to fd 1 writes into whatever the shell connected — the sc
 redirection — through the same `Stream` a builtin uses. Everything from 3 up indexes a
 `Vec<Handle *>` on the kernel's process record.
 
-A `Handle` is a descriptor whatever is behind it, and there are five kinds:
+A `Handle` is a descriptor whatever is behind it, and there are seven kinds:
 
 | Kind | Made by | Read | Write | Closed by |
 |---|---|---|---|---|
@@ -744,7 +744,21 @@ the process's handle table dies with the process, `~Handle` releases the externr
 socket closes with no code written for it.
 
 A `PickFile` remembers its set **by descriptor rather than by pointer**, so closing the set first
-is `Err(Invalid)` at the next read rather than a dangling reference.
+is `Err(Invalid)` at the next read rather than a dangling reference. A set closed *during* a read
+is a different matter, and is held for the length of it.
+
+**A descriptor is held for the length of a syscall.** A process has several tasks, so one of them
+may `Close` a number another is parked on. `Close` frees the number at once and *shuts* what the
+descriptor is on at once — the socket closes, the body is cancelled, the pipe end hangs up, which
+is what answers the parked call, and it answers with the end of a stream rather than an error.
+What waits for the last call is the `Handle` block, and the externref slot inside it: the slot has
+to stay reserved because `jsref_release` recycles it and a request already issued names it, so a
+freed slot could be re-read as somebody else's object on a second attempt.
+
+**One task uses a descriptor at a time, in each direction.** A second concurrent read, or a second
+concurrent write, is `Err(Perm)`. On a pipe end that is `Channel`'s rule (§9.1); on the host kinds
+it is that a reply sized twice is not re-entrant per object and the read offset would advance
+twice. Reading and writing one socket at once is fine, and is what `chat` does.
 
 An empty read is the end of a stream, for all of them: a file at EOF, a hung-up pipe, a finished
 body, a socket whose peer has gone. `Error::Closed` from the kernel side becomes status 0 rather
@@ -768,7 +782,14 @@ program reaching a kernel invariant:
   `Channel::park_sender` answers with `panic` — cannot be arranged.
 - **One task uses one end at a time.** Within a process, a second concurrent read or write on the
   same end is `Err(Perm)`. A second blocked sender panics; a second suspended receiver is
-  displaced *silently*, which is worse. Both are refused before `Channel` sees them.
+  displaced *silently*, which is worse. Both are refused before `Channel` sees them. §9 states
+  the general form of this: it holds for every kind of descriptor, for a weaker reason on the
+  host kinds.
+
+An end a syscall of this process is parked on **cannot be moved at all** — `Err(Perm)` — since a
+parked reader in the parent plus the child's stdio would be the second receiver the move exists to
+rule out. And the move is all-or-nothing: a spawn that names three slots and is refused on the
+third takes none of them, so a refusal leaves the parent's table exactly as it was.
 
 **Drain before you wait.** A child parked on a full pipe has not exited, so a parent that waits
 before reading is waiting on a child that is waiting on the parent. The kernel cannot break that
@@ -966,9 +987,6 @@ The honest closing. Each of these is absent on purpose, with the argument record
   own: once a path is absolute, `open` resolves it with the kernel's full authority. Fixing that
   needs a per-process mount view, which is a milestone's worth of work in the VFS rather than a
   line in the dispatcher.
-- **A descriptor can be closed under a parked syscall**, for a `Body` or a `Socket`: one task
-  reading while another closes the fd. The pipe ends take a counted reference for the length of
-  the call and the older kinds do not.
 - **An instantiation per command**, roughly a millisecond, plus reading the image out of the
   bundle. The host caches the compiled `Module` by path, so the bytes still cross the VFS on
   every `exec` and only the compile is saved.

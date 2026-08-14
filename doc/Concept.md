@@ -593,7 +593,12 @@ classic bug where the reader never sees end of input, because a write end is sti
 process that will never write. Moving makes that unrepresentable — and it is not only tidiness:
 a `Channel` has one receiver and panics on a second blocked sender (§3.6), so two processes
 holding one pipe end is a user program reaching a kernel invariant. One end, one owner, by
-construction.
+construction. A descriptor a syscall of the parent is parked on cannot be moved at all — the
+parent's reader and the child's stdio would be that second receiver — and a spawn refused on any
+slot takes none of them, so the parent's table is as it was. A descriptor also has one user per
+direction at a time within a process: a second concurrent read, or write, is `Err(Perm)`, for the
+pipe ends because `Channel` says so and for the host kinds because a reply sized twice is not
+re-entrant against one object.
 
 **A child is an ordinary scheduler job**, spawned exactly as a pipeline stage is, so `^C`,
 `kill`, `jobs` and `/proc` reach it with nothing added. Its parent's destructor cancels it, which
