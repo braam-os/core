@@ -8,9 +8,10 @@
 
 namespace {
 
-// The whole table. Unlike src/prog/'s registry this cannot lose an entry to the
-// linker — the array is referenced by name — so the check here is that the
-// names are the intended six and that they are in the order `help` prints.
+// The whole table. It cannot lose an entry to the linker — the array is
+// referenced by name, which a self-registering list would not be — so the check
+// here is that the names are the intended six and that they are in the order
+// `help` prints.
 constexpr Str NAMES[] = { "cd", "exit", "fg", "help", "jobs", "kill" };
 
 i32 status;
@@ -85,7 +86,7 @@ void test_builtin()
     char buf[80];
 
     // help lists the builtins first, in table order. /bin needs a bundle and
-    // there is none here, so what follows them is the registry.
+    // there is none here, so nothing follows them.
     screen_clear();
     Str argv0[] = { "help" };
     CHECK_EQ(run("help", argv0, io), 0);

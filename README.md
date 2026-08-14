@@ -131,7 +131,7 @@ back to a buffered instantiate where the host does not serve `.wasm` as `applica
 | [src/kernel/](src/kernel/) | coroutines, allocator, scheduler, screen, channels, the JS boundary |
 | [src/fs/](src/fs/) | paths, the VFS, `MemFs`/`BundleFs`/`OpfsFs`, the storage ABI |
 | [src/svc/](src/svc/) | fetch, WebSocket, clipboard, file transfer, clock, process control |
-| [src/ui/](src/ui/) | the layout layer: `Pane`, `FullScreen`, `TextBuf`, `TextView` |
+| [src/ui/](src/ui/) | the layout layer over a `Grid`: `Pane`, `TextBuf`, `TextView` |
 | [src/user/](src/user/) | line editor, grammar, job runtime, shell, `exec`, `ProcFs`, boot, builtins |
 | [src/proc/](src/proc/) | a process binary's runtime |
 | [src/cmd/](src/cmd/) | one file per program; every program is a binary |
@@ -144,15 +144,18 @@ behind each decision. Read it first. [doc/Milestones.md](doc/Milestones.md) is t
 was followed: M0–M9, with acceptance criteria and a note on how each milestone departed from
 its plan. [doc/Release_Notes.md](doc/Release_Notes.md) explains, per milestone, why the code
 that exists looks the way it does — comments in the source say *what*, and that file says
-*why*.
+*why*. [doc/System_Calls.md](doc/System_Calls.md) is the one walkthrough: how a user process
+talks to the kernel, from the principles down to the wire, with sequence diagrams of the calls
+that actually happen and the whole syscall table in one place.
 
 ## Status
 
 Complete, as a first version. All ten milestones are done, M0 through M9: the nucleus, the
 scheduler, the screen and keyboard, the shell, streams, the filesystem, host services, the
 layout layer and job control, isolated processes, and liveness isolation. Every acceptance
-criterion is ticked and the test suite passes. `kernel.wasm` is 236,965 bytes against a
-256 KiB budget.
+criterion is ticked and the test suite passes. Since then the applet tier has been retired and
+every program is a binary of its own: `kernel.wasm` is about 169 KB against a 256 KiB budget,
+and the boot archive that carries the twenty-nine binaries is 370 KB.
 
 What is deliberately absent is recorded rather than forgotten: no `bg` and no `^Z` (stopping
 a running coroutine is the resume-side twin of cancellation and would have to reach every

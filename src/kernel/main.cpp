@@ -17,9 +17,8 @@
 #include "user/shell.h"
 #include "version.h"
 
-// Runs the static constructors, which is what builds the program registry
-// (Concept.md §3.6). --no-entry leaves it uncalled, so the kernel calls it
-// itself. The symbol is hidden, so this adds no export.
+// Runs the static constructors. --no-entry leaves it uncalled, so the kernel
+// calls it itself. The symbol is hidden, so this adds no export.
 extern "C" void __wasm_call_ctors();
 
 BRAAM_EXPORT("init") void init(u32 heap_base)

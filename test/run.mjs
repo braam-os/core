@@ -243,7 +243,8 @@ if (mode === "--kernel") {
 
     // M1's coverage, now supplied by the shell instead of by demo tasks:
     // `sleep` parks on the timer queue, and the delays tick reports are exact
-    // because the clock is ours. It exercises argv and the registry with it.
+    // because the clock is ours. It exercises argv and `exec` with it, since
+    // `sleep` is a binary like everything else.
     type("sleep 30");
     press(KEY.ENTER);
     const delays = [1000, 1010, 1030].map((now) => run(now));

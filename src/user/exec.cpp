@@ -271,7 +271,7 @@ Task<void> say(Stream err, Str who, Str what)
 // Performs the request the process is parked on, and builds the payload
 // _resume will hand back: an i32 status, then any data. Every wait in here is
 // the proxy task's own, so ^C reaches a process through exactly the awaitables
-// it reaches an applet through.
+// it reaches a shell builtin through.
 Task<Result<String>> proc_syscall(Proc &p, Call &c)
 {
     String reply;

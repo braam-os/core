@@ -23,7 +23,7 @@ enum class Tier : u8 {
 
 // The wasm custom section every process binary carries, and the whole of what
 // `exec` needs before it can instantiate one: which tier to run it at, and how
-// much memory to hand it. Eight u32s so the parser needs no alignment care.
+// much memory to hand it. Six u32s so the parser needs no alignment care.
 struct ProcMeta {
     u32 magic;
     u32 abi;

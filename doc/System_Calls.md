@@ -1,0 +1,897 @@
+# Braam — System Calls
+
+How a user process talks to the kernel: the principles, the wire, and what actually happens on
+the way through. [Concept.md](Concept.md) is the specification and this document does not
+replace it — §4.3 there fixes the ABI and says why it has the shape it has. This is the
+walkthrough: the same mechanism written down end to end, in the order a reader meets it, with
+the code beside it.
+
+[Release_Notes.md](Release_Notes.md) holds the arguments. Where a decision here looks arbitrary,
+the reason is under M8, M9 or "One program model", and this document points at it rather than
+restating it.
+
+A bare `§N` below is always a section of Concept.md, never of this document.
+
+---
+
+## 1. What a system call is here
+
+Braam is a small operating system that runs in a browser tab, and its process model is the one
+POSIX taught us: a program is a separate address space, it gets argv and three standard streams,
+it opens descriptors, it can be killed, and it exits with a status. Every one of those nouns
+survives. What changes is the mechanism underneath each, because the machine is a browser and
+not a CPU with a memory management unit.
+
+| POSIX | Braam | Why |
+|---|---|---|
+| `fork` then `exec` | one `exec` that instantiates | there is nothing to copy: a `WebAssembly.Instance` starts empty |
+| a page table per process | a `WebAssembly.Memory` per process | a wasm pointer is an offset, not an address; there is nothing to forge (§4.1) |
+| `setrlimit` / cgroups | `new WebAssembly.Memory({initial, maximum})` | `memory.grow` simply fails past the ceiling the *host* chose (§4.3) |
+| a blocking `read(2)` | `co_await` on a suspension | nothing blocks; the browser event loop is the scheduler (§2.1) |
+| a trap into ring 0 | a call to an imported function | an instance can only call the imports it was given, which is the capability system (§4.1) |
+| `errno` | a negated `Error` in the reply's leading `i32` | `_resume` has room for a buffer and not for an errno (§4.3) |
+| `SIGKILL` | `worker.terminate()` | wasm cannot be preempted; a thread can be ended (§4.2) |
+| a core dump | a wasm trap the host reports as exit 132 | a process has no import to log through |
+| the file descriptor table | a `Vec<Handle *>` on the kernel's process record | a number one process holds means nothing in another |
+
+Two things POSIX has that Braam does not, and both are deliberate rather than pending:
+
+**No preemption.** `while(1){}` cannot be interrupted — nothing in the wasm specification allows
+it. Tier 3 (§4.2) answers this with a kill rather than a scheduler: a process gets a worker of
+its own, and `terminate()` ends it without its cooperation. Bounding CPU rather than ending it
+would need fuel injection, which was considered and not built.
+
+**No per-process namespace.** A process is isolated in address space, memory and descriptors,
+but `open` resolves against one global working directory with the kernel's full authority. That
+is why `cd` is a shell builtin and `pwd` reads `/proc/cwd` rather than either being a syscall.
+
+---
+
+## 2. The three participants
+
+Only JavaScript can call a `WebAssembly.Instance`'s exports. Two instances cannot reach each
+other, and there is no instruction that would let them try. So every crossing goes through the
+host, and the host's scheduling discipline is the first thing to understand.
+
+```
+┌───────────────────── Web Worker: the kernel's ─────────────────────┐
+│                                                                    │
+│  kernel.wasm                         web/proc.js                   │
+│  ┌───────────────────┐               ┌──────────────────────────┐  │
+│  │ scheduler         │◄── sys ───────│ per-pid import closure   │  │
+│  │ exec_sys          │               │   sys(op,a0,a1,a2)       │  │
+│  │ exec_sys_async    │◄── sys_async ─│   sys_async(op,tok,p,n)  │  │
+│  │                   │               │                          │  │
+│  │ proc_spawn ───────┼─── host_svc ─►│ compile · instantiate    │  │
+│  │ proc_step ────────┼─── host_svc ─►│ queue → drain → step     │  │
+│  │ proc_kill ────────┼─── host_svc ─►│ drop · terminate         │  │
+│  │                   │◄── wake(tok) ─│                          │  │
+│  └───────────────────┘               └──────────┬───────────────┘  │
+│                                                 │ _start / _resume │
+│                     ┌───────────────────────────▼───────────────┐  │
+│                     │ tier 2: the process's instance, right here│  │
+│                     │   own memory · own externref table · fds  │  │
+│                     └───────────────────────────────────────────┘  │
+└──────────────────────────────────┬─────────────────────────────────┘
+                                   │ postMessage: bind, step
+┌──────────────────────────────────▼─────────────────────────────────┐
+│ tier 3: a Web Worker holding one process — the same instance, one  │
+│ thread further out, where terminate() does not need its cooperation│
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**The rule everything follows: the kernel never calls a process, and the host never calls one
+while the kernel is on the stack.** The first half is not a choice — wasm has no instruction
+that reaches another instance. The second half is, and it is the load-bearing one.
+
+The host *could* call `_start` from inside `host_svc`, the way `test/fakefs.mjs` answers a
+storage request from inside the import. That works there because a storage reply only queues a
+resumption. A process step is not a reply: it runs a program, and that program immediately calls
+back in through `sys`, which allocates, touches the process table and wakes a token. Doing that
+on top of a half-finished `HostCall::issue()` corrupts the kernel's heap in a way that surfaces
+weeks later.
+
+So one `_start` or `_resume` is a **deferred host action**, structurally identical to a storage
+reply: the proxy task parks on a wake token, the host steps the instance once the tick has
+unwound, and the token is woken with the outcome. At tier 2 the deferral is a microtask
+(`web/worker.js:81-89`); at tier 3 it is a `postMessage`, deferred by nature; in the test driver
+it is an explicit `drain()` between ticks (`test/fakesvc.mjs:61-73`). The stepping code is the
+same `web/proc.js` in all three, because the difference is scheduling and not behaviour.
+
+Synchronous syscalls run the other way and need none of this. `sys(pid, …)` re-enters the kernel
+from JS at top level, exactly as `key()` and `wake()` do, and answers without parking.
+
+---
+
+## 3. Five principles
+
+**Nothing blocks, so a syscall is a suspension.** A process's `co_await` suspends its coroutine,
+its runtime returns control out through `_start`/`_resume`, the kernel continues doing other
+work, and the host calls `_resume` later with the payload. That is reentrant scheduling across
+an instance boundary with no stack switching, no Asyncify and no JSPI. The process's scheduler
+is two arrays (`src/proc/rt.cpp:26-33`); the kernel's is the real one.
+
+**A step is queued, never nested.** The rule stated under "The three participants" above, and
+the consequence a reader trips over: a syscall's
+*answer* is not produced by the call that asked for it. `sys_async` records a request and
+returns; a scheduler job of the kernel's performs the work; a later step delivers the result.
+
+**The pid is written into the closure, not passed.** A process's two imports are built per
+instantiation with its pid baked in — `localOps(pid)` at `web/proc.js:176`, `workerOps(pid)` at
+`:114`. The kernel's exports take a pid the *host* supplies; the process's imports have no
+argument for one. "A process cannot issue a syscall on behalf of another PID" is therefore not a
+check that runs, it is a shape the ABI has, and `test/run.mjs:168` asserts the shape.
+
+**What crosses is bytes, not addresses.** Two instances have two memories, so every transfer is
+a copy through the host (Appendix B). The kernel cannot be handed a buffer it did not allocate,
+so the host asks for one first: `Sys::Stage` is a synchronous syscall the *host* issues on the
+process's behalf, returning the address of a staging block the process's kernel-side record
+owns. The reverse direction needs no such call, because `_alloc` is already in the ABI.
+
+**One import per calling convention, so the table grows by an enum value.** The kernel has six
+host imports and gained none for processes: spawning, stepping and killing are three more
+operations on `host_svc`, which is what that import's convention already was. The same discipline
+governs the syscall table — adding an operation is a number on each side, never a new function.
+
+---
+
+## 4. The wire
+
+§4.3's block, which both ends include as `src/kernel/sysabi.h`:
+
+```
+process imports:  env.memory                        // the kernel's, so the cap is the kernel's
+                  sys(op, a0, a1, a2) -> i32        // sync ops, immediate result
+                  sys_async(op, token, ptr, len)    // async ops, reply via _resume
+
+process exports:  _start(argv_ptr, argv_len) -> i32 // 0 = exited, 1 = suspended
+                  _resume(token, ptr, len)   -> i32 // the same
+                  _alloc(n) -> ptr, _free(ptr, n)
+
+custom section "braam":  magic, abi, tier, flags, initial_pages, max_pages
+```
+
+The kernel's half is two exports with a leading pid:
+
+```c
+BRAAM_EXPORT("sys")       i32 sys(u32 pid, u32 op, u32 a0, u32 a1, u32 a2);
+BRAAM_EXPORT("sys_async") i32 sys_async(u32 pid, u32 op, u32 token, u32 len);
+```
+
+The extra `pid` argument *is* the capability boundary, and the missing `ptr` on the kernel side
+is the address-space boundary: the pointer the process passed is into the process's memory, so
+the host consumes it during the copy and never forwards it.
+
+### 4.1 The op word
+
+Only the asynchronous half packs an argument. The low byte is the operation; the upper 24 bits
+are its one immediate — a descriptor at `Write`/`Read`/`Close`, the open flags at `Open`, a
+single bit elsewhere:
+
+```c
+inline u32 sys_op(Sys op, u32 arg = 0) { return u32(op) | (arg << 8); }
+inline Sys sys_op_code(u32 op)         { return Sys(op & 0xff); }
+inline u32 sys_op_arg(u32 op)          { return op >> 8; }
+inline u32 sys_op_fd(u32 op)           { return sys_op_arg(op); }
+```
+
+One convention rather than two, so a payload is only ever the operation's *data*: a write hands
+over its bytes and an open hands over its path, neither with a header glued on the front.
+`sys_op_fd` is the same accessor renamed where the argument is a descriptor.
+
+The synchronous half does not pack anything — `sys` has three spare scalars, so `Sys::Exit` puts
+its status in `a0` and the others take none.
+
+### 4.2 The reply payload
+
+`_resume`'s signature has room for a buffer and not for an errno, and every asynchronous syscall
+needs both. So **a reply is an `i32` status followed by any data**:
+
+```
+   0        4                                                    len
+   ┌────────┬──────────────────────────────────────────────────────┐
+   │ status │ the operation's data, if it has any                  │
+   └────────┴──────────────────────────────────────────────────────┘
+```
+
+A negative status is `Error(-status)` from `src/kernel/result.h`; zero or above is the
+operation's answer — bytes written, a descriptor, or nothing. The decode happens in exactly one
+place, `SysCall::await_resume` (`src/proc/rt.cpp:109-121`), so every wrapper in `src/proc/io.h`
+just propagates a `Result`.
+
+A reply shorter than four bytes is synthesised as `-Error::Io`: a truncated reply is a broken
+host, and guessing would be worse.
+
+### 4.3 argv
+
+argv crosses an address space, so it is one blob rather than a pointer array: `u32 argc`, then a
+length and bytes per word (`sysabi.h:220-272`). The host allocates room for it inside the
+process with `_alloc` — which is what `_alloc` is for, and why `argc` alone could not have said
+where the blob went — writes it, and passes the pointer to `_start`.
+
+The blob is deliberately never freed. `Args` is a span of `Str` views into it, and a program may
+hold those until it exits.
+
+### 4.4 The metadata
+
+`exec` has to know two things before it can instantiate a binary: which tier to run it at, and
+how much memory to give it. Both live in a wasm custom section named `braam`, six little-endian
+`u32`s appended after the link by `tools/stamp.py`:
+
+```c
+struct ProcMeta {
+    u32 magic;          // 0x6d617262, "bram"
+    u32 abi;            // PROC_ABI, currently 2
+    u32 tier;           // Tier::Instance (2) or Tier::Worker (3)
+    u32 flags;
+    u32 initial_pages;
+    u32 max_pages;
+};
+```
+
+Stamped after the link rather than compiled in, because `initial_pages` must agree with
+`-Wl,--initial-memory` and the four lines of `src/cmd/CMakeLists.txt` that set the link flag are
+the one place that knows both. `strip()` drops any earlier section of the same name, so stamping
+twice is stamping once.
+
+`exec_meta` (`src/user/exec.cpp:920-949`) walks the section list and refuses a binary whose magic
+or `abi` is not the kernel's. That is what the `abi` word is for: an ABI amendment makes a stale
+binary a diagnostic rather than a wrong answer. `Tier::Retired = 1` is the in-kernel applet, kept
+reserved rather than reused for the same reason.
+
+`proc_pack` folds the three numbers the host needs into the request record's one spare word:
+
+```
+   31    28 27          16 15                     0
+   ┌───────┬───────────────┬───────────────────────┐
+   │ tier  │   max_pages   │     initial_pages     │
+   └───────┴───────────────┴───────────────────────┘
+```
+
+Twelve bits for `max_pages` is why `PROC_MAX_PAGES` carries a `static_assert` that it still fits.
+`web/proc.js:30-32` mirrors the three accessors, as `web/abi.js` mirrors the record itself.
+
+---
+
+## 5. The synchronous half, and why it is closed
+
+Four operations, answered inside the export, never parking:
+
+| # | Name | Arguments | Returns |
+|---|---|---|---|
+| 1 | `Exit` | `a0` = exit status | 0 |
+| 2 | `GetPid` | — | the pid |
+| 3 | `Now` | — | milliseconds since boot |
+| 4 | `Stage` | `a0` = bytes about to be copied in | a kernel address, or 0 |
+
+`exec_sys` (`src/user/exec.cpp:1097-1116`) is a plain switch with no scheduling in it at all.
+Note that `Sys::Exit` only *records* the status on the process record; the process still has to
+return from `_start`/`_resume` before the step reports `Exited`.
+
+**`Sys::Stage` is the host's syscall, not a program's.** It exists so the host can ask where to
+copy a payload, and a program never calls it — but a hostile binary can, so it is bounded by
+`SYS_STAGE_MAX` (1 MiB, the largest blit there can be) rather than handed an arbitrary
+`heap_alloc`.
+
+**The set is closed at four, permanently.** Tier 3 answers all four inside the process's own
+worker with no kernel to ask, and that is the entire reason one binary runs at either tier:
+
+- `GetPid` is the constant the host bound into the closure when it made the worker.
+- `Now` is the clock reading the step message carried plus the worker's own elapsed time —
+  monotonic and relative rather than identical to the kernel's tick clock, which nothing depends
+  on.
+- `Exit` is buffered and rides back on the step's reply. A process only ever issues it
+  immediately before returning, so nothing observes the delay; tier 2 keeps the last `Exit`
+  before the step returned, and so does this.
+- `Stage` is refused with 0 — the "no room" answer the runtime already handles. Unknown
+  operations are refused locally too, and never relayed.
+
+A fifth synchronous operation would have nothing to answer with at tier 3 and would fail there
+alone, which is the worst way for an ABI to break. So an operation that needs the kernel is
+asynchronous whatever it costs.
+
+---
+
+## 6. The asynchronous half, and the two tokens
+
+`sys_async(op, token, ptr, len)` hands over a request and returns immediately. The process's
+awaitable then suspends, and the step it is inside of returns 1.
+
+```c
+void SysCall::await_suspend(std::coroutine_handle<> h)
+{
+    Rt &r = rt();
+    for (slot_ = 0; slot_ < PROC_TASKS; slot_++)
+        if (!r.waiters[slot_].live)
+            break;
+    ...
+    Waiter &w = r.waiters[slot_];
+    w.h       = h;
+    w.token   = ++r.token;
+    w.live    = true;
+    sys_async(op_, w.token, proc_addr(payload_.data()), u32(payload_.size()));
+}
+```
+
+`SysCall` is used as an awaiter *directly* rather than through a `Task`, so no coroutine frame is
+allocated for it and the payload is still on the caller's stack when the host copies it out.
+`await_ready()` is unconditionally false: **an asynchronous syscall always costs a park and a
+step**, even where the kernel could have answered instantly. That is the cost model to carry
+into any program you write.
+
+### Two token namespaces
+
+This is the single easiest thing to misread in the code, because both are called `token` and
+they travel together.
+
+The **host-request token** is the kernel's own: `HostCall::await_suspend` takes one from
+`sched_token()`, hands it to `host_svc`, and the host answers it with `wake()`. It names a
+suspended *kernel* task. Every asynchronous host operation has one, and a process step is just
+another of them.
+
+The **process syscall token** is the process's own: `++r.token` above, starting at 2 because 0 is
+reserved for `_start` — which answers nothing. It names a suspended *process* task, and it rides
+opaquely through the whole loop:
+
+```
+   process        kernel                 host                process
+   ──────────────────────────────────────────────────────────────────
+   ++r.token ──► Call::token ──► Reply::token ──► proc_step(token)
+                                                        │
+                                          req.flags ────┘
+                                                        │
+                                     _resume(token, …) ─┴──► matched in
+                                                             the waiter table
+```
+
+`flags` is where it rides on the step request, because nothing else on a step uses that word.
+The kernel names the call it is answering rather than the host remembering the last one, which
+is what makes several outstanding calls representable at all.
+
+---
+
+## 7. What actually happens
+
+### 7.1 `echo hi` at tier 2, end to end
+
+The stepper is an ordinary scheduler job — `exec_process`, the task the shell's pipeline stage
+runs. It never performs a syscall itself.
+
+```
+ stepper (kernel)          host (web/proc.js)              echo.wasm
+ ────────────────          ──────────────────              ─────────
+ exec_resolve("echo")
+   read /bin/echo, parse the braam section → tier 2, 4 pages, cap 256
+       │
+ proc_spawn ──── host_svc(ProcSpawn, tok, req) ──►│
+       │                                          │ compile (cached by path)
+       │                                          │ new Memory({4, 256})
+       │                                          │ new Instance(mod, {
+       │                                          │   env: {memory},
+       │                                          │   kernel: localOps(pid) })
+       │◄─────────────── wake(tok) ───────────────│
+       │
+ proc_step(token=0, argv) ── host_svc(ProcStep) ─►│
+       │                                          │ queue; return
+       │                                     (tick() unwinds)
+       │                                          │ drain():
+       │                                          │  _alloc(18) ─────────────►│
+       │                                          │  copy argv in            │
+       │                                          │  _start(ptr, 18) ───────►│
+       │                                          │                          │ proc_main
+       │                                          │                          │ write_all(1, "hi")
+       │                                          │◄─ sys_async(Write|1<<8,  │
+       │                                          │      tok=2, ptr, 2) ─────│
+       │◄── sys(pid, Stage, 2) ───────────────────│                          │
+       │    proc_stage → &Call.stage              │                          │
+       │                                          │ memcpy 2 bytes across    │
+       │◄── sys_async(pid, Write|1<<8, 2, 2) ─────│                          │
+       │    Call{op, len=2, token=2} pushed       │                          │
+       │                                          │◄──── returns 1 ──────────│
+       │◄─────────────── wake(tok) ───────────────│    (suspended)
+       │
+       │  ProcStep::Suspended, and p->calls has one entry with no server:
+       │  sched_spawn(serve(p, c))  ──────────────────────────────► serve()
+       │                                                              │
+       │  co_await p->done.recv()                        proc_syscall: co_await
+       │       ⋮                                         p.io.out.write("hi")
+       │       ⋮                                                      │
+       │◄────────── Reply{token=2, status 2, no data} ────────────────┘
+       │
+ proc_step(token=2, reply) ─ host_svc(ProcStep) ─►│
+       │                                          │ queue; drain():
+       │                                          │  _alloc(4) ──────────────►│
+       │                                          │  _resume(2, ptr, 4) ────►│
+       │                                          │                          │ await_resume
+       │                                          │                          │ → 2 written
+       │                                          │  …and the same round trip again for "\n",
+       │                                          │     because echo writes its words and its
+       │                                          │     newline separately
+       │                                          │                          │ proc_main returns 0
+       │                                          │◄─ sys(Exit, 0) ──────────│  (status_of)
+       │◄── sys(pid, Exit, 0) ────────────────────│                          │
+       │    p->exit = 0                           │                          │
+       │                                          │◄──── returns 0 ──────────│
+       │◄─────────────── wake(tok) ───────────────│    (exited)
+       │
+       │  ProcStep::Exited → co_return p->exit  (0)
+       │  ~End: proc_kill(pid), drop the instance, free the Proc record
+```
+
+Four things in that trace are worth naming. The `Sys::Stage` call happens *before* `sys_async`,
+because the kernel must own the destination. `_start` returning 1 is the only thing the kernel
+learns without a syscall — that is the whole of `status_of`'s return convention. `Sys::Exit` is
+issued by the *runtime*, not by the program: `echo` returned 0 from `proc_main` and `status_of`
+reported it (`src/proc/rt.cpp:62-76`).
+
+And the two-byte write is not a simplification — that is what `echo hi` really does, one
+`write_all` per word and another for the newline, each a full park and step. Nothing coalesces
+them, which is the cost model of §6 arriving in the smallest possible program. A filter that
+reads and writes `SYS_CHUNK` at a time pays the same overhead per 512 bytes instead of per two.
+
+### 7.2 A synchronous call, at both tiers
+
+`proc_pid()` is one line either side of a tier boundary, and the difference never reaches the
+binary:
+
+```
+   tier 2                                tier 3
+   ──────                                ──────
+   spin.wasm                             spin.wasm
+     │ sys(GetPid, 0,0,0)                  │ sys(GetPid, 0,0,0)
+     ▼                                     ▼
+   localOps.sys                          workerOps.sys
+     │ kernel().sys(pid, …)                │ return pid   ← bound in at bind time
+     ▼                                     ▼
+   exec_sys → return pid                 (no kernel involved, no message sent)
+```
+
+A worker boundary has no synchronous direction — §1 rules out `SharedArrayBuffer` and therefore
+`Atomics.wait` — and `sys` is by construction synchronous. It survives because none of its four
+operations has to reach the kernel at all. That is the result M9 turned on, and it is why the
+same `spin.wasm` runs at either tier with the same import list.
+
+### 7.3 One tier-3 step
+
+Two messages, one each way, whatever the process did inside the step:
+
+```
+ kernel worker                                    process worker
+ ─────────────                                    ──────────────
+ step(r, done)
+   postMessage({k:"step", now, token, payload},
+               [payload.buffer])  ───────────────►│
+                                                  │ ops.begin(now)
+                                                  │ server.step(token, payload)
+                                                  │   _alloc, copy, _resume ──►│
+                                                  │                            │ …runs…
+                                                  │◄── sys(Exit, 3) ───────────│  buffered
+                                                  │◄── sys_async(Read|0, 5, …) │  pushed onto
+                                                  │                            │  `calls`
+                                                  │◄──── returns 1 ────────────│
+                                                  │ {exit, calls} = ops.end()
+   │◄── postMessage({k:"step", result:1,          │
+   │        exit:3, calls:[{op,token,len,buf}]},  │
+   │        [each buf]) ──────────────────────────┘
+   │
+ finish(p, m):
+   kernel().sys(pid, Exit, 3)
+   for each call:
+     dst = kernel().sys(pid, Stage, len)
+     mem.view().set(new Uint8Array(call.payload), dst)
+     kernel().sys_async(pid, call.op, call.token, call.len)
+   pending.r.ok(result); pending.done()   → wake(tok)
+```
+
+That `for` loop is character-for-character the tier-2 `sysAsync` closure with the source of the
+bytes changed, which is the point: the kernel side of the protocol is one handler of
+straight-line code, and both halves live in `web/proc.js` so that two files cannot describe one
+wire.
+
+`slice` rather than `subarray` is load-bearing on both sides. A view is detached by the next
+`memory.grow` (§8.4), and one that has been transferred cannot be re-derived.
+
+### 7.4 Two calls outstanding
+
+`chat` listens to a socket while it reads what is typed, so it spawns a second task with
+`proc_spawn`. Two tasks mean two syscalls parked at once, and that is what the token and the
+per-call server job are for:
+
+```
+ chat.wasm                     kernel
+ ─────────                     ──────
+ task 0: read_chunk(STDIN)  ─► Call{op=Read|0, token=2} ─► serve() job A
+ task 1: read_chunk(sock)   ─► Call{op=Read|3, token=3} ─► serve() job B
+                                                              │
+   stepper: co_await p->done.recv()                            │
+                                                              │
+   ...the socket is quiet for a minute...                      │
+                                                              │
+ job A completes first ─► Reply{token=2, "hi\n"} ─► done channel
+   stepper: proc_step(token=2, …) ─► _resume(2, …) ─► task 0 wakes
+```
+
+Both of those had to be fixed for this to work, and each was a real bug waiting:
+
+- **One staging buffer per process would have lost data.** The second `Sys::Stage` would have
+  handed back the same block and overwritten the first call's payload before its server read it.
+  So the staging block lives on the `Call` record (`src/user/exec.cpp:46-55`), allocated on
+  demand and promoted out of `p->staging` when `sys_async` arrives.
+- **One proxy performing calls in turn would have starved them.** A socket read that never
+  completes would hold up the keystroke behind it. So the stepper spawns a scheduler job per
+  call and parks on a channel, and the jobs finish in whatever order the world answers them.
+
+`PROC_TASKS` is 4 on the process side — one waiter each — and the kernel's reply channel is
+sized 8 so a completing server never parks on the send.
+
+### 7.5 `^C`, and the kill
+
+A tier-2 stage is a `Task<i32>` like any other, so `^C` reaches it through exactly the awaitables
+it reaches a builtin through. The destructor is the whole kill path:
+
+```
+ ^C → the job's CancelToken is signalled
+        │
+        ├─► every awaitable the servers are parked on returns Err(Cancelled)
+        │     serve() sees Cancelled and returns *without* replying —
+        │     the process is going, and nobody is left to hear
+        │
+        └─► exec_process's frame is destroyed → ~End runs:
+              │
+              ├─ for each Call with a server:  sched_cancel(server)
+              │
+              ├─ proc_kill(pid) ── host_svc(ProcKill, 0, pid, null) ──►  host
+              │                                                            │
+              │    tier 2:  procs.delete(pid) — a queued step will  ───────┤
+              │             run, find the pid gone, and fail itself        │
+              │                                                            │
+              │    tier 3:  link.terminate(), and the part that is  ───────┘
+              │             easy to miss: the in-flight step must be
+              │             FAILED by whoever killed it —
+              │             r.fail(NOTFOUND); done() → wake(tok)
+              │
+              └─ proc_remove; heap_delete(p) → ~Proc:
+                   ~FullScreen  (the screen comes back)
+                   ~KeyInput    (the keyboard comes back)
+                   every Handle (fds close; ~JsRef drops the externref,
+                                 so the socket closes with it)
+```
+
+That last line is not tidiness. An abandoned `HostReq` is reaped by `wake()` on its token and by
+nothing else, so a request whose worker no longer exists leaks the record and its payload for the
+life of the page unless the killer answers it. At tier 2 it happens for free, because a queued
+step still runs and finds the pid gone.
+
+`proc_kill` is told, not asked: no record, no reply, the pid in the `req` position and a null
+externref, because it is issued from a destructor where there is nothing left to await with.
+
+A killed process never unwinds. Its coroutine frames, its heap and its descriptors go at once
+when the instance is dropped — which is the isolation working, not a shortcut.
+
+### 7.6 A trap, and the exit statuses
+
+A process has no import to log through, so a fatal error is `__builtin_trap()`. The host catches
+the exception, nulls the instance and reports `ProcStep::Trapped`; the kernel turns that into a
+status and a message.
+
+| Status | Meaning | Where |
+|---|---|---|
+| `p->exit` | the process returned from `proc_main` | `exec.cpp:1062` |
+| 126 | the binary will not instantiate | `exec.cpp:1033` |
+| 130 | cancelled — `^C`, `kill`, a job going away | `exec.cpp:1030,1059,1090` |
+| 132 | trapped | `exec.cpp:1066` |
+| 1 | a resource failure, or "suspended with nothing pending" | `exec.cpp:1083` |
+
+"Suspended with nothing pending" is unrepresentable in a correct runtime — a step that reports
+`Suspended` must have parked on something — so it is reported rather than looped on.
+
+At tier 3 the instance is created inside its worker, so a binary that will not instantiate reads
+as 132 rather than 126. The module is still compiled in the kernel worker, so a malformed one is
+still refused before anything runs; only the distinction is lost, and it was not worth an ABI
+change to keep.
+
+---
+
+## 8. The syscall reference
+
+The opcode is the low byte of the op word. The groups are sparse on purpose, so one can grow
+without renumbering anything. Every operation has a caller in `src/cmd/` — a syscall nothing
+calls is an ABI nothing tests.
+
+### Synchronous — `sys(op, a0, a1, a2) -> i32`
+
+| # | Name | Argument | Returns |
+|---|---|---|---|
+| 1 | `Exit` | `a0` = status | 0; recorded, effective when the process returns |
+| 2 | `GetPid` | — | the pid |
+| 3 | `Now` | — | ms since boot (`sched_now()`) |
+| 4 | `Stage` | `a0` = byte count | a kernel address, or 0 for "no room" |
+
+### Asynchronous — `sys_async(op, token, ptr, len)`
+
+Reply is `i32 status` then data. A negative status is `-Error`. Served in
+`proc_syscall`, `src/user/exec.cpp:275-881`.
+
+| # | Name | Op-word arg | Payload | Status | Data |
+|---|---|---|---|---|---|
+| 16 | `Write` | fd | the bytes | bytes written | — |
+| 17 | `Read` | fd | — | bytes read, 0 at end | the chunk |
+| 18 | `Open` | `SYS_O_*` | the path | the fd | — |
+| 19 | `Close` | fd | — | 0 | — |
+| 20 | `Stat` | — | the path | 0 | `u32 kind`, `u64 size` |
+| 21 | `List` | — | the path | 0 | `u32 count`, then per entry `u32 kind`, `u64 size`, `u32 name_len`, the name |
+| 22 | `MkDir` | — | the path | 0 | — |
+| 23 | `Remove` | bit 0 = recursive | the path | 0 | — |
+| 32 | `Sleep` | — | `u32 ms` | 0 | — |
+| 48 | `Clock` | — | — | 0 | `u64 epoch_ms`, `i32 tz_min` |
+| 49 | `Storage` | — | — | 0 | `u64 quota`, `u64 usage`, `u32 flags` |
+| 50 | `Fetch` | — | `u32 url_len`, the url, the spec | the body's fd | `u32 http_status`, the headers |
+| 51 | `WsOpen` | — | the url | the socket's fd | — |
+| 52 | `ClipRead` | bit 0 = wait for a paste | — | the text's length | the text |
+| 53 | `ClipWrite` | — | the text | 0 | — |
+| 54 | `Pick` | — | — | the set's fd | `u32 count`, then `u32 len` and a name each |
+| 55 | `PickOpen` | the set's fd | `u32 index` | the file's fd | — |
+| 56 | `Save` | — | `u32 name_len`, the name, the bytes | 0 | — |
+| 64 | `KeyClaim` | bit 0 = take, else release | — | 0 | `u32 cols`, `u32 rows` |
+| 65 | `KeyRead` | — | — | 0 | `u32 code`, `u32 mods`, `u32 cols`, `u32 rows` |
+| 66 | `ScreenEnter` | bit 0 = enter, else leave | — | 0 | `u32 cols`, `u32 rows` |
+| 67 | `ScreenBlit` | — | seven `u32`s, then `w*h` `Cell`s | 0 | — |
+| 68 | `ScreenClear` | — | — | 0 | — |
+
+Every multi-byte field is little-endian, and a `u64` is a low word then a high word.
+
+### Constants
+
+| Name | Value | What it is |
+|---|---|---|
+| `SYS_STDIN`/`STDOUT`/`STDERR` | 0, 1, 2 | the stage's `Stdio`, not the descriptor table |
+| `SYS_FD_MIN` | 3 | the first index into the process's own table |
+| `SYS_CHUNK` | 512 | one read, and the most a write should hand over at once |
+| `SYS_STAGE_MAX` | 1 MiB | the cap on `Sys::Stage`, which is the largest blit there can be |
+| `SYS_BLIT_HEAD` | 7 | `ScreenBlit`'s header, in `u32`s |
+| `SYS_O_READ`…`APPEND` | 1, 2, 4, 8, 16 | open flags, restated rather than shared with the VFS |
+| `SYS_KIND_FILE`/`DIR` | 0, 1 | what `Stat` and `List` report |
+| `SYS_STORE_*` | 1, 2, 4, 8 | OPFS, sync, persisted, and "the host answered at all" |
+
+`SYS_O_*` and `SYS_KIND_*` are deliberately *not* the VFS's numbers. A process cannot see the
+filesystem, and the numbers a binary compiled today speaks must not move because the VFS's did;
+`vfs_flags` (`src/user/exec.cpp:193-207`) maps between them one bit at a time.
+
+`SYS_CHUNK` being 512 rather than a rounder number is the allocator: `FS_BLOCK` is the top size
+class on both sides of the wire, and one byte more costs a whole 64 KiB span (§8.2).
+
+### Errors
+
+The wire carries `src/kernel/result.h`'s `Error`, negated: `Invalid` 1, `NoMemory` 2, `NotFound`
+3, `Exists` 4, `NotDir` 5, `IsDir` 6, `Perm` 7, `Io` 8, `Cancelled` 9, `Again` 10, `Unsupported`
+11, `Closed` 12, `NotEmpty` 13. `web/abi.js:9-13` mirrors the list.
+
+Two never reach a process. `Again` is retried inside `proc_syscall` rather than reported, and
+`Cancelled` means the process is being destroyed, so `serve()` returns without building a reply
+at all.
+
+---
+
+## 9. Descriptors
+
+Descriptors 0, 1 and 2 are not in the table: they are the `Stdio` the pipeline stage was given,
+so a process writing to fd 1 writes into whatever the shell connected — the screen, a pipe, or a
+redirection — through the same `Stream` a builtin uses. Everything from 3 up indexes a
+`Vec<Handle *>` on the kernel's process record.
+
+A `Handle` is a descriptor whatever is behind it, and there are five kinds:
+
+| Kind | Made by | Read | Write | Closed by |
+|---|---|---|---|---|
+| `File` | `Open` | `vfs_read` at its own offset | `vfs_write` | `Close` |
+| `Body` | `Fetch` | `http_read` | — | `Close` |
+| `Socket` | `WsOpen` | `ws_recv` | `ws_send` | `Close` |
+| `PickSet` | `Pick` | — | — | `Close` |
+| `PickFile` | `PickOpen` | `pick_read` | — | `Close` |
+
+Making the host services descriptors is what lets `Read`, `Write` and `Close` serve all of them.
+The alternative was a `fetch` family, a socket family and a picker family — perhaps six more
+operations — but saving those is not the reason to prefer it. The reason is what happens on `^C`:
+the process's handle table dies with the process, `~Handle` releases the externref slot, and the
+socket closes with no code written for it.
+
+A `PickFile` remembers its set **by descriptor rather than by pointer**, so closing the set first
+is `Err(Invalid)` at the next read rather than a dangling reference.
+
+An empty read is the end of a stream, for all of them: a file at EOF, a hung-up pipe, a finished
+body, a socket whose peer has gone. `Error::Closed` from the kernel side becomes status 0 rather
+than an error, and `read_chunk` turns *that* back into `Err(Closed)` for the program
+(`src/proc/io.cpp:17-29`).
+
+---
+
+## 10. The terminal
+
+The screen is a cell grid in linear memory, not a byte stream (§2.3) — and a process cannot be
+handed the kernel's grid, because it is in another address space. So a full-screen program paints
+a grid of its own and blits the damaged rectangle across with one syscall, cursor included:
+
+```
+   payload:
+   ┌────┬────┬────┬────┬──────┬──────┬────────┬─────────────────────┐
+   │ x  │ y  │ w  │ h  │ cur_x│ cur_y│ cur_on │ w*h Cells, row-major│
+   └────┴────┴────┴────┴──────┴──────┴────────┴─────────────────────┘
+     28 bytes of header (SYS_BLIT_HEAD u32s)
+```
+
+`proc_syscall` validates it completely — `x+w <= cols`, `y+h <= rows`, and the payload length
+*exactly* `head + w*h*sizeof(Cell)` — then copies row by row into `screen_cells()` and marks the
+damage. Anything else is `Err(Invalid)`.
+
+`src/ui/` became a library over a `Grid` for exactly this: `Pane`, `TextBuf` and `TextView` link
+into `less` and `edit` unchanged, and the kernel does not link them at all. Had the terminal been
+a byte stream this would have been an escape-sequence dialect instead.
+
+**Both claims are the kernel's, not the program's.** `KeyClaim` and `ScreenEnter` create a
+`KeyInput` and a `FullScreen` on the process's kernel-side record, and `~Proc` destroys them. A
+killed process runs no destructor of its own, so a program that had taken the screen and then met
+`^C` would otherwise leave the shell painting into a grid it does not own. Giving them back is
+politeness; the destructor is the guarantee.
+
+One claim of each per process: a second `ScreenEnter` is `Err(Perm)` rather than nesting.
+
+**Geometry rides on every key.** `KeyRead` answers with `code`, `mods`, `cols` and `rows`
+together, so a program that repaints per keystroke handles a resize without an event to subscribe
+to. `ProcScreen::next_key` reallocates its grid from those two numbers and marks the whole thing
+damaged.
+
+`^C` is never routed to a claimant, so a full-screen program stays killable by the key that kills
+everything.
+
+---
+
+## 11. The process's own runtime
+
+`src/proc/` is a separate binary's whole libc, and it is deliberately tiny — every binary carries
+its own copy, so anything substantial belongs in a syscall where it lives once in the kernel.
+
+**The scheduler is two arrays.** `Rt` holds `PROC_TASKS` tasks and `PROC_TASKS` waiters, one each
+(`src/proc/rt.cpp:26-33`). Task 0 is the root. `proc_spawn` fills a slot from 1 up and resumes
+the new task at once, so it runs to its first suspension before returning — `chat` is the only
+caller, and one extra task is all any program has needed.
+
+**The process ends when the root task returns**, whatever the others are doing, exactly as a
+process ends when `main` does. The kernel then drops the instance and cancels the servers of
+anything the other tasks had outstanding.
+
+**The heap is up before `_start`, because `_alloc` is.** The host places argv in the process's
+memory before it can enter the program, so `ready()` runs from whichever export the host reaches
+first. It calls `heap_init(0)` and then `__wasm_call_ctors()`, in that order, so a static
+constructor may allocate.
+
+**`status_of` is the whole return convention.** 0 means exited, anything else means suspended. On
+the way out it issues `Sys::Exit` with the root task's value — a program that never calls exit
+still reports one, and a root task whose frame would not allocate reports 1.
+
+**A reply's data is valid until the next syscall on that slot.** `await_resume` clears the
+waiter's `String`, which zeroes its length and keeps its buffer, so the `Str` handed back stays
+good until that slot is reused. Every wrapper that needs the bytes to outlive the call copies
+them — which is why `read_chunk` returns a `String` and not a `Str`.
+
+**`panic` is `__builtin_trap()`.** A process has no host import to log through, so the kernel
+reports the trap as a crash. It is declared in `host.h` and defined once per binary, and it takes
+`(ptr, len)` rather than a `Str` because the wasm ABI passes an eight-byte struct indirectly —
+which cost 2,812 bytes across the kernel's hundred call sites when it was a `Str`.
+
+### What the tests assert of every binary
+
+`test/run.mjs:158-199` is where the ABI is enforced, and it is worth reading as documentation
+rather than as a test:
+
+- **Imports are a whitelist checked as a subset**: `env.memory` is required, `kernel.sys` and
+  `kernel.sys_async` are permitted, and *anything else fails*. A host import in a binary would
+  mean the process ABI had been gone around. `sys_async` is not required, because `--gc-sections`
+  removes it from a binary that never awaits — `true` is the case.
+- **Exports are an exact list**: `_alloc`, `_free`, `_resume`, `_start`. Note that `memory` is
+  not exported; it is imported, which is what makes the cap the kernel's.
+- **Exactly one `braam` section**, with the right magic and `abi`, `max_pages` of 256, and the
+  tier the build asked for.
+- **The same lists at either tier.** `spin` and `tail` are tier 3 and look identical to the other
+  twenty-seven, which is what lets `exec` pick a tier without userland — or the program —
+  noticing.
+
+---
+
+## 12. Writing one
+
+A program is one file in `src/cmd/` defining one function:
+
+```cpp
+#include "proc/io.h"
+
+Task<i32> proc_main(Args args)
+{
+    co_return 0;
+}
+```
+
+That is `true.wasm`, and because it never awaits, it does not import `sys_async` at all.
+
+A filter is the shape almost every program has:
+
+```cpp
+Task<i32> proc_main(Args args)
+{
+    Input in(args.tail(), SYS_STDIN);     // named files, or stdin
+    if (i32 bad = co_await in.open_all("wc"))
+        co_return bad;                     // a missing file, reported before any output
+
+    for (;;) {
+        Result<String> r = co_await in.read();
+        if (r.is_err()) {
+            if (r.error() != Error::Closed)
+                co_return r.error() == Error::Cancelled ? 130 : 1;
+            break;                         // Closed is the end, not a failure
+        }
+        ...
+    }
+
+    Buf<48> b;
+    b.put(lines).put(' ').put(words).put('\n');
+    if ((co_await write_all(SYS_STDOUT, b.str())).is_err())
+        co_return 1;
+    co_return 0;
+}
+```
+
+Four conventions there, repeated across `src/cmd/`: `Input` decides files-or-stdin in its
+constructor; `open_all` returns the exit status directly; `Error::Closed` is a normal end and
+`Error::Cancelled` is exit 130; and output is formatted into a stack `Buf<N>` and written once.
+
+`src/proc/io.h` has a wrapper for every syscall, each a `Task<Result<T>>` that does one
+`co_await sys_call(...)` and unpacks the reply. Nothing in a program should be calling `sys_call`
+directly except where there is genuinely one operation and no wrapper to justify — `clear` is the
+only such case.
+
+### Building it
+
+One line in `src/cmd/CMakeLists.txt`'s `BRAAM_BIN_LIST`, and the loop does the rest: link against
+`braam_proc`, `--import-memory` with `--initial-memory` set from `BRAAM_BIN_INITIAL_PAGES`, then
+`tools/stamp.py` and a size-budget check.
+
+`--import-memory` with no declared maximum is what makes the 16 MB cap the kernel's decision.
+`-Wl,--max-memory=16777216` would also work and would be the *binary's* number; this way a binary
+cannot ask for more by being compiled differently.
+
+### Asking for tier 3
+
+One more line:
+
+```cmake
+set(BRAAM_BIN_TIER_spin 3)
+```
+
+What a program has to be to earn one is that it may not come back. A tier-3 syscall costs two
+`postMessage` hops and two copies — order 0.1 ms, against a direct call and one copy at tier 2 —
+and a syscall-bound program pays that per `SYS_CHUNK`. So the tier is a claim a binary makes
+rather than a default, and a binary that asks for it still runs at tier 2 where the host cannot
+make a worker.
+
+---
+
+## 13. What this does not buy
+
+The honest closing. Each of these is absent on purpose, with the argument recorded in
+`Release_Notes.md` or `Milestones.md`; `CLAUDE.md`'s "Known gaps" is the current list.
+
+- **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection is the
+  only way to bound rather than end, and it is unbuilt.
+- **No namespace isolation.** `open` resolves against one global working directory with the
+  kernel's full authority. Fixing it needs a per-process root and a cwd that is not a global,
+  which is a milestone's worth of work in the VFS and not a line in the dispatcher.
+- **An instantiation per command**, roughly a millisecond, plus reading the image out of the
+  bundle. The host caches the compiled `Module` by path, so the bytes still cross the VFS on
+  every `exec` and only the compile is saved.
+- **Duplication.** With no dynamic linking, every binary embeds its own allocator, string types
+  and coroutine runtime. That is why the boot archive is ~370 KB where four binaries once cost
+  47 KB, and why the process-side runtime is kept deliberately minimal.
+- **Every asynchronous syscall parks.** `await_ready()` is false unconditionally; there is no
+  fast path for an answer the kernel already has.
+- **One process at a time may hold the screen.** `Pane` is a primitive, not a multiplexer.
+- **Two tier-3 fidelity losses**: a binary that will not instantiate reads as a crash, and
+  `Sys::Now` is relative.

@@ -4,9 +4,11 @@
 // A translation unit of its own so --gc-sections keeps it out of the binaries
 // that never paint, which is most of them.
 //
-// The two claims are held by the kernel on the process's record, so a killed
-// program gets its screen and the keyboard back with nothing of its own to
-// run. Giving them back here is politeness, not the safety net.
+// The two claims are held by the kernel on the process's record, and nothing
+// here gives them back: a destructor cannot, since releasing one is a syscall
+// and there is nothing to await with. ~Proc is what restores the screen and
+// the keyboard, which it has to be anyway — a killed program runs no
+// destructor of its own.
 #pragma once
 
 #include "kernel/key.h"

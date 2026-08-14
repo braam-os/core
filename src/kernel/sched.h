@@ -52,7 +52,7 @@ struct ProcInfo {
 };
 
 // `name` is stored as a view, so it must outlive the task: a literal, or a
-// Program's own name — never a local.
+// stage's argv[0] out of the job's word store — never a local.
 u32 sched_spawn(Task<i32> t, Str name = {});
 void sched_cancel(u32 pid);
 bool sched_alive(u32 pid);

@@ -7,9 +7,9 @@
 // pipeline it is a stage of; `exit` ends the shell's loop; `help` lists the
 // table below. Everything else is a binary.
 //
-// The table is an explicit sorted array rather than a registrar list like
-// src/prog/'s. braam_user is a STATIC library, and --gc-sections never extracts
-// an archive member nothing references, so a self-registering builtin would be
+// The table is an explicit sorted array rather than a list each entry registers
+// itself on. braam_user is a STATIC library, and --gc-sections never extracts an
+// archive member nothing references, so a self-registering builtin would be
 // dropped silently. Six entries named in one file cannot be.
 #pragma once
 

@@ -7,6 +7,81 @@ of the two needs amending.
 
 ---
 
+## System_Calls.md, and what writing it found
+
+The kernel↔process mechanism was documented in three places that each held a piece of it:
+Concept.md §4.3 fixed the ABI and said why it has its shape, this file argued each decision under
+M8 and M9, and the source comments said what each line does. Nobody had written it down end to
+end. [System_Calls.md](System_Calls.md) does that — the deferred step, the staging protocol,
+descriptors, the terminal calls, cancellation and the kill, with sequence diagrams of the calls
+that actually happen and the whole twenty-seven-operation table in one place.
+
+**Why a fourth document rather than a longer §4.3.** Concept.md is a specification and is read
+by someone deciding whether a change is allowed; it earns its brevity by not explaining twice.
+The thing a newcomer needs is the opposite — the same mechanism at length, in the order it
+happens, with the code beside it. Those are different documents for the same reason a standard
+and a textbook are, and merging them would have made §4.3 worse at the job it already does. So
+System_Calls.md is explicitly derived: read it to understand the mechanism, amend §4.3 to change
+it.
+
+Two things it says that no file said before, both of which cost time to work out from the code.
+**There are two token namespaces**, and they travel together: the host-request token that
+`wake()` answers and names a suspended *kernel* task, and the process syscall token that rides in
+the step request's `flags` and names which of the *process's* parked awaits a `_resume` answers.
+And **`await_ready()` is unconditionally false**, so an asynchronous syscall always costs a park
+and a step even where the kernel could have answered at once — which is the cost model a program
+author needs before writing a loop, and it was previously only visible by noticing what
+`SysCall` does not override.
+
+**The consistency pass.** Reading the whole mechanism against the tree turned up documentation
+that had drifted, and it is worth recording what kind, because it was not the kind expected.
+Little of it was the applet retirement — that change carried its own notes, and Milestones.md
+already has a preamble telling a reader how to read every milestone below it. The stale things
+were older and quieter:
+
+- **Concept.md §3.4 listed a `host_random` import that was never built.** Six imports is a number
+  asserted by `test/run.mjs` and quoted in three documents, so a seventh name in the block reads
+  as an ABI rather than as an intention. It is now marked unbuilt rather than deleted, which is
+  the treatment the section already gave `host_fetch`.
+- **§3.6 described a `Process` type that never existed.** What the kernel has is a scheduler job:
+  a `Task<i32>`, a name and a `CancelToken`. argv and stdio belong to the pipeline stage and the
+  working directory is a global, which §4 says two hundred lines further down.
+- **§3.6 still promised structured concurrency** — "a parent `co_await`s a child group, and
+  cancellation propagates down the tree". M4 found that `CancelState::waiting` is a single slot
+  and rebuilt the relationship by hand from a destructor in `run_line`'s frame; the departure was
+  written up here and in CLAUDE.md, and the specification was never amended to match. It is now,
+  and it names the intrusive queue links a real child-group awaitable would need first.
+- **§4.3 said the operation table grew by seven.** It grew by nineteen, from eight to
+  twenty-seven: the seven named, plus the host services that hand back a descriptor and the five
+  terminal operations. The undercount had survived because the sentence was true when written.
+- **§5.1 listed a `/var` nothing mounts and a `HostFs` on `/mnt/host`** that has no
+  implementation — and whose name was taken in the meantime by `src/fs/hostfs.h`, which is the
+  storage ABI. §5.4's picker-backed `mount` is likewise unbuilt: `vfs_mount` is called from boot
+  and from nowhere else, and `mount` the command reformats `/proc/mounts`.
+- **§7 said `braam_ui` was a sibling of `braam_fs` and `braam_svc`, above the kernel.** It is in
+  neither hierarchy: `braam_proc` links it and `kernel.wasm` does not link it at all, which is
+  what "the programs that paint are binaries" means at the build level.
+
+The general shape is that a *name* outliving its referent is caught by grep, and the drift that
+matters is not. `Process`, `host_random` and the child-group promise were all found by reading
+the document against the code, and a sampling search would have found none of them. Estimates
+drift the same way: "roughly 300 lines of JavaScript" for a 176-line renderer, "about 200 lines"
+for a 372-line allocator, "a ~25-line shim" for a file that is 124. Those are now the tree's
+numbers, or gone where a number was never the point.
+
+Exact byte counts came out of README.md and CLAUDE.md for a related reason. The version header
+embeds the commit count and the hash, so `kernel.wasm` moves a few hundred bytes on every commit
+and a pinned figure in a living document is stale by the next one. They now say "about 169 KB
+against a 256 KiB budget"; the exact numbers stay here, where they are a dated snapshot and mean
+something.
+
+Nothing executable changed. The one finding that could have gone either way is
+`src/proc/screen.h`, which claimed its destructor gives the screen and the keyboard back "as
+politeness" — `~ProcScreen` frees its grid and does no such thing. The comment was corrected
+rather than the code, because a destructor *cannot* release a claim: releasing one is a syscall
+and there is nothing to await with. `~Proc` does it kernel-side, which it has to anyway, since a
+killed process runs no destructor of its own.
+
 ## Warnings are errors, everywhere
 
 `BRAAM_WERROR` defaults to ON and `-Wshadow` joins `-Wall -Wextra`. It had been CI-only since M0,

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **The plan is finished: M0–M9 are all done.** Since then the kernel applet has been retired:
 every program is a binary, `src/prog/` and the program registry are gone, and twenty-nine
 programs live in `src/cmd/` beside six shell builtins in `src/user/builtin/`. `kernel.wasm` is
-168,804 bytes against a 256 KiB budget and `bundle.bin` is 379 KB; the wasm ABI is still six
+about 169 KB against a 256 KiB budget and `bundle.bin` is 370 KB; the wasm ABI is still six
 imports and nine exports, and the three CTest cases pass. Work here is change to a working
 system, so the bar is that nothing above regresses, and Milestones.md is history rather than a
 to-do list.
@@ -53,8 +53,9 @@ thread in it. `tail` and `spin` run at tier 3.
 [doc/Release_Notes.md](doc/Release_Notes.md) opens with: `src/prog/` and the registry deleted,
 every program a binary in `src/cmd/`, `cd`/`fg`/`jobs`/`kill`/`help`/`exit` moved into
 `src/user/builtin/` as true shell builtins with no file behind them, `BinFs` and `/usr` gone in
-favour of `/bin` and `/share` as two views of the one bundle, the §4.3 syscall table roughly
-tripled to meet what the applets used to reach for directly, `src/ui/` turned into a library over
+favour of `/bin` and `/share` as two views of the one bundle, the §4.3 syscall table grown from
+eight operations to twenty-seven to meet what the applets used to reach for directly, `src/ui/`
+turned into a library over
 a `Grid` that a process links, and the step protocol given a token so a process can have several
 calls outstanding at once. `PROC_ABI` is 2.
 
@@ -74,6 +75,13 @@ still the place a substantive change is explained, appended under a new heading 
 rewriting a milestone's section. Read the M0 section before touching the allocator, the
 coroutine shim, or the build flags — each departs from an obvious approach for a reason stated
 there and nowhere else.
+
+**[doc/System_Calls.md](doc/System_Calls.md) explains the kernel↔process mechanism end to end**
+— the deferred step, the staging protocol, the two token namespaces, cancellation and the kill,
+with sequence diagrams and the whole operation table in one place. It is *derived*, not
+normative: Concept.md §4.3 is still the specification, so read System_Calls.md to understand the
+mechanism and amend §4.3 to change it. Anything touching `src/proc/`, `src/user/exec.cpp`,
+`src/kernel/sysabi.h` or `web/proc.js` has to keep it true.
 
 ## What this project is
 

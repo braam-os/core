@@ -79,7 +79,7 @@ add_dependencies(bin_version revision)
 # bundle/ is packed rather than copied: BundleFs reads one archive, so the
 # worker loads one file instead of fetching a tree file by file. The process
 # binaries are staged into a copy of it first, since they are build outputs and
-# /usr/bin/echo must be a plain name rather than echo.wasm.
+# /bin/echo must be a plain name rather than echo.wasm.
 set(BRAAM_BUNDLE_STAGE ${CMAKE_BINARY_DIR}/bundle)
 set(BRAAM_PACK_BUNDLE
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py

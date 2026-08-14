@@ -2,10 +2,10 @@
 // §4.4). It is deliberately small, because every binary carries its own copy —
 // anything substantial belongs in a syscall, where it lives once in the kernel.
 //
-// There is exactly one task in a process and at most one outstanding syscall,
-// so the scheduler here is two globals rather than the kernel's queues and
-// wake table. Nothing cancels from inside: the kernel kills a process by
-// dropping the instance, so a killed process never unwinds.
+// A process has a handful of tasks and one outstanding syscall each, so the
+// scheduler here is two small arrays rather than the kernel's queues and wake
+// table. Nothing cancels from inside: the kernel kills a process by dropping
+// the instance, so a killed process never unwinds.
 #pragma once
 
 #include "kernel/coroutine.h"
@@ -26,7 +26,7 @@
 BRAAM_SYS_IMPORT("sys") i32 sys(u32 op, u32 a0, u32 a1, u32 a2);
 BRAAM_SYS_IMPORT("sys_async") void sys_async(u32 op, u32 token, u32 ptr, u32 len);
 
-// argv, the same shape src/user/prog.h gives an applet.
+// argv, the same shape src/user/prog.h gives a shell builtin.
 struct Args {
     Span<const Str> v;
 

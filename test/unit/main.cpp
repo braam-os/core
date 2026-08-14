@@ -41,8 +41,8 @@ void test_memfs();
 void test_vfs();
 void test_bundlefs();
 
-// The kernel's init() calls this too: it is what populates the program
-// registry, so the cases below see the same set of programs kernel.wasm does.
+// The kernel's init() calls this too, so the cases below start from the same
+// static state kernel.wasm does.
 extern "C" void __wasm_call_ctors();
 
 // The same wake() kernel.wasm exports. The storage fake in test/fakefs.mjs

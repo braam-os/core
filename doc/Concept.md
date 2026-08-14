@@ -6,7 +6,11 @@ written from scratch in freestanding C++20 and compiled to WebAssembly.
 This document is the project's single design reference. It states the goal, sets out the
 architecture, and records the decisions we have already made and why. It changes when a
 decision changes, and then in the same commit as the code. The working plan —
-milestones M0–M9 with their acceptance criteria — is in [Milestones.md](Milestones.md).
+milestones M0–M9 with their acceptance criteria — is in [Milestones.md](Milestones.md), and
+the reasoning behind what landed is in [Release_Notes.md](Release_Notes.md).
+[System_Calls.md](System_Calls.md) is derived from this one: it walks §4.3's kernel↔process
+mechanism end to end, with the operation table in full. Read it to understand the mechanism;
+amend this document to change it.
 
 ---
 
@@ -88,38 +92,39 @@ no stream of bytes carrying control codes, because there are no control codes.
 
 Consequences: colours and styling are struct fields; cursor addressing is array indexing; a
 `curses`-style layout layer becomes trivial rather than a parser; and there is no escape
-sequence to mis-parse. Rendering is roughly 300 lines of JavaScript.
+sequence to mis-parse. Rendering is under 200 lines of JavaScript.
 
 ---
 
 ## 3. Architecture
 
 ```
-┌─────────────────────── main thread ───────────────────────┐
+┌─────────────────────── main thread ────────────────────────┐
 │  boot: capability probe, navigator.storage.persist()       │
 │  input: KeyboardEvent → {code, mods} → postMessage         │
 │  render: OffscreenCanvas (transferred to worker)           │
-└───────────────────────────┬───────────────────────────────┘
+└───────────────────────────┬────────────────────────────────┘
                             │  postMessage (no SharedArrayBuffer)
-┌───────────────────────────┴───────────────────────────────┐
+┌───────────────────────────┴────────────────────────────────┐
 │                       Web Worker                           │
-│  ┌──────────────── JS host shim (~600 lines) ───────────┐ │
-│  │  imports: timers, fetch, storage, present, log …     │ │
-│  │  exports: init, wake, tick, key, resize              │ │
-│  │  externref table · OPFS handle table · canvas blit   │ │
-│  └──────────────────────┬──────────────────────────────┘ │
-│  ┌──────────────────────┴─── kernel.wasm ───────────────┐ │
-│  │  allocator · core types · Task<T> · scheduler        │ │
-│  │  Channel<T> · Process · CancelToken                  │ │
-│  │  screen cells · VFS mount table · shell and builtins │ │
-│  └──────────────────────────────────────────────────────┘ │
-│  ┌──── (M8+) per-process WebAssembly.Instance ──────────┐ │
-│  │  own linear memory, own import closure, own limits   │ │
-│  └──────────────────────────────────────────────────────┘ │
+│  ┌───────────── JS host shim (~1,600 lines) ─────────────┐ │
+│  │  imports: log, now, present, fs, fs_sync, svc         │ │
+│  │  exports: init, wake, tick, key, resize, ref,         │ │
+│  │           sys, sys_async                              │ │
+│  │  externref table · OPFS handle table · canvas blit    │ │
+│  └────────────────────┬──────────────────────────────────┘ │
+│  ┌────────────────────┴──── kernel.wasm ─────────────────┐ │
+│  │  allocator · core types · Task<T> · scheduler         │ │
+│  │  Channel<T> · scheduler jobs · CancelToken            │ │
+│  │  screen cells · VFS mount table · shell and builtins  │ │
+│  └───────────────────────────────────────────────────────┘ │
+│  ┌─────── (M8+) per-process WebAssembly.Instance ────────┐ │
+│  │  own linear memory, own import closure, own limits    │ │
+│  └───────────────────────────────────────────────────────┘ │
 └───────────────────────────┬────────────────────────────────┘
                             │  postMessage: bind, step
-┌───────────────────────────┴───────────────────────────────┐
-│         (M9+) Web Worker, one untrusted process            │
+┌───────────────────────────┴────────────────────────────────┐
+│       (M9+) Web Worker, one untrusted process              │
 │  the same instance, one thread further out, where          │
 │  terminate() does not need its cooperation                 │
 └────────────────────────────────────────────────────────────┘
@@ -147,12 +152,16 @@ Appendix C was verified against.
     -std=c++20 -Os \
     -nostdlib -nostdinc++ \
     -fno-exceptions -fno-rtti -fno-threadsafe-statics \
-    -Wl,--no-entry -Wl,--export-dynamic -Wl,--allow-undefined
+    -Wl,--no-entry -Wl,--gc-sections
 ```
 
 This command line is verified to compile a coroutine that suspends and resumes. See
 Appendix C for the one gotcha — libc++'s `<coroutine>` header cannot be used freestanding,
-so we supply our own ~25-line shim over the `__builtin_coro_*` intrinsics.
+so we supply our own shim over the `__builtin_coro_*` intrinsics, which is
+[src/kernel/coroutine.h](../src/kernel/coroutine.h).
+
+`--export-dynamic` and `--allow-undefined` were on this line as first written and are
+deliberately gone; C.3 says why, and putting either back would be a regression.
 
 **No exceptions, no RTTI.** Errors are values: `Result<T, E>`. Propagation through
 `co_await` uses a small `TRY()` macro rather than unwinding.
@@ -161,7 +170,7 @@ so we supply our own ~25-line shim over the `__builtin_coro_*` intrinsics.
 
 Roughly 1700 lines of code that we will be glad to control:
 
-- **Allocator** — a bump arena plus size-class free lists over `memory.grow`. About 200
+- **Allocator** — a bump arena plus size-class free lists over `memory.grow`. Under 400
   lines. Coroutine frames go through it, so it must be fast (see §8.2).
 - **Core types** — `Str` (a UTF-8 view), `String`, `Vec<T>`, `Span<T>`, `Result<T, E>`,
   `Option<T>`, `HashMap<K, V>`. About 1500 lines.
@@ -221,23 +230,28 @@ request was honoured.
 **Wasm imports** (kernel → host), all non-blocking, all returning immediately:
 
 ```
-host_now(), host_random(ptr, len), host_log(ptr, len)
+host_now(), host_log(ptr, len)
 host_present(dirty_x, dirty_y, dirty_w, dirty_h)
 host_fs(op, token, req)                       // storage, async  (§5.2)
 host_fs_sync(op, handle, ptr, len, off) -> i32 // storage, sync   (§5.2)
 host_svc(op, token, req, ref)                 // host services, async (§3.7)
 ```
 
-`host_fetch` above was M6's, and it is not what M6 built: naming an import per operation is
-the style M5 replaced. `host_svc` carries fetch, WebSocket, the clipboard, file transfer and
-the wall clock over the same `req` record `host_fs` uses, with the object the operation acts
-on passed alongside as an `externref`.
+Six, and the smoke test asserts exactly these. A `host_random(ptr, len)` was on this list as
+first written and is **unbuilt**: nothing has needed entropy, and an import nothing calls is an
+ABI nothing tests. Adding it would make the count seven everywhere it is quoted, which is the
+only reason it is worth a sentence.
+
+A `host_fetch` was on the list too, and that is not what M6 built: naming an import per
+operation is the style M5 replaced. `host_svc` carries fetch, WebSocket, the clipboard, file
+transfer and the wall clock over the same `req` record `host_fs` uses, with the object the
+operation acts on passed alongside as an `externref`.
 
 There is no `host_timer`. The kernel owns the timer queue, so `tick()`'s return value already
 says when the host must call back, and one `setTimeout` serves every sleeping task.
 
-Storage is **multiplexed rather than named per operation**, which is what `host_storage_read`
-and `host_storage_write` above became in M5. One import per *calling convention* — one
+Storage is **multiplexed rather than named per operation**, which is what a `host_storage_read`
+and a `host_storage_write` became in M5. One import per *calling convention* — one
 asynchronous, one synchronous — is the shape §4.3 already fixes for the process ABI, and it
 keeps the exact-import assertion in the smoke test stable while operations are added. `req` is
 the address of a request record carrying the string argument, the flags, a reply buffer and
@@ -284,17 +298,24 @@ grid does not have; M7 built the layout layer and left the promise unkept, becau
 belongs *in* the grid rather than above it — a per-row continuation bit written by
 `screen_put` — and it lands with whichever milestone needs scrollback.
 
-The layout layer over the grid arrived with M7, in `src/ui/`, and it is three small things
+The layout layer over the grid arrived with M7, in `src/ui/`, and it is four small things
 rather than a widget toolkit:
 
+- **`Grid`** — cells, a cursor and a damage rectangle, and nothing else. The kernel's screen is
+  one; a full-screen program paints another of its own, in its own address space, and blits the
+  damaged part across with one syscall (§4.3). That is what makes the layer linkable by a
+  process at all.
 - **`Pane`** — a rectangle with its own coordinates, style and cursor. Every write is clipped
   to it, so a status line cannot scribble on the text above it. A pane writes cells directly
-  and marks them with `screen_touch`; it never scrolls, because scrolling moves the whole grid.
-- **`FullScreen`** — the alternate screen as RAII. The grid is copied to a heap block, blanked,
-  and copied back by the destructor, which is what gives the shell's screen back when a program
-  is cancelled while suspended.
+  and marks them in its `Grid`; it never scrolls, because scrolling moves the whole grid.
 - **`TextBuf` and `TextView`** — logical lines and a window onto them. `less` and `edit` differ
   in what they do with keys, not in how they scroll.
+
+`src/ui/` is a library a *process binary* links, and the kernel does not link it at all. The
+alternate screen is the one piece that stayed kernel-side, as **`FullScreen`** in
+`src/user/tty.h`: it copies the grid to a heap block, blanks it, and copies it back in its
+destructor, which is what gives the shell's screen back when a program is killed — and a killed
+process runs no destructor of its own, so it could not have been the program's (§4.3).
 
 Input is symmetric: a normalised `KeyboardEvent` becomes `{code, mods}`, is posted to the
 worker, and lands in a `Channel<Key>`. A printable key carries its Unicode codepoint; named
@@ -314,12 +335,24 @@ is claimed, so a program that has taken the screen and stopped answering stays k
 
 - **`Channel<T>`** — an async MPSC queue with bounded capacity: `co_await ch.recv()` and
   `co_await ch.send(v)`. This one type is our pipe, our stdin, and our IPC.
-- **`Process`** — a `Task<int>` plus a name, argv, cwd, stdio channels, and a `CancelToken`.
-  `spawn()` pushes it onto the scheduler. Killing means signalling the token; every
-  `co_await` point checks it and unwinds by returning, so destructors run correctly.
-  Structured concurrency: a parent `co_await`s a child group, and cancellation propagates
-  down the tree. The name is a view the scheduler keeps, and `sched_procs()` reads the table
-  back out — which is what /proc is made of (§5.1).
+- **A scheduler job** — a `Task<i32>`, a name and a `CancelToken`, which is all the scheduler
+  keeps. `sched_spawn()` pushes one on and hands back its pid; killing means signalling the
+  token, and every `co_await` point checks it and unwinds by returning, so destructors run
+  correctly. The name is a view the scheduler holds rather than owns, and `sched_procs()` reads
+  the table back out — which is what /proc is made of (§5.1). There is no `Process` type: argv
+  and stdio belong to the pipeline stage (`src/user/prog.h`) and the working directory is one
+  global (§5.1), so a job is the smaller thing the kernel actually needs.
+
+  **Cancellation does not propagate down a tree, and this section once said it would.**
+  `CancelState::waiting` is a single slot, so a job cannot have two children parked at once —
+  which a pipeline needs, since its stages run at the same time. So a pipeline's stages are
+  independent jobs, and the parent-child relationship is put back by hand: `run_line`'s frame
+  holds a destructor that cancels every stage it started, on its way out for any reason. The
+  cost is that a cancelled child does not unwind until the scheduler resumes it, a tick or two
+  after its parent is gone, so it must touch nothing the parent owns. A real child-group
+  awaitable needs intrusive queue links inside `Waiter` first — the same work a channel with two
+  blocked senders would need — and Release_Notes.md's "Structured concurrency, put back by hand"
+  is the full argument.
 - **The job table** — a pipeline started with `&` outlives the shell frame that started it, so
   M7 filed it here: an id, the command text, the stages' pids, and a reaper task standing where
   the shell stands for a foreground pipeline. `jobs`, `fg` and `kill` are shell builtins over it
@@ -526,10 +559,13 @@ over its path, neither with a header glued on the front.
 **The operation table grew with the programs.** M8 fixed it at eight — `exit`, `getpid`, `now`
 and `stage` synchronously, `write`, `read`, `open` and `close` asynchronously — because those
 were what a binary needed when only two were binaries. Retiring the applet tier meant every
-program needed what it had reached for directly, and the table grew to match: `stat`, `list`,
-`mkdir` and `remove` beside the descriptor operations, `sleep` for the timer queue, and `clock`
-and `storage` for the two host services no file can stand in for. Every one has a caller in
+program needed what it had reached for directly, and the table grew to twenty-seven: `stat`,
+`list`, `mkdir` and `remove` beside the descriptor operations; `sleep` for the timer queue;
+`clock` and `storage` for the two host services no file can stand in for; `fetch`, `wsopen`, the
+two clipboard operations and `pick`/`pickopen`/`save` for the ones that hand back a stream; and
+five terminal operations for a program that takes the whole screen. Every one has a caller in
 `src/cmd/`, which is the rule that keeps the table from growing on speculation.
+[System_Calls.md](System_Calls.md) lists them all, with what each carries.
 
 **What the kernel already publishes as text needs no operation.** `/proc` is a filesystem, so a
 process reads it with `open` and `read` like anything else: `pwd` is `/proc/cwd`, `mount` is
@@ -626,14 +662,16 @@ the full comparison and the durability caveats.
 
 ```
 BundleFs   → one packed archive  (read-only /bin and /share — immutable, cheap)
-OpfsFs     → OPFS                (read-write /home, /var — the real store)
-MemFs      → linear memory       (/, /tmp, and the fallback when OPFS is absent)
-HostFs     → File System Access  (/mnt/host, Chromium only, opt-in)
-HttpFs     → Range requests      (read-only remote trees)
+OpfsFs     → OPFS                (read-write /home — the real store)
+MemFs      → linear memory       (/, and the fallback when OPFS is absent)
+ProcFs     → the scheduler       (/proc, generated at open)
+
+unbuilt:
+  a File System Access Fs        (a real local directory, Chromium only, opt-in — §5.4)
+  an Fs over Range requests      (read-only remote trees)
 ```
 
-Two of those differ from what this section first said, and both for the same reason — the thing
-they were to hold does not exist yet:
+Several of those differ from what this section first said:
 
 - **`BundleFs` reads one archive, not the Cache API.** The Cache API stores `Request`/`Response`
   pairs, which is worth having once `fetch` exists to produce them; that is M6. Until then the
@@ -722,10 +760,15 @@ behaviour.
 explicit user gesture and permission grant. It is the closest thing to mounting the host
 filesystem, and it is how someone would edit their real project directory from our shell.
 
-Its reach is limited (Appendix A), so treat it strictly as progressive enhancement: a `mount`
-command that is simply absent when `window.showDirectoryPicker` is undefined. Directory
-handles are structured-cloneable, so we can stash one in IndexedDB and re-offer the mount on
-the next visit — though permission must be re-requested each session.
+Its reach is limited (Appendix A), so treat it strictly as progressive enhancement, offered only
+where `window.showDirectoryPicker` is defined. Directory handles are structured-cloneable, so we
+can stash one in IndexedDB and re-offer the mount on the next visit — though permission must be
+re-requested each session.
+
+**This is unbuilt.** `mount` is an ordinary binary that reformats `/proc/mounts`, and mounting is
+not yet something a user does: `vfs_mount` is called from boot and from nowhere else. Making it
+one needs the `Fs` above, a syscall or a `/proc` write to reach it, and an answer to what a
+second process should see — which is the same namespace question §4.3 leaves open.
 
 The universally available escape hatch is the boring one: `<input type="file">` for import
 and a Blob download for export. Wire it up early as `/mnt/import` and an `export` command. It
@@ -760,19 +803,21 @@ numbering here is cited from source comments.
 ## 7. Repository layout
 
 As created in M0; `src/user` arrived with M3, `src/fs` with M5, `src/svc`
-with M6, `src/ui` with M7, and `src/proc` and `src/cmd` with M8. `braam_ui` is a sibling of
-`braam_fs` and `braam_svc`: above the kernel, below userland, and depending on neither of the
-other two. `src/proc` is in none of that hierarchy — it is a *different binary's* runtime, and
-the only thing it shares with the kernel is a handful of headers and the allocator.
+with M6, `src/ui` with M7, and `src/proc` and `src/cmd` with M8. `braam_fs` and `braam_svc` are
+siblings above the kernel and below userland, depending on neither the other nor upwards.
+`braam_ui` is in neither hierarchy: it is linked by `braam_proc` and *not by the kernel at all*,
+because the programs that paint are binaries. `src/proc` is likewise a *different binary's*
+runtime — what it shares with the kernel is four translation units and a handful of headers.
 
 ```
 doc/Concept.md          this document
 doc/Milestones.md       the plan: M0–M9 and their acceptance criteria
 doc/Release_Notes.md    reasoning behind the code, milestone by milestone
-Makefile                wrapper: all, run, serve, clean
+doc/System_Calls.md     the kernel↔process mechanism, end to end (§4.3)
+Makefile                wrapper: all, run, serve, release, clean
 CMakeLists.txt          the build
 cmake/                  the wasm32-unknown-unknown toolchain file
-src/kernel/             allocator, core types, Task, scheduler, Channel, Process
+src/kernel/             allocator, core types, Task, scheduler, Channel, screen
 src/kernel/coroutine.h  the freestanding <coroutine> shim (Appendix C)
 src/kernel/hostcall.h   the asynchronous host request, shared by both interfaces
 src/kernel/jsref.h      the externref table and JsRef (§3.7)
@@ -780,14 +825,19 @@ src/kernel/sysabi.h     the kernel↔process wire, included by both sides (§4.3
 src/proc/               a process binary's whole runtime: _start, syscalls, stdio
 src/cmd/                one file per program; every program is a binary of its own
 src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
-src/svc/                fetch, WebSocket, clipboard, file transfer, wall clock
-src/ui/                 the layout layer: Pane, FullScreen, TextBuf, TextView (§3.5)
+src/svc/                fetch, WebSocket, clipboard, file transfer, clock, processes
+src/ui/                 the layout layer over a Grid: Pane, TextBuf, TextView (§3.5)
 src/user/               LineEditor, grammar, job runtime, shell, exec, ProcFs, boot
+src/user/tty.h          the tty pump and the terminal claims: KeyInput, FullScreen
 src/user/builtin/       one file per shell builtin, plus the table (§4)
 bundle/                 the tree tools/pack.py packs into /bin and /share
-test/                   in-wasm unit tests, the Node driver, the storage and service fakes
-web/                    braam.js (the embedding API), worker.js, host shim, shims, renderer
-tools/                  build scripts, bundle packer, size-budget check, chat server
+test/                   in-wasm unit tests, the Node driver, and the fakes: storage,
+                        services, and a tier-3 worker with no thread in it
+web/                    braam.js (the embedding API), worker.js, host shim, renderer
+web/proc.js             both halves of the process protocol; procworker.js is a tier-3
+                        process's worker, and wiring only
+tools/                  build scripts, bundle packer, metadata stamper, version and
+                        release scripts, size-budget check, chat server
 ```
 
 ---
@@ -919,9 +969,10 @@ variant. The generic `include/c++/v1` directory exists but is empty.
 
 ### C.2 What does work
 
-A hand-written shim of about 25 lines over the `__builtin_coro_*` intrinsics — declaring
+A hand-written shim over the `__builtin_coro_*` intrinsics — declaring
 `std::coroutine_traits`, `std::coroutine_handle<>`, `std::coroutine_handle<P>`,
-`std::suspend_always` and `std::suspend_never` — compiles cleanly with:
+`std::suspend_always` and `std::suspend_never` — compiles cleanly with (the file that grew
+out of it, [src/kernel/coroutine.h](../src/kernel/coroutine.h), is 124 lines with its comments):
 
 ```
 --target=wasm32-unknown-unknown -std=c++20 -Os \

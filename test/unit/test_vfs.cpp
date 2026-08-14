@@ -19,7 +19,7 @@ Result<usize> write(i32 fd, u64 off, Str s)
 }
 
 // A filesystem that refuses everything, to prove the VFS checks before it
-// asks. /usr and /bin are both this shape.
+// asks. /bin and /share are both this shape.
 struct ReadOnlyFs final : Fs {
     Str kind() const override { return "rofs"; }
 
@@ -60,7 +60,7 @@ void test_vfs()
 
     CHECK(vfs_mount("/", heap_new<MemFs>()).is_ok());
     CHECK(vfs_mount("/home", heap_new<MemFs>()).is_ok());
-    CHECK(vfs_mount("/usr", heap_new<ReadOnlyFs>()).is_ok());
+    CHECK(vfs_mount("/share", heap_new<ReadOnlyFs>()).is_ok());
     CHECK_EQ(vfs_mounts().size(), 3);
 
     // Mounting twice on one point is an error, and the rejected filesystem is
@@ -108,9 +108,9 @@ void test_vfs()
     CHECK(vfs_size(fd).error() == Error::Invalid);
 
     // A read-only mount is refused above the filesystem, not by it.
-    CHECK(run_now(vfs_open("/usr/x", O_WRITE | O_CREATE)).error() == Error::Perm);
-    CHECK(run_now(vfs_mkdir("/usr/x")).error() == Error::Perm);
-    CHECK(run_now(vfs_remove("/usr/x", false)).error() == Error::Perm);
+    CHECK(run_now(vfs_open("/share/x", O_WRITE | O_CREATE)).error() == Error::Perm);
+    CHECK(run_now(vfs_mkdir("/share/x")).error() == Error::Perm);
+    CHECK(run_now(vfs_remove("/share/x", false)).error() == Error::Perm);
 
     // A mount point is not the filesystem underneath it to drop.
     CHECK(run_now(vfs_remove("/home", true)).error() == Error::Perm);
@@ -120,7 +120,7 @@ void test_vfs()
     {
         Vec<Entry> root = move(run_now(vfs_list("/")).value());
         CHECK(has(root, "home"));
-        CHECK(has(root, "usr"));
+        CHECK(has(root, "share"));
         for (const Entry &e : root)
             CHECK(e.kind == NodeKind::Dir);
     }

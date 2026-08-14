@@ -1,6 +1,6 @@
 # One binary per program, each its own wasm module (Concept.md §4.1). They are
-# packed into the bundle as /usr/bin/<name>, so the target name carries a
-# prefix the file does not.
+# packed into the bundle as /bin/<name>, so the target name carries a prefix the
+# file does not.
 #
 # --import-memory is what makes the 16 MB cap the kernel's decision rather than
 # the binary's claim: the module declares no maximum, and the host supplies a
