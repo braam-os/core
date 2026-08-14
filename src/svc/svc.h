@@ -23,6 +23,14 @@ enum class SvcOp : u32 {
     PickRead,  // ref, flags = index, result = offset -> buf, as much as fits
     Save,      // arg = the file name, buf = the bytes
     ClipWait,  // -> buf, once the user pastes
+
+    // Isolated processes (Concept.md §4.3), in src/svc/proc.h. They are here
+    // rather than behind an import of their own because §2.2 asks for one
+    // import per calling convention, and this is that convention exactly.
+    ProcSpawn, // aux = pid, arg = path, buf = the image, flags = the page counts
+    ProcStep,  // aux = pid, buf = the payload for _start or _resume
+               //   -> result_lo = ProcStep
+    ProcKill,  // req = pid; no record, no reply
 };
 
 // A service operation. The record's inline string argument is a URL or a name.

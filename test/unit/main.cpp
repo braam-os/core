@@ -36,6 +36,7 @@ void test_path();
 void test_hostfs();
 void test_jsref();
 void test_svc();
+void test_sysabi();
 void test_memfs();
 void test_vfs();
 void test_bundlefs();
@@ -86,6 +87,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_jsref();
     test_hostfs();
     test_svc();
+    test_sysabi();
     test_memfs();
     test_bundlefs();
     test_vfs();

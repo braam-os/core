@@ -61,7 +61,7 @@ jobs:
           echo '### Binary size' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           python3 tools/size_budget.py --budgets tools/size_budget.txt build/kernel.wasm \
-            >> "$GITHUB_STEP_SUMMARY"
+            build/src/bin/*.wasm >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4

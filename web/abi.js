@@ -16,7 +16,7 @@ export const E = {
 const F = {
     op: 0, token: 1, argPtr: 2, argLen: 3, flags: 4,
     bufPtr: 5, bufCap: 6, status: 7, resultLo: 8, resultHi: 9, bufLen: 10,
-    ref: 11,
+    ref: 11, aux: 12,
 };
 
 export class Request {

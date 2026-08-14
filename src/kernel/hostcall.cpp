@@ -81,6 +81,17 @@ bool HostCall::put(Str bytes)
     return true;
 }
 
+bool HostCall::put(String &&bytes)
+{
+    if (!r_)
+        return false;
+    r_->buf       = move(bytes);
+    r_->h.buf_ptr = host_addr(r_->buf.data());
+    r_->h.buf_cap = u32(r_->buf.capacity());
+    r_->h.buf_len = u32(r_->buf.size());
+    return true;
+}
+
 bool HostCall::reserve_ref()
 {
     if (!r_)

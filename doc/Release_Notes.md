@@ -7,6 +7,158 @@ of the two needs amending.
 
 ---
 
+## M8 — Isolated processes
+
+A program can now be a binary of its own, in a `WebAssembly.Instance` of its own, with an
+address space, an `externref` table, a file-descriptor table and sixteen megabytes that belong
+to nobody else — and the shell, the pipes, `^C`, `jobs` and `/proc` do not know the difference.
+236,872 bytes of `kernel.wasm` against an unchanged 256 KiB budget, plus three binaries of
+6–17 KB each.
+
+`Concept.md` is amended in five places: §3.4 (two new exports and the record's new word), §4
+(tier selection, and what the unit tests can drive), §4.3 (the ABI as built), §4.4 (the compile
+is not streaming) and Appendix B (how the copy actually gets its destination).
+
+### The rule the whole design turns on
+
+**The kernel never calls a process, and the host never calls one while the kernel is on the
+stack.** Everything else here follows from that sentence.
+
+The first half is not a choice: wasm has no instruction that reaches another instance, so only
+JS can call `_start`. The second half is: JS *could* call `_start` from inside `host_svc`, the
+way `test/fakefs.mjs` answers a storage request from inside the import — and that works there
+precisely because a reply only queues. A process step is not a reply. It runs a program, and
+that program immediately calls back in through `sys`, which allocates, touches the process
+table and wakes a token. Doing that on top of a half-finished `HostCall::issue()` is a class of
+bug that would show up as heap corruption weeks later.
+
+So one `_start` or `_resume` is a deferred host action, structurally identical to a storage
+reply: the kernel's proxy task parks on a wake token, the host steps the instance once the tick
+has unwound, and wakes the token with the outcome. In `web/worker.js` that deferral is a
+microtask; in the test driver it is an explicit `drain()` between ticks; the stepping code
+itself is the same `web/proc.js` in both, because the difference is scheduling and not
+behaviour.
+
+Synchronous syscalls run the other way and need none of this. `sys(pid, …)` re-enters the
+kernel from JS at top level, exactly as `key()` and `wake()` do, and answers without parking.
+
+### The proxy task is the entire cancellation story
+
+A tier-2 stage is a `Task<i32>` like any other. It spawns the instance, then loops: step, and
+when the step reports "suspended", perform the syscall the process is parked on and step again
+with the answer. The syscall is performed *by the proxy, in kernel-land*, with the proxy's own
+`CancelToken`, against the `Stdio` the job gave it — so a write into a full pipe is
+`Stream::Write`, a read at end of input is `Source::Read`, and `^C` reaches a process through
+exactly the awaitables it reaches an applet through.
+
+That is why M8 adds nothing to the job runtime, the job table, `/proc` or the tty pump. It is
+also why the destructor is the whole kill path: cancelling the proxy unwinds it, and `~End`
+tells the host to drop the instance. A killed process never unwinds — its coroutine frames, its
+heap and its descriptors go at once, which is the isolation working rather than a shortcut.
+That is a strictly better kill than an applet gets, and still not a *liveness* kill: a process
+in a loop between syscalls is M9's problem, and nothing here changes that.
+
+### No new import, two new exports
+
+M5 fixed the style at one import per calling convention and M6 held to it. Spawning,
+stepping and killing are asynchronous host operations with a request record, which is
+`host_svc` exactly, so they are three more of its operations. §2.2 still sanctions two
+synchronous exceptions and there are still six imports.
+
+The two new exports are not the host's business at all: they are the process's `sys` and
+`sys_async`, forwarded with a pid. That indirection is the capability system §4.1 promised, and
+it is twelve lines of `web/proc.js` — the closure is built per instantiation with the pid
+written into it, so *process 7 holds no function that says 3*. The second acceptance criterion
+is not a check that runs; it is a shape the ABI has, and what the smoke test asserts is the
+shape: the module's imports are `env.memory`, `kernel.sys`, `kernel.sys_async`, and `sys` has
+no argument a pid could go in.
+
+`HostRequest` gained one word, `aux`. The alternative was to overload `flags` and write the
+page counts into `result_lo` on the way *out*, which would have made a reply field an argument
+field and saved four bytes.
+
+### Memory is imported, so the cap is the kernel's
+
+`-Wl,--max-memory=16777216` would also make `memory.grow` fail at 16 MB, and it would be the
+*binary's* number. `--import-memory` with no declared maximum puts it the other way round: the
+module says only what it needs to start with, and the host supplies
+`new WebAssembly.Memory({initial, maximum: 256})`. A binary cannot ask for more by being
+compiled differently. That is what §4.1 means by an rlimit without cgroups, and `hog` is in
+`src/bin/` to demonstrate it: it takes 64 KiB at a time until the allocator says no, gives one
+span back so it has somewhere to put the coroutine frames that report the answer, and asks
+`memory.grow` for one more page.
+
+### The metadata is stamped after the link, not compiled in
+
+`exec` reads the tier out of a `braam` custom section, which was to be a
+`__attribute__((section(".custom_section.braam")))` global. It never reached the object file —
+`used` keeps the compiler from dropping it but does not make it a custom section here — and
+rather than fight the toolchain, `tools/stamp.py` appends the section after the link.
+
+That turned out to be the better place anyway. The section carries `initial_pages`, which has
+to agree with `-Wl,--initial-memory`, and the stamper is invoked from the same four lines of
+`src/bin/CMakeLists.txt` that set the link flag. A number that must match another number should
+be written once.
+
+### What the port of `wc` and `tail` proves, and what stopped `echo`
+
+The third criterion is "userland behaviour is unchanged", and the honest way to check it is to
+move a program and leave its tests alone. `wc` and `tail` moved to `/usr/bin`; `echo 'a b' | wc`
+still prints `1 2 4`, `wc < notes` still prints `2 2 8`, and `curl /hello.txt | wc` still prints
+`1 2 9` — M4's, M5's and M6's assertions, unedited, now running an instance through a
+pipe, a redirection and a fetched body.
+
+`echo` and `sleep` were meant to move as well, and could not. The in-wasm unit tests drive
+both — `echo` is `test_shell`'s workhorse and `sleep` is `test_jobs`'s only timer — and
+`tests.wasm` cannot run a tier-2 program *at all*: stepping an instance means returning to the
+host, and `run_tests()` returns to the host exactly once, at the end. Porting them would have
+meant rewriting two of the load-bearing unit tests around programs chosen to suit the harness,
+which is the tail wagging the dog. The constraint is real and general, so it is written into
+§4 rather than left as a note here: whatever `test/unit/` runs has to stay an applet.
+
+Two assertions in `test_shell` did have to move off `wc`, and both got better for it: one now
+checks a pipeline by its output rather than by counting it, and the other checked a
+hand-maintained count of programs whose names contain an `e`.
+
+### The syscall table, and the isolation this does not buy
+
+Eight calls: `exit`, `getpid`, `now` and `stage` synchronously, `write`, `read`, `open` and
+`close` asynchronously. Every one has a caller in `src/bin/`; a `sleep` syscall was written and
+then removed when `sleep` stayed an applet, because a syscall nothing calls is an ABI nothing
+tests.
+
+`stage` is the odd one, and it is the host's rather than a program's: the kernel cannot be
+handed a buffer it did not allocate, so before copying a payload across the closure asks for
+one. That is Appendix B's `Uint8Array.set` plus the one thing Appendix B did not mention.
+
+A descriptor is an index into the process's own table, so a number one process holds means
+nothing in another. Paths are not: `open` resolves against the one global cwd with the kernel's
+full authority, so M8 isolates address space, memory and descriptors, and does not isolate the
+namespace. Fixing that needs a per-process root and a cwd that is not a global, which is a
+milestone's worth of work in the VFS and not a line in the dispatcher.
+
+### Smaller decisions
+
+- **`panic` is out of line now**, and takes `(ptr, len)` rather than a `Str`. A process has no
+  host imports to log through, so it needs a different definition, which means the inline one
+  had to go. The first version took a `Str` and cost 2,812 bytes: the wasm ABI passes an
+  eight-byte struct indirectly, and there are a hundred call sites. Two scalars cost 55.
+- **`stage()` in the job runtime takes a built `Task<i32>`** rather than a `Program *`, because
+  a tier-2 body needs its pid and `sched_spawn` only hands one back once the task exists. The
+  pid goes into the `Executable` the job owns, and the proxy reads it at its first resume — a
+  tick later, since a `Task` is lazy.
+- **The scheduler's name for a stage is `argv[0]`**, not `Program::name`, which a binary does
+  not have. It is a view into the job's word store, which outlives every stage.
+- **`help` lists `/usr/bin` too.** A program need not be in the registry to be a program, and
+  what tier a name runs at is not something the listing should say.
+- **A binary is re-read from the VFS on every `exec`.** The host caches the compiled `Module`
+  by path, which is the expensive half, but the bytes still cross the VFS and one copy into the
+  request record each time. Caching those too wants an invalidation story, and `/usr` being
+  read-only is not one that generalises.
+- **The bundle is staged rather than packed in place.** The binaries are build outputs and
+  `/usr/bin/wc` has to be a plain name, so `build/bundle/` is a copy of `bundle/` with
+  `bin/<name>` added, and that is what `tools/pack.py` packs.
+
 ## M7 — Depth
 
 A program can take the whole screen and give it back, a job can outlive the prompt that started

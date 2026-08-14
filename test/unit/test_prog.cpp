@@ -7,12 +7,14 @@
 namespace {
 
 // Every program in src/prog/. The count is the tripwire for a registrar the
-// linker dropped: those fail silently, and only a count notices.
-constexpr Str NAMES[] = { "cat",   "cd",     "chat",    "clear", "curl", "date",  "df",
-                          "echo",  "edit",   "export",  "false", "fg",   "grep",  "head",
-                          "help",  "import", "jobs",    "kill",  "less", "ls",    "mkdir",
-                          "mount", "pbcopy", "pbpaste", "pwd",   "rm",   "sleep", "tail",
-                          "touch", "true",   "version", "wc" };
+// linker dropped: those fail silently, and only a count notices. src/bin/ is
+// not here — those are binaries, and nothing in this module can run one: a
+// process is stepped by the host, and run_tests() never returns to it.
+constexpr Str NAMES[] = { "cat",  "cd",   "chat",  "clear",  "curl",   "date",
+                          "df",   "echo", "edit",  "export", "false",  "fg",
+                          "grep", "head", "help",  "import", "jobs",   "kill",
+                          "less", "ls",   "mkdir", "mount",  "pbcopy", "pbpaste",
+                          "pwd",  "rm",   "sleep", "touch",  "true",   "version" };
 
 i32 status;
 

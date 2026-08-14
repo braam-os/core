@@ -29,10 +29,8 @@ add_library(braam_prog OBJECT
     pwd.cpp
     rm.cpp
     sleep.cpp
-    tail.cpp
     touch.cpp
     true.cpp
-    version.cpp
-    wc.cpp)
+    version.cpp)
 
 target_link_libraries(braam_prog PUBLIC braam_user braam_flags)

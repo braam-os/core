@@ -1,5 +1,6 @@
 #include "job.h"
 
+#include "exec.h"
 #include "fs/vfs.h"
 #include "io.h"
 #include "kernel/alloc.h"
@@ -42,6 +43,7 @@ struct Job {
     Vec<Files *> files;       // one per stage, index-aligned with the pipeline
     Channel<Report, 16> done; // MAX_STAGES plus the pump, rounded up
     Vec<u32> pids;
+    Vec<Executable *> execs; // one per stage; a tier-2 stage reads its own back
     u32 pump_pid = 0;
 
     ~Job()
@@ -52,6 +54,8 @@ struct Job {
         }
         for (Files *f : files)
             heap_delete(f);
+        for (Executable *e : execs)
+            heap_delete(e);
     }
 };
 
@@ -204,12 +208,14 @@ Task<Result<void>> open_redirect(Files &f, Redir kind, Str path)
     co_return {};
 }
 
-Task<i32> stage(Job *j, u8 index, const Program *p, Args args, Stdio io, Pipe *in, Pipe *out)
+// The one place a program is entered, at either tier. The body arrives already
+// built, because a tier-2 stage needs its pid — which sched_spawn only hands
+// back once this task exists — written into the Executable first.
+Task<i32> stage(Job *j, u8 index, Task<i32> t, Pipe *in, Pipe *out)
 {
     i32 status = 1;
     StageEnd end{ j, in, out, &status, index };
 
-    Task<i32> t = p->run(args, io);
     if (!t) // the frame would not allocate
         co_return status;
     status = co_await t;
@@ -504,21 +510,32 @@ Task<i32> run_line(Str line, Stdio io)
         }
     }
 
-    Vec<const Program *> progs;
-    if (!progs.reserve(n)) {
+    // Resolution is where the tier is decided, out of the binary's metadata
+    // (Concept.md §4). It reads the image, so it can fail with a diagnostic
+    // before anything has run — which is what "not found" already did.
+    if (!j->execs.reserve(n)) {
         co_await io.err.write("braam: out of memory\n");
         co_return 1;
     }
     for (usize i = 0; i < n; i++) {
-        Args a           = j->pl.args(i);
-        const Program *p = program_find(a[0]);
-        if (!p) {
+        Args a        = j->pl.args(i);
+        Executable *e = heap_new<Executable>();
+        if (!e || !j->execs.push(e)) {
+            heap_delete(e);
+            co_await io.err.write("braam: out of memory\n");
+            co_return 1;
+        }
+
+        Result<void> r = Err(Error::NoMemory);
+        if (Task<Result<void>> t = exec_resolve(a[0], *e))
+            r = co_await t;
+        if (r.is_err()) {
             co_await io.err.write("braam: ");
             co_await io.err.write(a[0]);
-            co_await io.err.write(": not found\n");
-            co_return 127;
+            co_await io.err.write(r.error() == Error::NotFound ? ": not found\n"
+                                                               : ": not executable\n");
+            co_return r.error() == Error::NotFound ? 127 : 126;
         }
-        progs.push(p);
     }
 
     for (usize i = 0; i + 1 < n; i++) {
@@ -564,9 +581,17 @@ Task<i32> run_line(Str line, Stdio io)
         sio.out = f->out.fd >= 0 ? file_sink(f->out) : (out ? pipe_sink(*out) : io.out);
         sio.err = f->err.fd >= 0 ? file_sink(f->err) : io.err;
 
+        // The name the scheduler keeps is argv[0], a view into the job's word
+        // store, which outlives every stage — Program::name would not exist
+        // for a binary, and the path is not what /proc should show.
+        Executable *e = j->execs[i];
+        Args a        = j->pl.args(i);
+        Task<i32> body =
+            e->tier == Tier::Applet ? e->applet->run(a, sio) : exec_process(*e, a, sio);
+
         j->refs++; // the stage's own reference, dropped by StageEnd
-        u32 pid =
-            sched_spawn(stage(j, u8(i), progs[i], j->pl.args(i), sio, in, out), progs[i]->name);
+        u32 pid = sched_spawn(stage(j, u8(i), move(body), in, out), a[0]);
+        e->pid  = pid;
         if (!pid || !j->pids.push(pid)) {
             j->refs--;
             if (pid)

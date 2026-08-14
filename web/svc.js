@@ -25,6 +25,9 @@ export const OP = {
     PICK_READ: 12,
     SAVE: 13,
     CLIP_WAIT: 14,
+    PROC_SPAWN: 15,
+    PROC_STEP: 16,
+    PROC_KILL: 17,
 };
 
 const utf8 = new TextEncoder();
@@ -152,7 +155,7 @@ async function clipboard(r, held, key, get) {
 // `relay` asks the page for something only the DOM can do; `reply` delivers a
 // finished request. As in fs.js, `reply` must never run inside the import call
 // itself — every path below goes through a promise, so it cannot.
-export function makeSvcImport(mem, deposit, relay, reply) {
+export function makeSvcImport(mem, deposit, relay, reply, proc) {
     const held = { read: null, wait: null };
 
     async function perform(r, op, ref) {
@@ -284,12 +287,30 @@ export function makeSvcImport(mem, deposit, relay, reply) {
             r.ok();
             return;
 
+        // Isolated processes (proc.js). They are ops of this import rather
+        // than an import of their own for the reason §2.2 gives: one import
+        // per calling convention, and this is that convention.
+        case OP.PROC_SPAWN:
+            proc.spawn(r);
+            return;
+
+        case OP.PROC_STEP:
+            await proc.step(r);
+            return;
+
         default:
             r.fail(E.UNSUPPORTED);
         }
     }
 
     return function svc(op, token, req, ref) {
+        // Killing a process is told, not asked, and `req` is the pid rather
+        // than a record: there is nothing to reply to and nothing to free.
+        if (op === OP.PROC_KILL) {
+            proc.kill(req >>> 0);
+            return;
+        }
+
         // Letting go is told, not asked: there is no reply and no record.
         if (op === OP.DROP) {
             if (ref && ref.ws)

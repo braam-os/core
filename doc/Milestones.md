@@ -196,13 +196,42 @@ Programs added: `edit`, `fg`, `jobs`, `kill`, `less`, for thirty-two. `kernel.wa
 181,545 to 225,784 bytes against an unchanged 256 KiB budget.
 See [Release_Notes.md](Release_Notes.md).
 
-## M8 — Isolated processes
+## M8 — Isolated processes — **done**
 The Concept.md §4.3 ABI, per-process `WebAssembly.Instance`, per-PID import closures,
 per-process memory caps, module cache, cross-boundary copies (Concept.md Appendix B).
 
-- [ ] A program runs as its own instance with a 16 MB cap and `memory.grow` fails past it
-- [ ] A process cannot issue a syscall on behalf of another PID
-- [ ] Tier selection comes from binary metadata; userland behaviour is unchanged
+- [x] A program runs as its own instance with a 16 MB cap and `memory.grow` fails past it
+- [x] A process cannot issue a syscall on behalf of another PID
+- [x] Tier selection comes from binary metadata; userland behaviour is unchanged
+
+There is **no new import**: spawning, stepping and killing a process are three more operations
+on `host_svc`, which is already the convention they want, so §2.2 still sanctions exactly two
+synchronous exceptions. There are two new exports, `sys` and `sys_async` — a process's own two
+imports, arriving with the pid the host bound into its closure, which is the second criterion in
+one sentence: there is no argument for a pid on the calling side. §4.3 is amended in four places
+and none of them is structural: memory is imported so the cap is the kernel's, `_start` takes
+argv rather than argc, a reply payload starts with a status, and **the kernel never calls a
+process — the host does, and never while the kernel is on the stack.**
+
+A tier-2 program is still an ordinary scheduler job: a proxy task issues the steps and performs
+the syscalls, so backpressure, `^C`, `kill`, `jobs`, `/proc` and the stage epilogue all work with
+nothing added. Its destructor drops the instance, which makes a kill total rather than
+cooperative — a killed process never unwinds, and its whole memory goes at once.
+
+`wc` and `tail` moved out of the registry into `/usr/bin`, which is how the third criterion is
+*checked* rather than argued: `echo 'a b' | wc`, `wc < notes` and `curl /hello.txt | wc` are M4's,
+M5's and M6's own assertions, unchanged, now running an instance. `echo` and `sleep` were meant
+to move too and could not: the in-wasm unit tests drive them, and `run_tests()` cannot step an
+instance because stepping one means returning to the host. That constraint is now written into
+§4. `hog` is new and exists to be refused: it takes everything it can and asks for one page more.
+
+The syscall table is deliberately small — `exit`, `getpid`, `now`, `stage` synchronously;
+`write`, `read`, `open`, `close` asynchronously — and every entry has a caller. Paths still
+resolve against the one global cwd, so M8 isolates address space, memory and descriptors but not
+the namespace a process can name. The registry went from thirty-two programs to thirty, with
+three binaries beside it; `kernel.wasm` went from 225,784 to 236,872 bytes against an unchanged
+256 KiB budget, and the binaries carry budgets of their own.
+See [Release_Notes.md](Release_Notes.md).
 
 ## M9 — Liveness isolation
 The own-worker tier: worker pool, `worker.terminate()` as `SIGKILL`, module `postMessage`.

@@ -1,5 +1,6 @@
 add_library(braam_svc STATIC
     net.cpp
+    proc.cpp
     svc.cpp
     xfer.cpp)
 

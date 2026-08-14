@@ -1,3 +1,10 @@
 # Binary size budgets, in bytes. One "name = limit" per line; the name is the
 # binary's file name. Raising a number is a deliberate act — see Release_Notes.md.
 kernel.wasm = 262144
+
+# Process binaries (M8). Each carries its own copy of the allocator, the
+# coroutine runtime and the string types, which is the duplication Concept.md
+# §4.4 warns about — these numbers are how it stays visible.
+hog.wasm = 16384
+tail.wasm = 32768
+wc.wasm = 32768

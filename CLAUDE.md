@@ -26,7 +26,12 @@ twenty-seven programs. M7 (depth) is done: the layout layer in `src/ui/` (`Pane`
 routed by the tty pump, `less` and `edit`, `&` with the job table in `src/user/job.{h,cpp}` and
 `jobs`/`fg`/`kill`, `ProcFs` on `/proc` with `sched_procs` under it, the `web/braam.js`
 embedding API, and thirty-two programs — all with no change to the wasm ABI. M8 (isolated
-processes) is next.
+processes) is done: the §4.3 process ABI in `src/kernel/sysabi.h`, the process-side runtime in
+`src/proc/`, binaries in `src/bin/` stamped by `tools/stamp.py` and packed into `/usr/bin`,
+`exec` and the syscall dispatcher in `src/user/exec.{h,cpp}`, the three process operations on
+`host_svc` in `src/svc/proc.{h,cpp}`, the per-pid import closure and module cache in
+`web/proc.js`, and two new exports — `sys` and `sys_async` — with no new import. Thirty applets
+and three binaries. M9 (liveness isolation) is next.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -131,7 +136,9 @@ main way to damage the design. Full statements in Concept.md §2.
    ABI. Storage and host services are each multiplexed — one import per calling convention, not
    one per operation — so adding an operation is an enum value on each side, not a new import.
    `ref(slot, obj)` is an export, not an exception: it stores a JS object in the externref table
-   and schedules nothing.
+   and schedules nothing, and so are M8's `sys`/`sys_async`, which are a *process's* imports
+   arriving with the pid the host bound to them. Spawning, stepping and killing a process are
+   three more `host_svc` operations, not a fourth import.
 3. **The terminal is a cell grid in linear memory, not a byte stream.** No ANSI escapes, no
    VT100 emulation, no xterm.js. Colours are struct fields and cursor addressing is indexing.
 
@@ -156,6 +163,12 @@ Further constraints that are easy to violate by habit:
 - **The externref table is the kernel's; JS never indexes it.** `import_module`/`import_name` do
   not apply to tables, so the table is module-defined: the host deposits through the `ref` export
   and receives an object as an argument of `host_svc`. Do not try to hand the table to JS.
+- **A process binary shares headers with the kernel, not code.** `src/proc/` links `alloc.cpp`,
+  `result.cpp` and `text.cpp` and nothing else from `src/kernel/`, because anything reaching a
+  host import would appear in the binary's import list — which `test/run.mjs` asserts exactly.
+  That is why `panic` is declared in `host.h` and defined once per binary, and why it takes
+  `(ptr, len)` rather than a `Str`: the wasm ABI passes an 8-byte struct indirectly, and that
+  cost 2,812 bytes across the kernel's call sites.
 - **Never `new` anything.** `operator new` returns null on failure and `-fno-exceptions` means
   the expression would construct at address zero. Use `heap_new`/`heap_delete` from `alloc.h`.
 - **One receiver per `Channel`, and the keyboard's is the tty pump.** A full-screen program
@@ -180,15 +193,32 @@ Further constraints that are easy to violate by habit:
 Isolation is tiered by trust, and `exec` picks a tier from binary metadata so userland does not
 notice (Concept.md §4):
 
-- **Kernel applet** — in-kernel coroutine, no isolation, no overhead. This is the only tier that
-  exists through M7, which is why `/bin` is `BinFs` over the program registry rather than a
-  directory of binaries, and why the working directory is one global rather than per-process.
-- **Separate instance, shared worker** (M8) — address-space, capability and memory-cap isolation.
+- **Kernel applet** — in-kernel coroutine, no isolation, no overhead. `/bin` is `BinFs` over the
+  program registry, and the working directory is still one global rather than per-process.
+- **Separate instance, shared worker** (M8) — address-space, capability, descriptor and
+  memory-cap isolation. A binary in `/usr/bin` carrying a `braam` custom section; `exec` reads
+  the tier out of it.
 - **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
   preempted.
 
-The kernel↔process ABI (Concept.md §4.3) is already fixed even though tiers 2 and 3 are not
-built, so that M0–M7 work does not have to be unpicked later. Do not design around its absence.
+The kernel↔process ABI is Concept.md §4.3 and `src/kernel/sysabi.h`, and both ends include the
+header so neither can drift alone. Three rules about it are load bearing:
+
+- **The kernel never calls a process, and the host never calls one while the kernel is on the
+  stack.** Only JS can call another instance's exports, and a process calls straight back in
+  through `sys`, so stepping one from inside a kernel import would run kernel code on a
+  half-changed heap. A step is queued and drained after `tick()` returns — a microtask in
+  `web/worker.js`, an explicit `drain()` in the test driver. Synchronous syscalls are the other
+  direction and re-enter the kernel at top level, exactly as `key()` does.
+- **A process's pid is written into its import closure, not passed.** That is the whole of "a
+  process cannot issue a syscall on behalf of another PID": there is no argument for it.
+- **The in-wasm unit tests cannot run a tier-2 program.** Stepping one means returning to the
+  host, and `run_tests()` does that once. Anything `test/unit/` drives must stay an applet —
+  which is why `echo` and `sleep` are still in `src/prog/`.
+
+A tier-2 program is an ordinary scheduler job: a proxy task in `src/user/exec.cpp` steps the
+instance and performs its syscalls with its own `CancelToken`, so `^C`, `kill`, `jobs`, `/proc`
+and the stage epilogue need nothing added. Its destructor drops the instance.
 
 Since M4 a pipeline's stages are independent scheduler jobs rather than a child group the shell
 `co_await`s: `CancelState::waiting` is a single slot, so one job cannot have two children parked
@@ -209,10 +239,12 @@ quietly.
   prose and revised in one place.
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
 - Layout: `src/kernel/`, `src/fs/` (paths, the VFS, the filesystems, the host storage ABI),
-  `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock), `src/ui/` (the layout
-  layer: `Pane`, `FullScreen`, `TextBuf`, `TextView`), `src/user/` (line editor, grammar, job
-  runtime and job table, shell, `BinFs`, `ProcFs`, boot), `src/prog/` (one self-registering file
-  per program), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`. Concept.md §7. `braam_fs`,
+  `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock, the process operations),
+  `src/ui/` (the layout layer: `Pane`, `FullScreen`, `TextBuf`, `TextView`), `src/user/` (line
+  editor, grammar, job runtime and job table, shell, `exec`, `BinFs`, `ProcFs`, boot),
+  `src/prog/` (one self-registering file per applet), `src/proc/` (a process binary's runtime)
+  and `src/bin/` (one file per binary), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`.
+  Concept.md §7. `braam_fs`,
   `braam_svc` and `braam_ui` are siblings above the kernel and below userland, and must not
   depend upwards or on each other: anything needing the program registry belongs in `src/user/`,
   which is why `BinFs` and `ProcFs` live there, and `braam_ui` must stay clear of the VFS.

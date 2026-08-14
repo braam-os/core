@@ -41,12 +41,16 @@ target_link_options(braam_flags INTERFACE
 
 target_include_directories(braam_flags INTERFACE ${CMAKE_SOURCE_DIR}/src)
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 add_subdirectory(src/kernel)
 add_subdirectory(src/fs)
 add_subdirectory(src/svc)
 add_subdirectory(src/ui)
 add_subdirectory(src/user)
 add_subdirectory(src/prog)
+add_subdirectory(src/proc)
+add_subdirectory(src/bin)
 
 # kernel.wasm — main.cpp holds the exports, so it links into the executable
 # directly; --gc-sections would not pull it out of an archive. The same is true
@@ -55,20 +59,33 @@ add_executable(kernel src/kernel/main.cpp)
 target_link_libraries(kernel PRIVATE
     braam_prog braam_user braam_fs braam_svc braam_ui braam_core braam_flags)
 
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+# bundle/ is packed rather than copied: BundleFs reads one archive, so the
+# worker loads one file instead of fetching a tree file by file. The process
+# binaries are staged into a copy of it first, since they are build outputs and
+# /usr/bin/echo must be a plain name rather than echo.wasm.
+set(BRAAM_BUNDLE_STAGE ${CMAKE_BINARY_DIR}/bundle)
+set(BRAAM_PACK_BUNDLE
+    ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
+    ${BRAAM_BUNDLE_STAGE} ${CMAKE_BINARY_DIR}/web/bundle.bin)
+
+foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
+    list(APPEND BRAAM_BIN_TARGETS bin_${prog})
+    list(APPEND BRAAM_BINARIES $<TARGET_FILE:bin_${prog}>)
+    list(APPEND BRAAM_STAGE_BINARIES
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:bin_${prog}> ${BRAAM_BUNDLE_STAGE}/bin/${prog})
+endforeach()
+
 set(BRAAM_SIZE_BUDGET_CHECK
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
     --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt
-    $<TARGET_FILE:kernel>)
+    $<TARGET_FILE:kernel> ${BRAAM_BINARIES})
 
-# bundle/ is packed rather than copied: BundleFs reads one archive, so the
-# worker loads one file instead of fetching a tree file by file.
-set(BRAAM_PACK_BUNDLE
-    ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
-    ${CMAKE_SOURCE_DIR}/bundle ${CMAKE_BINARY_DIR}/web/bundle.bin)
-
+# Only the kernel here: the binaries are checked by their own POST_BUILD, and
+# BRAAM_SIZE_BUDGET_CHECK covers everything from the `size` test.
 add_custom_command(TARGET kernel POST_BUILD
-    COMMAND ${BRAAM_SIZE_BUDGET_CHECK}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
+            --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt $<TARGET_FILE:kernel>
     VERBATIM)
 
 # Assembling build/web/ is its own target, and it always runs: hanging it off
@@ -79,8 +96,11 @@ add_custom_target(web ALL
             ${CMAKE_SOURCE_DIR}/web ${CMAKE_BINARY_DIR}/web
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:kernel> ${CMAKE_BINARY_DIR}/web/kernel.wasm
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/bundle ${BRAAM_BUNDLE_STAGE}
+    ${BRAAM_STAGE_BINARIES}
     COMMAND ${BRAAM_PACK_BUNDLE}
-    DEPENDS kernel
+    DEPENDS kernel ${BRAAM_BIN_TARGETS}
     VERBATIM)
 
 add_custom_target(serve

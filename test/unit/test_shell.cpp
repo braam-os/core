@@ -162,8 +162,8 @@ void test_shell()
     // Quote removal reaches argv, and a pipeline's status is its last
     // command's: grep reports 1 when nothing matched.
     boot(40, 10);
-    run("echo 'a b' | wc");
-    CHECK(has_row("1 2 4"));
+    run("echo 'a b' | grep 'a b'");
+    CHECK(has_row("a b"));
     run("ls /bin | grep zzz");
     CHECK(has_row("[1] $"));
 
@@ -177,12 +177,13 @@ void test_shell()
     CHECK(!has_row("echo"));
     CHECK_EQ(sched_pending(), 1); // only the shell is left
 
-    // Three stages at once.
+    // Three stages at once. `wc` would have been the third stage before M8;
+    // it is a binary now, and nothing in this module can step one.
     boot(60, 16);
-    run("ls /bin | grep e | wc");
-    // clear date echo edit export false grep head help less pbpaste sleep
-    // true version
-    CHECK(some_row_starts("14 14 "));
+    run("ls /bin | grep e | head -n 2");
+    CHECK(has_row("clear"));
+    CHECK(has_row("date"));
+    CHECK(!has_row("version"));
     run("echo 'a");
     CHECK(some_row_starts("braam: unterminated quote"));
     CHECK(has_row("[2] $"));
@@ -266,8 +267,10 @@ void test_shell()
     run("cat notes");
     CHECK(has_row("one"));
     CHECK(has_row("two"));
-    run("wc < notes");
-    CHECK(has_row("2 2 8"));
+    boot(40, 12);
+    run("head -n 1 < notes");
+    CHECK(has_row("one"));
+    CHECK(!has_row("two"));
 
     // Directories, and a listing that shows the mount points under it.
     boot(40, 12);

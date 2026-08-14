@@ -2,6 +2,7 @@ add_library(braam_user STATIC
     binfs.cpp
     boot.cpp
     edit.cpp
+    exec.cpp
     io.cpp
     job.cpp
     parse.cpp

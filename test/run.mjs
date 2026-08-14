@@ -9,11 +9,11 @@ import { FakeStore, makeFakeImports } from "./fakefs.mjs";
 import { FakeNet, makeFakeSvc } from "./fakesvc.mjs";
 
 function usage() {
-    console.error("usage: run.mjs --kernel <wasm> [<bundle.bin>] | --tests <wasm>");
+    console.error("usage: run.mjs --kernel <wasm> [<bundle.bin> [<proc.wasm>]] | --tests <wasm>");
     process.exit(2);
 }
 
-const [mode, file, bundle] = process.argv.slice(2);
+const [mode, file, bundle, binary] = process.argv.slice(2);
 if (!file || (mode !== "--kernel" && mode !== "--tests"))
     usage();
 
@@ -126,12 +126,25 @@ const fail = (msg) => {
 
 const names = (list) => list.map((e) => `${e.module ? e.module + "." : ""}${e.name}`).sort();
 
+// A tick, and then whatever the host owes a process. A tier-2 program needs a
+// round trip out here per syscall — the kernel cannot call into an instance
+// itself — so the driver does the round trips, exactly as web/worker.js does
+// with a microtask. Returns the last delay tick reported, so every assertion
+// about the timer queue still reads the same.
+function run(now) {
+    let delay = instance.exports.tick(now);
+    while (net.drain())
+        delay = instance.exports.tick(now);
+    return delay;
+}
+
 if (mode === "--kernel") {
     // The import and export surface is the ABI; drift is a bug, and an
     // unexpected import means a libc dependency crept in.
     const want_imports = ["host.fs", "host.fs_sync", "host.log", "host.now", "host.present",
                           "host.svc"];
-    const want_exports = ["init", "key", "memory", "ref", "resize", "tick", "wake"];
+    const want_exports = ["init", "key", "memory", "ref", "resize", "sys", "sys_async", "tick",
+                          "wake"];
     const got_imports = names(WebAssembly.Module.imports(module));
     const got_exports = names(WebAssembly.Module.exports(module));
 
@@ -139,6 +152,38 @@ if (mode === "--kernel") {
         fail(`imports are [${got_imports}], expected [${want_imports}]`);
     if (got_exports.join() !== want_exports.join())
         fail(`exports are [${got_exports}], expected [${want_exports}]`);
+
+    // The process ABI is a surface of its own (Concept.md §4.3), and the same
+    // rule applies to it: drift is a bug. Note what is *not* there — a process
+    // imports nothing from the host, and `sys` has no pid argument, which is
+    // the whole of "a process cannot issue a syscall on behalf of another".
+    if (binary) {
+        const bin = new WebAssembly.Module(readFileSync(binary));
+        const want_bin_imports = ["env.memory", "kernel.sys", "kernel.sys_async"];
+        const want_bin_exports = ["_alloc", "_free", "_resume", "_start"];
+        const got_bin_imports = names(WebAssembly.Module.imports(bin));
+        const got_bin_exports = names(WebAssembly.Module.exports(bin));
+
+        if (got_bin_imports.join() !== want_bin_imports.join())
+            fail(`${basename(binary)} imports [${got_bin_imports}], expected ` +
+                 `[${want_bin_imports}]`);
+        if (got_bin_exports.join() !== want_bin_exports.join())
+            fail(`${basename(binary)} exports [${got_bin_exports}], expected ` +
+                 `[${want_bin_exports}]`);
+
+        // The memory is imported, so its cap is the kernel's to set: the
+        // module declares no maximum of its own to override it.
+        const meta = WebAssembly.Module.customSections(bin, "braam");
+        if (meta.length !== 1)
+            fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
+        const m = new Uint32Array(meta[0]);
+        if (m[0] !== 0x6d617262 || m[1] !== 1)
+            fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
+        if (m[2] !== 2)
+            fail(`${basename(binary)} asks for tier ${m[2]}, expected 2`);
+        if (m[5] !== 256)
+            fail(`${basename(binary)} asks for ${m[5]} pages, expected 256`);
+    }
 
     instance.exports.init(0);
 
@@ -150,7 +195,7 @@ if (mode === "--kernel") {
     // init spawns the shell and nothing else. The first tick mounts the
     // filesystem, draws the prompt and parks the shell on the keyboard, so
     // there is nothing left pending.
-    if (instance.exports.tick(0) !== -1)
+    if (run(0) !== -1)
         fail("the shell did not park on the keyboard");
 
     // resize() hands back the descriptor; nothing else tells JS where the
@@ -167,7 +212,7 @@ if (mode === "--kernel") {
 
     // A resize repaints everything, and the host ticks to let it out.
     presented.length = 0;
-    instance.exports.tick(1);
+    run(1);
     if (presented.length !== 1 || presented[0].w !== 60 || presented[0].h !== 16)
         fail(`the resize did not repaint the whole screen: ${JSON.stringify(presented)}`);
 
@@ -179,7 +224,7 @@ if (mode === "--kernel") {
     const submit = (text, now) => {
         type(text);
         press(KEY.ENTER);
-        instance.exports.tick(now);
+        run(now);
         return descriptor(addr);
     };
 
@@ -188,7 +233,7 @@ if (mode === "--kernel") {
     // because the clock is ours. It exercises argv and the registry with it.
     type("sleep 30");
     press(KEY.ENTER);
-    const delays = [1000, 1010, 1030].map((now) => instance.exports.tick(now));
+    const delays = [1000, 1010, 1030].map((now) => run(now));
     const want_delays = [30, 20, -1];
     if (delays.join() !== want_delays.join())
         fail(`tick returned [${delays}], expected [${want_delays}]`);
@@ -235,19 +280,19 @@ if (mode === "--kernel") {
     // M3, second criterion, second half: Up recalls history, Home reaches the
     // start of the recalled line, and ^C abandons it.
     press(KEY.UP);
-    instance.exports.tick(1090);
+    run(1090);
     s = descriptor(addr);
     if (!row(s, s.cursor_y).endsWith("true"))
         fail(`Up recalled ${row(s, s.cursor_y)}, expected it to end in true`);
 
     press(KEY.HOME);
-    instance.exports.tick(1100);
+    run(1100);
     s = descriptor(addr);
     if (s.cursor_x !== 2)
         fail(`Home left the cursor at column ${s.cursor_x}, expected 2`);
 
     press("c".codePointAt(0), CTRL);
-    instance.exports.tick(1110);
+    run(1110);
     s = descriptor(addr);
     if (!rows(s).includes("[130] $"))
         fail(`^C left ${row(s, s.cursor_y)}, expected [130] $`);
@@ -258,7 +303,7 @@ if (mode === "--kernel") {
     const x0 = s.cursor_x;
     const y0 = s.cursor_y;
     type("hi");
-    instance.exports.tick(1120);
+    run(1120);
     s = descriptor(addr);
     if (s.cursor_x !== x0 + 2)
         fail(`the cursor is at column ${s.cursor_x}, expected ${x0 + 2}`);
@@ -374,10 +419,10 @@ if (mode === "--kernel") {
     // comes back. tick's return value is what proves the sleep really went.
     type("sleep 5000");
     press(KEY.ENTER);
-    if (instance.exports.tick(1190) !== 5000)
+    if (run(1190) !== 5000)
         fail("the pipeline did not park on the timer");
     press("c".codePointAt(0), CTRL);
-    if (instance.exports.tick(1200) !== -1)
+    if (run(1200) !== -1)
         fail("^C left the pipeline's timer armed");
     s = descriptor(addr);
     if (!rows(s).includes("[130] $"))
@@ -395,14 +440,14 @@ if (mode === "--kernel") {
     store.defer = true;
     type("ls /home");
     press(KEY.ENTER);
-    if (instance.exports.tick(1220) !== -1)
+    if (run(1220) !== -1)
         fail("a deferred storage reply left something scheduled");
     if (store.held.length === 0)
         fail("ls issued no storage request");
     store.defer = false;
     while (store.held.length)
         instance.exports.wake(store.held.shift(), 0, 0);
-    instance.exports.tick(1230);
+    run(1230);
     s = descriptor(addr);
     if (!rows(s).includes("notes"))
         fail(`the deferred listing never arrived: ${JSON.stringify(rows(s))}`);
@@ -420,7 +465,7 @@ if (mode === "--kernel") {
     addr = instance.exports.resize(60, 16);
     if (addr === 0)
         fail("the reloaded kernel has no screen");
-    instance.exports.tick(2000);
+    run(2000);
     submit("clear", 2005); // the second boot banner is still on the grid
     s = submit("cat notes", 2010);
     const survived = rows(s).filter((line) => line && !line.includes("$"));
@@ -429,13 +474,15 @@ if (mode === "--kernel") {
 
     // M5, third criterion: with no OPFS the system still boots, on MemFs, and
     // says so rather than letting the user find out by losing a file.
+    const archive = store.bundle;
     store.reset();
+    store.bundle = archive; // served beside kernel.wasm; a reload still finds it
     store.opfs = false;
     store.sync = false;
     instantiate();
     instance.exports.init(0);
     addr = instance.exports.resize(60, 16);
-    instance.exports.tick(3000);
+    run(3000);
     s = descriptor(addr);
     if (!rows(s).some((line) => line.startsWith("braam: no OPFS")))
         fail(`booting without OPFS said nothing: ${JSON.stringify(rows(s))}`);
@@ -478,7 +525,7 @@ if (mode === "--kernel") {
     s = submit("clear", 3030);
     type("chat ws://loop me");
     press(KEY.ENTER);
-    instance.exports.tick(3031);
+    run(3031);
     if (net.sockets.length !== 1)
         fail(`chat opened ${net.sockets.length} sockets, expected 1`);
     s = submit("hello", 3032);
@@ -488,7 +535,7 @@ if (mode === "--kernel") {
     // ^C leaves the socket dropped and the prompt back, with the receiver job
     // taken down by the destructor in its parent's frame.
     press("c".codePointAt(0), CTRL);
-    if (instance.exports.tick(3033) !== -1)
+    if (run(3033) !== -1)
         fail("^C left the chat receiver scheduled");
     s = descriptor(addr);
     if (!rows(s).includes("[130] $"))
@@ -531,14 +578,14 @@ if (mode === "--kernel") {
     s = submit("clear", 3055);
     type("pbpaste");
     press(KEY.ENTER);
-    if (instance.exports.tick(3056) !== -1)
+    if (run(3056) !== -1)
         fail("pbpaste did not park on the paste");
     s = descriptor(addr);
     if (!rows(s).some((line) => line.startsWith("pbpaste: press ")))
         fail(`pbpaste did not ask for a gesture: ${JSON.stringify(rows(s))}`);
     if (!net.paste("pasted by hand"))
         fail("pbpaste was not waiting for a paste");
-    instance.exports.tick(3057);
+    run(3057);
     s = descriptor(addr);
     if (!rows(s).includes("pasted by hand"))
         fail(`the paste never arrived: ${JSON.stringify(rows(s))}`);
@@ -547,15 +594,15 @@ if (mode === "--kernel") {
     // to be reaped when the paste finally lands.
     type("pbpaste");
     press(KEY.ENTER);
-    instance.exports.tick(3058);
+    run(3058);
     press("c".codePointAt(0), CTRL);
-    if (instance.exports.tick(3059) !== -1)
+    if (run(3059) !== -1)
         fail("^C left the paste wait scheduled");
     s = descriptor(addr);
     if (!rows(s).includes("[130] $"))
         fail(`^C on pbpaste left ${row(s, s.cursor_y)}, expected [130] $`);
     net.paste("too late");
-    instance.exports.tick(3060);
+    run(3060);
     net.clipDenied = false;
 
     s = submit("clear", 3053);
@@ -575,7 +622,7 @@ if (mode === "--kernel") {
     type("hello");
     press(KEY.ENTER);
     type("editor");
-    instance.exports.tick(3072);
+    run(3072);
     s = descriptor(addr);
     if (row(s, 0) !== "hello" || row(s, 1) !== "editor")
         fail(`typing did not reach the buffer: ${JSON.stringify(rows(s))}`);
@@ -589,7 +636,7 @@ if (mode === "--kernel") {
     press(KEY.RIGHT);
     type("X");
     press("s".codePointAt(0), CTRL); // save
-    instance.exports.tick(3073);
+    run(3073);
     s = descriptor(addr);
     if (row(s, 0) !== "hXello")
         fail(`the edit did not land: ${JSON.stringify(rows(s))}`);
@@ -597,7 +644,7 @@ if (mode === "--kernel") {
         fail(`the buffer is still modified after a save: ${JSON.stringify(rows(s))}`);
 
     press("q".codePointAt(0), CTRL); // quit
-    instance.exports.tick(3074);
+    run(3074);
     s = descriptor(addr);
     if (row(s, s.cursor_y) !== "$")
         fail(`edit did not give the screen back: ${JSON.stringify(rows(s))}`);
@@ -616,12 +663,12 @@ if (mode === "--kernel") {
     if (row(s, 0) !== "cat")
         fail(`less painted ${JSON.stringify(rows(s))}`);
     press(KEY.PAGE_DOWN);
-    instance.exports.tick(3079);
+    run(3079);
     s = descriptor(addr);
     if (row(s, 0) === "cat")
         fail("PgDn did not scroll the pager");
     press("q".codePointAt(0));
-    instance.exports.tick(3080);
+    run(3080);
     s = descriptor(addr);
     if (row(s, s.cursor_y) !== "$")
         fail(`less did not give the screen back: ${JSON.stringify(rows(s))}`);
@@ -651,7 +698,7 @@ if (mode === "--kernel") {
         fail(`/proc/meminfo said nothing: ${JSON.stringify(rows(s))}`);
 
     // The timer finally fires, and the job is reported and dropped.
-    instance.exports.tick(9000);
+    run(9000);
     s = submit("", 9001);
     if (!rows(s).some((line) => line.startsWith("[1] done")))
         fail(`the finished job was never announced: ${JSON.stringify(rows(s))}`);
@@ -659,6 +706,80 @@ if (mode === "--kernel") {
     s = submit("jobs", 9003);
     if (rows(s).some((line) => line.startsWith("[1]")))
         fail(`the finished job is still listed: ${JSON.stringify(rows(s))}`);
+
+    // M8. Everything above this line already ran a tier-2 program without
+    // saying so: `wc` is a binary in /usr/bin now, and `echo 'a b' | wc`,
+    // `wc < notes` and `curl /hello.txt | wc` are the assertions M4, M5 and M6
+    // wrote against the applet, unchanged. That is the third criterion.
+
+    // M8, first criterion: a program with a memory of its own, and a cap the
+    // kernel set rather than the binary. hog takes everything it can and then
+    // asks memory.grow for one page more.
+    s = submit("clear", 9010);
+    s = submit("hog", 9011);
+    const hogged = rows(s).find((line) => line.startsWith("hog: pid "));
+    if (!hogged)
+        fail(`hog said nothing: ${JSON.stringify(rows(s))}`);
+    if (!/^hog: pid \d+, took 1[0-9] MiB, memory is 256 pages$/.test(hogged))
+        fail(`hog reported ${JSON.stringify(hogged)}`);
+    if (!rows(s).includes("hog: memory.grow refused past the cap"))
+        fail(`memory.grow was not capped: ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`hog exited ${row(s, s.cursor_y)}, expected a bare prompt`);
+
+    // M8, second criterion: the pid a process sees is the one the host bound
+    // into its import closure. Two runs are two processes, and neither can
+    // name the other — the syscall has no argument for it (asserted against
+    // the module's imports above).
+    s = submit("clear", 9012);
+    s = submit("hog", 9013);
+    const again = rows(s).find((line) => line.startsWith("hog: pid "));
+    if (!again || again === hogged)
+        fail(`a second process reported the same pid: ${JSON.stringify(again)}`);
+
+    // Two instances alive at once, each with sixteen megabytes that are
+    // nobody else's, feeding one another through a kernel pipe.
+    net.peak = 0;
+    s = submit("clear", 9014);
+    s = submit("tail -n 1 /usr/share/motd | wc", 9015);
+    if (!rows(s).some((line) => /^1 \d+ \d+$/.test(line)))
+        fail(`a tier-2 pipeline printed ${JSON.stringify(rows(s))}`);
+    if (net.peak < 2)
+        fail(`the pipeline peaked at ${net.peak} instances, expected 2`);
+
+    // A process is an ordinary scheduler job: /proc lists it under argv[0],
+    // and ^C reaches it through the pipe it is parked on. `wc` with no
+    // argument reads its stdin, which nothing is going to write.
+    type("wc");
+    press(KEY.ENTER);
+    if (run(9020) !== -1)
+        fail("wc did not park on its stdin");
+    s = submit("clear", 9021); // the ^C below needs the pipeline still running
+    press("c".codePointAt(0), CTRL);
+    if (run(9022) !== -1)
+        fail("^C left the process scheduled");
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C on a process left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived their processes`);
+
+    // A file that is not a program is refused before anything runs, and says
+    // so differently from a name that is not there at all.
+    s = submit("clear", 9030);
+    s = submit("/usr/share/motd", 9031);
+    if (!rows(s).some((line) => line.startsWith("braam: /usr/share/motd: not executable")))
+        fail(`a non-binary was not refused: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes("[126] $"))
+        fail(`a non-binary left ${row(s, s.cursor_y)}, expected [126] $`);
+
+    // help lists what is runnable, whatever tier it runs at.
+    addr = instance.exports.resize(100, 48);
+    s = submit("clear", 9040);
+    s = submit("help", 9041);
+    for (const name of ["echo", "hog", "sleep", "tail", "wc"])
+        if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
+            fail(`help did not list ${name}`);
 
     console.log(`smoke ok: ${got_imports.length} imports, ${got_exports.length} exports`);
 } else {

@@ -1,6 +1,8 @@
 // The kernel's exported surface. M1 added the scheduler's tick() and wake();
 // M2 adds key() and resize(), completing the five exports of Concept.md §3.4.
-// M3 boots the userland shell, which is now the only task init() spawns.
+// M3 boots the userland shell, which is now the only task init() spawns. M8
+// adds sys() and sys_async(), which are a process's two imports arriving here
+// with the pid the host bound to them (§4.3).
 
 #include "alloc.h"
 #include "fmt.h"
@@ -11,6 +13,7 @@
 #include "sched.h"
 #include "screen.h"
 #include "str.h"
+#include "user/exec.h"
 #include "user/shell.h"
 #include "version.h"
 
@@ -94,4 +97,21 @@ BRAAM_EXPORT("key") void key(u32 code, u32 mods)
 BRAAM_EXPORT("resize") u32 resize(u32 cols, u32 rows)
 {
     return screen_resize(cols, rows);
+}
+
+// The two syscall entries (Concept.md §4.3). An isolated process imports `sys`
+// and `sys_async` from the host, which supplies closures bound to that
+// process's pid and forwards to these — so the pid is the host's word, not the
+// caller's, and process 7 has no way to speak as process 3.
+//
+// Both are entered from JS at top level, never from inside a kernel import,
+// which is what keeps them as ordinary as key() or wake().
+BRAAM_EXPORT("sys") i32 sys(u32 pid, u32 op, u32 a0, u32 a1, u32 a2)
+{
+    return exec_sys(pid, op, a0, a1, a2);
+}
+
+BRAAM_EXPORT("sys_async") i32 sys_async(u32 pid, u32 op, u32 token, u32 len)
+{
+    return exec_sys_async(pid, op, token, len);
 }

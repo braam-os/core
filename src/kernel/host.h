@@ -34,8 +34,16 @@ inline void log(Str s)
     host_log(s.data(), s.size());
 }
 
+// Defined once per binary rather than here: a process binary has no host
+// imports at all (Concept.md §4.3), so its panic traps and says nothing, while
+// the kernel's logs first. src/kernel/panic.cpp and src/proc/rt.cpp hold the
+// two definitions.
+//
+// Two scalars rather than a Str, because the wasm ABI passes an 8-byte struct
+// by value indirectly, and there are a hundred call sites paying for it.
+[[noreturn]] void panic_raw(const char *ptr, usize len);
+
 [[noreturn]] inline void panic(Str s)
 {
-    host_log(s.data(), s.size());
-    __builtin_trap();
+    panic_raw(s.data(), s.size());
 }

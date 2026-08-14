@@ -193,7 +193,15 @@ tick(now_ms)                            // drains ready queue; returns ms-until-
 key(code, mods)                         // fast path, avoids allocation
 resize(cols, rows)                      // returns the screen descriptor's address, or 0
 ref(slot, obj)                          // host deposits a JS object in the table (§3.7)
+sys(pid, op, a0, a1, a2) -> i32         // a process's synchronous syscall (§4.3)
+sys_async(pid, op, token, len) -> i32   // a process's asynchronous syscall (§4.3)
 ```
+
+The last two arrived with M8 and are the only exports that are not the host's own business:
+they are an isolated process's two imports, which the host forwards with the pid it bound into
+that process's closure. A process therefore cannot name another — there is no argument for it
+on its side of the call. Both are entered from JS at top level, never from inside a kernel
+import, which is what keeps them as ordinary as `key()`.
 
 `resize` returns where the screen descriptor (§3.5) lives, which is how the host learns the
 geometry and the address of the cell array. It is the only call that moves the cells, so it is
@@ -230,6 +238,11 @@ cancelled await, so it outlives its awaiter rather than being freed under the ho
 M6 generalised that record rather than writing a second one: it is `HostRequest` in
 `src/kernel/hostcall.h`, and the interface a call belongs to picks the import. Both
 asynchronous imports therefore have one wire format, one orphan list and one reaper.
+
+M8 added **no import at all**. Compiling a binary, instantiating it and stepping it are
+asynchronous operations on the host, which is `host_svc`'s convention exactly, so they are three
+more of its operations rather than an interface of their own. The record gained one word, `aux`,
+because those three need to name a process and `op` and `flags` were spoken for.
 
 ### 3.5 The screen
 
@@ -380,8 +393,14 @@ and `exec` picks one from a flag in the binary's metadata — userland does not 
 | **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | normal programs |
 | **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | untrusted or long-running |
 
-**Milestones M0–M7 build only the first tier.** Tiers 2 and 3 arrive in M8 and M9. The ABI
-below is fixed now, as forward design, so that nothing built earlier has to be unpicked.
+**M0–M7 built only the first tier; M8 builds the second.** Tier 3 arrives in M9. `exec` reads
+the tier out of a binary's `braam` custom section (§4.3): a name that is in the program registry
+is an applet, a name in `/usr/bin` is a binary, and a binary asking for tier 3 runs at tier 2
+until there is a worker to put it in.
+
+One thing the tier does decide, and it is not userland's business either: the in-wasm unit tests
+can drive an applet and cannot drive a binary, because stepping an instance means returning to
+the host and `run_tests()` never does. Whatever `test/unit/` runs has to stay an applet.
 
 ### 4.1 What separate instances buy
 
@@ -415,13 +434,19 @@ which one we are solving. Two options:
 
 ### 4.3 The kernel↔process ABI
 
-```
-process exports:  memory, _start(argc) -> i32
-                  _alloc(n) -> ptr, _free(ptr, n)
-                  _resume(token, ptr, len) -> i32   // returns: 0 = done, 1 = suspended
+As built in M8. The shape is the one this section fixed in M0; four details are amended below,
+and each is marked.
 
-process imports:  sys(op, a0, a1, a2) -> i32        // sync ops, immediate result
+```
+process imports:  env.memory                        // the kernel's, so the cap is the kernel's
+                  sys(op, a0, a1, a2) -> i32        // sync ops, immediate result
                   sys_async(op, token, ptr, len)    // async ops, reply via _resume
+
+process exports:  _start(argv_ptr, argv_len) -> i32 // 0 = exited, 1 = suspended
+                  _resume(token, ptr, len)   -> i32 // the same
+                  _alloc(n) -> ptr, _free(ptr, n)
+
+custom section "braam":  magic, abi, tier, flags, initial_pages, max_pages
 ```
 
 The coroutine model survives the boundary intact: the process's `co_await` suspends, its
@@ -429,13 +454,42 @@ scheduler returns control out through `_start`/`_resume`, the kernel continues, 
 calls `_resume` with the payload. Reentrant scheduling across an instance boundary, with no
 stack switching.
 
+**Memory is imported rather than exported.** `--import-memory` and no declared maximum means
+the host supplies `new WebAssembly.Memory({initial, maximum})`, so the 16 MB ceiling of §4.1 is
+the kernel's decision and not a number the binary could have written differently.
+
+**`_start` takes argv rather than argc.** The host has to place the argv blob in the process's
+memory — through `_alloc`, which is what `_alloc` is for — and `argc` alone cannot say where it
+put it. The blob is `u32 argc`, then a length and bytes per word.
+
+**A reply payload begins with an `i32` status.** `_resume`'s signature has room for a buffer and
+not for an errno, and every asynchronous syscall needs both.
+
+**The kernel does not call a process; the host does, and never with the kernel on the stack.**
+Only JS can call another instance's exports, and re-entering the kernel from inside one of its
+own imports would run it on a heap it is halfway through changing. So one `_start` or `_resume`
+is a *deferred host action*, structurally identical to a storage reply: the process's proxy task
+in the kernel parks on a wake token, the host steps the instance once the tick has unwound, and
+the token is woken with the outcome. Synchronous syscalls run the other way and need no such
+care — they re-enter the kernel at top level, exactly as `key()` and `wake()` do.
+
+What crosses is bytes, not addresses (Appendix B). The host asks the kernel for room with
+`Sys::Stage`, copies the payload in, and only then reports the request; the reply travels back
+through a block the host takes from the process's own `_alloc`.
+
+A trap is how a process reports a fatal error: it has no host imports to log through, so the
+kernel turns a trap into an exit status and says the process crashed.
+
 ### 4.4 Cost model
 
-Compilation is expensive; instantiation is cheap. Call `WebAssembly.compileStreaming()` once
-per binary, keep the `Module` in a cache keyed by path, and instantiate per `exec`. `Module`
-objects are structured-cloneable, so we can compile once and `postMessage` the module to
-every worker. Browsers also cache compiled code across page loads for streaming-compiled
-modules, so `/bin` warms up after the first visit.
+Compilation is expensive; instantiation is cheap. Keep the `Module` in a cache keyed by path and
+instantiate per `exec`, which is what `web/proc.js` does. `Module` objects are
+structured-cloneable, so we can compile once and `postMessage` the module to every worker.
+
+The compile is *not* streaming, as this section assumed it would be: a binary reaches the host
+as bytes the kernel read through the VFS, so it can come from OPFS or a copy in `/home` and not
+only from a URL beside `kernel.wasm`. `new WebAssembly.Module(bytes)` is synchronous, which is
+allowed in a worker at any size and keeps `exec` one round trip rather than two.
 
 The real cost is **duplication**: with no dynamic linking, every binary embeds its own copy
 of the allocator, the string types, and the coroutine runtime. Keep the process-side runtime
@@ -583,8 +637,10 @@ numbering here is cited from source comments.
 ## 7. Repository layout
 
 As created in M0; `src/prog` and `src/user` arrived with M3, `src/fs` with M5, `src/svc`
-with M6 and `src/ui` with M7. `braam_ui` is a sibling of `braam_fs` and `braam_svc`: above the
-kernel, below userland, and depending on neither of the other two.
+with M6, `src/ui` with M7, and `src/proc` and `src/bin` with M8. `braam_ui` is a sibling of
+`braam_fs` and `braam_svc`: above the kernel, below userland, and depending on neither of the
+other two. `src/proc` is in none of that hierarchy — it is a *different binary's* runtime, and
+the only thing it shares with the kernel is a handful of headers and the allocator.
 
 ```
 doc/Concept.md          this document
@@ -597,11 +653,14 @@ src/kernel/             allocator, core types, Task, scheduler, Channel, Process
 src/kernel/coroutine.h  the freestanding <coroutine> shim (Appendix C)
 src/kernel/hostcall.h   the asynchronous host request, shared by both interfaces
 src/kernel/jsref.h      the externref table and JsRef (§3.7)
+src/kernel/sysabi.h     the kernel↔process wire, included by both sides (§4.3)
+src/proc/               a process binary's whole runtime: _start, syscalls, stdio
+src/bin/                one file per program that is a binary of its own
 src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
 src/svc/                fetch, WebSocket, clipboard, file transfer, wall clock
 src/ui/                 the layout layer: Pane, FullScreen, TextBuf, TextView (§3.5)
 src/prog/               one file per program; self-registering
-src/user/               LineEditor, grammar, job runtime, shell, BinFs, ProcFs, boot
+src/user/               LineEditor, grammar, job runtime, shell, exec, BinFs, ProcFs, boot
 bundle/                 the tree tools/pack.py packs into /usr
 test/                   in-wasm unit tests, the Node driver, the storage and service fakes
 web/                    braam.js (the embedding API), worker.js, host shim, shims, renderer
@@ -686,7 +745,13 @@ kernelU8.set(src, dstPtr);
 ```
 
 That is memcpy speed plus one call boundary — perfectly fine for syscall-sized payloads, and
-where we should start.
+where we should start. It is where M8 did start, and it is still there: two lines inside the
+per-pid `sys_async` closure in `web/proc.js`.
+
+The only wrinkle it needed was `dstPtr`. The kernel cannot be handed a buffer it did not
+allocate, so the host asks for one: `Sys::Stage` is a synchronous syscall the *host* issues on
+the process's behalf, returning the address of a staging block the process's kernel-side record
+owns. The reverse direction needs no such call, because `_alloc` is already in the ABI.
 
 **If we want the kernel itself to do the copy, multi-memory is the tool.** A module may
 declare several memories, and `memory.copy` can move bytes between two of them. It is at

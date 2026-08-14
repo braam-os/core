@@ -9,6 +9,7 @@
 // request and is answered later, by a send or by the socket being dropped.
 
 import { E, Request, statusOf } from "../web/abi.js";
+import { makeProc } from "../web/proc.js";
 import { OP } from "../web/svc.js";
 
 const utf8 = new TextEncoder();
@@ -29,6 +30,7 @@ export class FakeNet {
         this.saved = [];    // {name, bytes}
         this.sockets = [];
         this.now = 1782000000000;  // a fixed epoch, so `date` prints the same twice
+        this.peak = 0;             // most instances alive at once (M8)
     }
 
     reset() {
@@ -40,6 +42,28 @@ export class FakeNet {
 }
 
 export function makeFakeSvc(mem, net, kernel) {
+    // The real thing from web/proc.js, with no scheduler behind it: the driver
+    // is synchronous, so it drains the queue itself between ticks. That is the
+    // same discipline the worker's microtask buys — a process never runs while
+    // the kernel is on the stack.
+    const proc = makeProc(mem, kernel, null);
+    const parked = [];
+
+    net.proc = proc;
+
+    // Runs every queued step and answers the requests they belong to. Returns
+    // true when there was work, so the driver can loop until there is none.
+    net.drain = () => {
+        if (!parked.length)
+            return false;
+        const tokens = parked.splice(0, parked.length).map(({ token }) => token);
+        proc.drain();
+        net.peak = Math.max(net.peak, proc.live());
+        for (const token of tokens)
+            kernel().wake(token, 0, 0);
+        return true;
+    };
+
     // The gesture a browser insists on before it will disclose the clipboard.
     net.paste = (text) => {
         if (!net.pasted)
@@ -193,12 +217,28 @@ export function makeFakeSvc(mem, net, kernel) {
             r.ok();
             return;
 
+        // Spawning executes no wasm, so it can be answered from inside the
+        // import like everything else here. A step cannot.
+        case OP.PROC_SPAWN:
+            proc.spawn(r);
+            return;
+
+        case OP.PROC_STEP:
+            proc.step(r);
+            parked.push({ token });
+            return PARKED;
+
         default:
             r.fail(E.UNSUPPORTED);
         }
     }
 
     return function svc(op, token, req, ref) {
+        if (op === OP.PROC_KILL) {
+            proc.kill(req >>> 0);
+            return;
+        }
+
         if (op === OP.DROP) {
             if (ref && ref.queue) {
                 ref.closed = true;

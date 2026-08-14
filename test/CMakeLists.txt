@@ -26,6 +26,7 @@ add_executable(tests
     unit/test_tokenize.cpp
     unit/test_string.cpp
     unit/test_svc.cpp
+    unit/test_sysabi.cpp
     unit/test_task.cpp
     unit/test_text.cpp
     unit/test_textbuf.cpp
@@ -41,7 +42,7 @@ find_program(BRAAM_NODE node REQUIRED)
 # each other, not each against its own reading of the format.
 add_test(NAME smoke
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --kernel $<TARGET_FILE:kernel>
-            ${CMAKE_BINARY_DIR}/web/bundle.bin)
+            ${CMAKE_BINARY_DIR}/web/bundle.bin $<TARGET_FILE:bin_wc>)
 
 add_test(NAME unit
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --tests $<TARGET_FILE:tests>)

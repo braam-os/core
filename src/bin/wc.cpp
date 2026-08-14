@@ -1,16 +1,15 @@
 #include "kernel/fmt.h"
 #include "kernel/text.h"
-#include "user/io.h"
-#include "user/prog.h"
+#include "proc/io.h"
 
-// Counts over the raw chunks, so nothing here depends on where a chunk breaks.
-BRAAM_PROGRAM(prog_wc, "wc", "[<file>...] — count the lines, words and bytes")
+// Counts over the raw chunks, so nothing here depends on where a chunk breaks
+// — and a chunk now breaks where a syscall does rather than where a pipe did.
+Task<i32> proc_main(Args args)
 {
-    Inputs files;
-    if (i32 bad = co_await open_inputs(files, args.tail(), "wc", io))
+    Input in(args.tail(), SYS_STDIN);
+    if (i32 bad = co_await in.open_all("wc"))
         co_return bad;
 
-    Source in = input_of(files, io);
     u32 lines = 0, words = 0, bytes = 0;
     bool in_word = false;
 
@@ -37,7 +36,7 @@ BRAAM_PROGRAM(prog_wc, "wc", "[<file>...] — count the lines, words and bytes")
 
     Buf<48> b;
     b.put(lines).put(' ').put(words).put(' ').put(bytes).put('\n');
-    if ((co_await write_all(io.out, b.str())).is_err())
+    if ((co_await write_all(SYS_STDOUT, b.str())).is_err())
         co_return 1;
     co_return 0;
 }

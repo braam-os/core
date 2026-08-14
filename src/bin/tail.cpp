@@ -1,34 +1,37 @@
 #include "kernel/text.h"
 #include "kernel/vec.h"
-#include "user/io.h"
-#include "user/prog.h"
+#include "proc/io.h"
 
 // A ring of the last `want` lines, so the input is read once and only the
 // answer is held. tail cannot stop early: the last line is the last one.
-BRAAM_PROGRAM(prog_tail, "tail", "[-n <count>] [<file>...] — the last lines, ten by default")
+//
+// The registry's tail, moved to a binary of its own (Concept.md §4). The body
+// is the program it was; what changed is that its reads and writes are
+// syscalls, and its ring is in sixteen megabytes that are nobody else's.
+Task<i32> proc_main(Args args)
 {
     u32 want    = 10;
     usize first = 1;
     if (args.size() >= 3 && args[1] == "-n") {
         Option<u32> n = parse_u32(args[2]);
         if (!n.has_value()) {
-            co_await io.err.write("usage: tail [-n <count>] [<file>...]\n");
+            co_await write_all(SYS_STDERR, "usage: tail [-n <count>] [<file>...]\n");
             co_return 2;
         }
         want  = n.value();
         first = 3;
     } else if (args.size() >= 2 && args[1].starts_with("-")) {
-        co_await io.err.write("usage: tail [-n <count>] [<file>...]\n");
+        co_await write_all(SYS_STDERR, "usage: tail [-n <count>] [<file>...]\n");
         co_return 2;
     }
 
-    Inputs files;
-    if (i32 bad = co_await open_inputs(files, Args{ args.v.subspan(first) }, "tail", io))
+    Input files(Args{ args.v.subspan(first) }, SYS_STDIN);
+    if (i32 bad = co_await files.open_all("tail"))
         co_return bad;
 
     Vec<String> ring;
     usize head = 0; // oldest, once the ring is full
-    LineReader in(input_of(files, io));
+    LineReader in(files);
     String line;
 
     while (want > 0) {
@@ -53,7 +56,7 @@ BRAAM_PROGRAM(prog_tail, "tail", "[-n <count>] [<file>...] — the last lines, t
         String &s = ring[(head + i) % ring.size()];
         if (!s.push('\n'))
             co_return 1;
-        if ((co_await write_all(io.out, s.str())).is_err())
+        if ((co_await write_all(SYS_STDOUT, s.str())).is_err())
             co_return 1;
     }
 

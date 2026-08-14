@@ -3,6 +3,7 @@ add_library(braam_core STATIC
     hostcall.cpp
     jsref.cpp
     key.cpp
+    panic.cpp
     result.cpp
     sched.cpp
     screen.cpp

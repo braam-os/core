@@ -3,6 +3,7 @@
 
 import { makeFsImports, openStore } from "./fs.js";
 import { Memory, makeImports } from "./host.js";
+import { makeProc } from "./proc.js";
 import { Renderer } from "./render.js";
 import { makeSvcImport } from "./svc.js";
 
@@ -66,13 +67,28 @@ async function boot() {
         pump();
     });
 
+    // Isolated processes live here too: one worker, several instances
+    // (Concept.md §4). It is handed a getter rather than the exports, because
+    // the kernel does not exist yet.
+    //
+    // A step runs off the kernel's stack, which a microtask is enough for. Now
+    // and then it takes the slower route instead: a process in a tight syscall
+    // loop would otherwise chain microtasks without the worker ever painting.
+    let steps = 0;
+    const proc = makeProc(mem, () => self.kernel, (drain) => {
+        if (++steps % 64)
+            queueMicrotask(drain);
+        else
+            setTimeout(drain, 0);
+    });
+
     // The same rule as storage: a reply must reach the kernel on a promise,
     // never inside the import call that asked for it.
     const svc = makeSvcImport(mem, (slot, obj) => self.kernel.ref(slot >>> 0, obj), relay,
         (token) => {
             self.kernel.wake(token >>> 0, 0, 0);
             pump();
-        });
+        }, proc);
 
     const imports = makeImports(mem, (text) => emit("log", text), (x, y, w, h) => {
         if (renderer)

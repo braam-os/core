@@ -35,6 +35,7 @@ struct HostRequest {
     u32 result_lo, result_hi;
     u32 buf_len; // bytes written into buf, or the capacity the reply needs
     u32 ref;     // the JsRef slot the operation acts on, or deposits into
+    u32 aux;     // a second scalar argument; the pid, for the process ops (§4.3)
 };
 
 // One outstanding request: the header the host sees, plus the buffers it points
@@ -71,6 +72,14 @@ struct HostCall {
 
     // Fills the buffer the host is to read, for a request that carries bytes.
     bool put(Str bytes);
+
+    // The same, taking ownership: a process image is tens of kilobytes and the
+    // caller has one already (Concept.md §4.4).
+    bool put(String &&bytes);
+
+    // A second scalar the host reads out of the record. The process ops put
+    // the pid here, since op/flags are spoken for.
+    void set_aux(u32 v) { r_->h.aux = v; }
 
     // Borrows an object the host already holds: the request names the slot but
     // does not own it.
