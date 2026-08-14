@@ -4,6 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
+**The plan is finished: M0–M9 are all done, and this is the first complete version.** Thirty
+applets in `src/prog/` and four binaries in `src/bin/`; `kernel.wasm` is 236,965 bytes against
+a 256 KiB budget; the ABI is six imports and nine exports and the three CTest cases pass. Work
+from here is no longer milestone work — it is change to a working system, so the bar is that
+nothing above regresses, and Milestones.md is history rather than a to-do list.
+
+What each milestone left behind, since the layout still reflects it:
+
 M0 (nucleus) is done: CMake build, the coroutine shim, the allocator, `Str`/`Span`/`Vec`/
 `Result`/`Option`, `host_log`, a Node test harness, and CI with a size budget. M1 (scheduler)
 is done: `Task<T>`, the ready and timer queues, wake tokens, `tick()`/`wake()`, `sleep_ms`,
@@ -43,15 +51,17 @@ substantive — it carries decisions whose rationale is not recoverable from the
 stable: amend it only when a design decision changes, and then in the same commit that changes
 the code. Its section numbering is cited from source comments, so do not renumber.
 
-**[doc/Milestones.md](doc/Milestones.md) is the working plan** — M0–M9 with checkbox
-acceptance criteria. Tick them as work lands. This is the file that moves on an ordinary
-commit; note there how a milestone departed from its plan, but put reasoning in the release
-notes.
+**[doc/Milestones.md](doc/Milestones.md) is the plan that was carried out** — M0–M9, every box
+ticked, each with a note on how the milestone departed from its plan. It is now a record: read
+it to find out when and why a mechanism arrived, and do not add work items to it. A milestone's
+acceptance criteria are still live constraints, though, and most are checked by the test suite.
 
 **[doc/Release_Notes.md](doc/Release_Notes.md) records why the code is the way it is**, per
-milestone. Comments in the source stay terse and say *what*; the *why* goes here. Read the M0
-section before touching the allocator, the coroutine shim, or the build flags — each departs
-from an obvious approach for a reason stated there and nowhere else.
+milestone. Comments in the source stay terse and say *what*; the *why* goes here — and it is
+still the place a substantive change is explained, appended under a new heading rather than by
+rewriting a milestone's section. Read the M0 section before touching the allocator, the
+coroutine shim, or the build flags — each departs from an obvious approach for a reason stated
+there and nowhere else.
 
 ## What this project is
 
@@ -65,7 +75,7 @@ CMake with a toolchain file, generating Unix Makefiles — so the whole toolchai
 make and node, with no ninja. The top-level `Makefile` wraps it and configures on first use:
 
 ```
-make            # build kernel.wasm and tests.wasm
+make            # build kernel.wasm, the /usr/bin binaries and tests.wasm
 make run        # ctest
 make serve      # serve build/web/ and open a browser
 make clean      # rm -rf build
@@ -110,10 +120,12 @@ back would be a regression: `--export-dynamic` (unreliable — exports are named
 with `BRAAM_EXPORT`) and `--allow-undefined` (without it, an accidental libc dependency is a
 link error rather than a runtime trap). See Concept.md §C.3.
 
-Verification is per-milestone — each milestone in Milestones.md states its own acceptance
-criterion — plus three CTest cases that run on every build: `smoke` asserts `kernel.wasm`'s
-exact import/export surface and that it boots, `unit` runs `tests.wasm` under Node, and `size`
-checks `tools/size_budget.txt`. New core code gets a case in [test/unit/](test/unit/).
+Verification is three CTest cases, run on every build: `smoke` asserts the exact import/export
+surface of `kernel.wasm` and of every binary, and that the kernel boots; `unit` runs
+`tests.wasm` under Node; and `size` checks `tools/size_budget.txt`. New core code gets a case
+in [test/unit/](test/unit/). Behind those, the acceptance criteria in Milestones.md are the
+standing behavioural contract — a change that breaks one is a regression however green the
+three cases are, so re-check the criteria a change touches by hand at the prompt.
 
 Both wasm modules import the storage and service ABIs, so both are driven with the in-memory
 backends in [test/fakefs.mjs](test/fakefs.mjs) and [test/fakesvc.mjs](test/fakesvc.mjs). They
@@ -248,6 +260,26 @@ parent owns — its session is refcounted and it writes to the screen rather tha
 needs intrusive queue links inside `Waiter` first — the same work a channel with two blocked
 senders would need, which `Channel::park_sender` panics on today rather than losing a wakeup
 quietly.
+
+## Known gaps
+
+These are absent on purpose, each for a reason recorded in Milestones.md or Release_Notes.md.
+None is a bug, and adding one is a design change to be argued in Concept.md first:
+
+- **No `bg` and no `^Z`.** Stopping a running coroutine at an arbitrary point is the
+  resume-side twin of `CancelToken` and would have to reach every awaitable.
+- **Resize drops rows from the top rather than re-wrapping logical lines**, which §3.5 had
+  promised to M7.
+- **One global working directory.** A process is isolated in address space, memory and
+  descriptors, but not in the namespace it can name.
+- **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection was
+  considered and not built.
+- **`Pane` is a primitive, not a multiplexer.** Two jobs visible at once needs per-pane output
+  routing and a window manager in the shell; that is why `chat` writes to the screen.
+- **Two tier-3 fidelity losses (§4.3):** a binary that will not instantiate reads as a crash
+  rather than as a refusal, and `Sys::Now` is relative.
+- **`BRAAM_VERSION` in `src/kernel/version.h` still reads `0.1.0-m7`** — it predates M8 and M9,
+  and feeds the boot banner, `version` and `/proc`.
 
 ## Conventions
 

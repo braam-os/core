@@ -233,7 +233,7 @@ three binaries beside it; `kernel.wasm` went from 225,784 to 236,872 bytes again
 256 KiB budget, and the binaries carry budgets of their own.
 See [Release_Notes.md](Release_Notes.md).
 
-## M9 — Liveness isolation
+## M9 — Liveness isolation — **done**
 The own-worker tier: worker pool, `worker.terminate()` as `SIGKILL`, module `postMessage`.
 Optionally, fuel injection as a metering alternative.
 
