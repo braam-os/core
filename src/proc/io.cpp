@@ -149,9 +149,9 @@ Task<Result<Vec<DirEntry>>> list_dir(Str path)
         if (at + 16 > data.size())
             co_return Err(Error::Io);
         DirEntry e;
-        e.kind      = sys_get_u32(p + at);
-        e.size      = wide(p + at + 4);
-        usize len   = sys_get_u32(p + at + 12);
+        e.kind    = sys_get_u32(p + at);
+        e.size    = wide(p + at + 4);
+        usize len = sys_get_u32(p + at + 12);
         at += 16;
         if (at + len > data.size())
             co_return Err(Error::Io);
@@ -173,6 +173,85 @@ Task<Result<void>> make_dir(Str path)
 Task<Result<void>> remove_path(Str path, bool all)
 {
     Result<SysReply> r = co_await sys_call(Sys::Remove, all ? 1 : 0, path);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+// One operation for both, so the kernel answers "where am I now" whichever was
+// asked. The reply is copied out: a Str into the waiter's buffer is only good
+// until that slot's next syscall.
+namespace {
+Task<Result<String>> chdir(u32 arg, Str path)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Chdir, arg, path);
+    if (r.is_err())
+        co_return Err(r.error());
+    String out;
+    if (!out.append(r.value().data))
+        co_return Err(Error::NoMemory);
+    co_return move(out);
+}
+} // namespace
+
+Task<Result<String>> cwd_get()
+{
+    co_return co_await chdir(0, Str());
+}
+
+Task<Result<String>> cwd_set(Str path)
+{
+    co_return co_await chdir(1, path);
+}
+
+Task<Result<Piped>> make_pipe()
+{
+    Result<SysReply> r = co_await sys_call(Sys::Pipe, 0);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 8)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return Piped{ i32(sys_get_u32(p)), i32(sys_get_u32(p + 4)) };
+}
+
+Task<Result<u32>> spawn(Args v, ChildIo io)
+{
+    // Three descriptor words, then the argv blob — the same encoding _start is
+    // entered with, so the kernel copies it across rather than rebuilding it.
+    String payload;
+    u8 head[SYS_SPAWN_HEAD * 4];
+    sys_put_u32(head, io.in);
+    sys_put_u32(head + 4, io.out);
+    sys_put_u32(head + 8, io.err);
+    usize n = argv_size(v.v.data(), v.size());
+    if (!payload.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) ||
+        !payload.reserve(sizeof(head) + n))
+        co_return Err(Error::NoMemory);
+    for (usize i = 0; i < n; i++)
+        payload.push(0);
+    argv_encode(v.v.data(), v.size(), reinterpret_cast<u8 *>(payload.data()) + sizeof(head));
+
+    Result<SysReply> r = co_await sys_call(Sys::Spawn, 0, payload.str());
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return u32(r.value().status);
+}
+
+Task<Result<Exited>> wait_child(u32 pid)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Wait, pid);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 4)
+        co_return Err(Error::Io);
+    co_return Exited{ sys_get_u32(reinterpret_cast<const u8 *>(r.value().data.data())),
+                      r.value().status };
+}
+
+Task<Result<void>> kill_child(u32 pid)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Kill, pid);
     if (r.is_err())
         co_return Err(r.error());
     co_return {};

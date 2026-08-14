@@ -18,6 +18,12 @@
 // `io.err`.
 Task<i32> run_line(Str line, Stdio io);
 
+// Stdio::hold for the streams of a pipeline stage: the pipes behind them belong
+// to a block this file owns, and a process — or a syscall server of one — may
+// still be parked on one a tick after the stage itself is gone. `ctx` is opaque
+// on purpose; the block is private to job.cpp.
+void job_hold(void *ctx, bool on);
+
 // A background job, as `jobs`, `fg` and `kill` see it. `cmd` is owned by the
 // table, since the line it was typed on is a view into the shell's frame.
 struct JobInfo {

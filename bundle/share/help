@@ -26,7 +26,9 @@ rm       [-r] <path>... — remove files, or directories with -r
 sleep    <ms> — wait, in milliseconds
 spin     [<millions>] — loop without yielding, to be killed
 tail     [-n <count>] [<file>...] — the last lines, ten by default
+timeout  <ms> <command> [<arg>...] — run a command, killing it after a delay (124)
 touch    <file>... — create empty files
 true     succeed
 version  print the kernel version
+watch    [-n <ms>] <command> [<arg>...] — run a command over and over
 wc       [<file>...] — count lines, words and bytes

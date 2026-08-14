@@ -17,8 +17,15 @@ void test_path()
 
     String out;
 
-    // Absolute paths ignore the cwd; relative ones start from it.
+    // Absolute paths ignore the cwd; relative ones start from it. The first
+    // half is what lets a process resolve against its own working directory
+    // (Concept.md §5.1) and hand the VFS an absolute path: the VFS resolves it
+    // a second time against the *shell's* cwd, and that pass has to be a no-op.
     CHECK(resolved("/home", "/etc/hosts", out) == "/etc/hosts");
+    {
+        String twice;
+        CHECK(resolved("/anywhere/else", resolved("/home", "notes", out), twice) == "/home/notes");
+    }
     CHECK(resolved("/home", "notes", out) == "/home/notes");
     CHECK(resolved("/", "notes", out) == "/notes");
     CHECK(resolved("/home", "", out) == "/home");

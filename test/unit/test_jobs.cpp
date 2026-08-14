@@ -67,10 +67,10 @@ i32 waited;
 
 Task<i32> wait_for(u32 id)
 {
-    waited                = -2;
-    Task<Result<i32>> t   = jobs_wait(id);
-    Result<i32> r         = t ? co_await t : Err(Error::NoMemory);
-    waited                = r.is_ok() ? r.value() : -i32(r.error());
+    waited              = -2;
+    Task<Result<i32>> t = jobs_wait(id);
+    Result<i32> r       = t ? co_await t : Err(Error::NoMemory);
+    waited              = r.is_ok() ? r.value() : -i32(r.error());
     co_return 0;
 }
 

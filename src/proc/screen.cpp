@@ -106,8 +106,8 @@ Task<Result<void>> ProcScreen::flush()
     // Row by row, since the damage is a rectangle of a wider grid.
     for (u32 y = 0; y < d.h; y++) {
         const Cell *row = grid_.at(d.x, d.y + y);
-        if (!row || !out.append(Str(reinterpret_cast<const char *>(row),
-                                    usize(d.w) * sizeof(Cell))))
+        if (!row ||
+            !out.append(Str(reinterpret_cast<const char *>(row), usize(d.w) * sizeof(Cell))))
             co_return Err(Error::NoMemory);
     }
 

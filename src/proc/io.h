@@ -57,11 +57,52 @@ Task<Result<void>> make_dir(Str path);
 
 Task<Result<void>> remove_path(Str path, bool all);
 
+// This process's own working directory, which every relative path above
+// resolves against. Inherited from whoever spawned it — the shell, for a
+// command typed at the prompt — and moved by nobody else. Both report the
+// resulting absolute path, so a program that has just moved knows where to.
+Task<Result<String>> cwd_get();
+
+Task<Result<String>> cwd_set(Str path);
+
+// A pipe, both ends in this process's table. Either may be moved into a child,
+// which is what closes this side of it and therefore what lets the other side
+// see an end of input.
+struct Piped {
+    i32 r = -1;
+    i32 w = -1;
+};
+
+Task<Result<Piped>> make_pipe();
+
+// What a child is entered with. 0, 1 and 2 mean "the stream I was given"; a
+// descriptor from SYS_FD_MIN up is *moved* out of this process's table, which
+// is what closes a pipe's write end and therefore what gives the reader an end
+// of input. It must not be used after the spawn.
+struct ChildIo {
+    u32 in  = SYS_STDIN;
+    u32 out = SYS_STDOUT;
+    u32 err = SYS_STDERR;
+};
+
+Task<Result<u32>> spawn(Args v, ChildIo io = {});
+
+// The child that stopped, and what it reported. Waiting on SYS_WAIT_ANY takes
+// whichever finishes first.
+struct Exited {
+    u32 pid    = 0;
+    i32 status = 0;
+};
+
+Task<Result<Exited>> wait_child(u32 pid = SYS_WAIT_ANY);
+
+Task<Result<void>> kill_child(u32 pid);
+
 // What `df` reports (Concept.md §5.3). `known` is false when the host would
 // not say, which is not the same as a quota of zero.
 struct StorageInfo {
-    u64 quota   = 0;
-    u64 usage   = 0;
+    u64 quota      = 0;
+    u64 usage      = 0;
     bool opfs      = false;
     bool sync      = false;
     bool persisted = false;

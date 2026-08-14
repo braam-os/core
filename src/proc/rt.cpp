@@ -108,7 +108,7 @@ void SysCall::await_suspend(std::coroutine_handle<> h)
 
 Result<SysReply> SysCall::await_resume() const
 {
-    Waiter &w = rt().waiters[slot_];
+    Waiter &w  = rt().waiters[slot_];
     SysReply v = w.reply;
 
     // Freed only now: until the coroutine has read its answer, the slot is

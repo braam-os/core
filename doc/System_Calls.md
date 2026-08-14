@@ -24,7 +24,10 @@ not a CPU with a memory management unit.
 
 | POSIX | Braam | Why |
 |---|---|---|
-| `fork` then `exec` | one `exec` that instantiates | there is nothing to copy: a `WebAssembly.Instance` starts empty |
+| `fork` then `exec` | one `exec` that instantiates, or one `Sys::Spawn` | there is nothing to copy: a `WebAssembly.Instance` starts empty |
+| `waitpid` | `Sys::Wait`, on one child or on any | the status is kept on the parent's record; the scheduler discards a task's return value |
+| `pipe(2)` | `Sys::Pipe`, a `Channel<String>` behind two descriptors | §3.6's one pipe type, the same one a shell pipeline is made of |
+| `dup2` then `close` in the child | the fd is *moved* into the child by the spawn | one end, one owner: a `Channel` panics on a second blocked sender |
 | a page table per process | a `WebAssembly.Memory` per process | a wasm pointer is an offset, not an address; there is nothing to forge (§4.1) |
 | `setrlimit` / cgroups | `new WebAssembly.Memory({initial, maximum})` | `memory.grow` simply fails past the ceiling the *host* chose (§4.3) |
 | a blocking `read(2)` | `co_await` on a suspension | nothing blocks; the browser event loop is the scheduler (§2.1) |
@@ -41,9 +44,11 @@ it. Tier 3 (§4.2) answers this with a kill rather than a scheduler: a process g
 its own, and `terminate()` ends it without its cooperation. Bounding CPU rather than ending it
 would need fuel injection, which was considered and not built.
 
-**No per-process namespace.** A process is isolated in address space, memory and descriptors,
-but `open` resolves against one global working directory with the kernel's full authority. That
-is why `cd` is a shell builtin and `pwd` reads `/proc/cwd` rather than either being a syscall.
+**No per-process namespace.** A process has a working directory of its own, inherited from
+whoever spawned it, but there is no per-process *root*: once a path is absolute, `open` resolves
+it with the kernel's full authority. `cd` is still a shell builtin, because the directory it
+moves is the shell's — the one a command typed at the prompt inherits — and no syscall may reach
+another process's anything.
 
 ---
 
@@ -622,6 +627,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 21 | `List` | — | the path | 0 | `u32 count`, then per entry `u32 kind`, `u64 size`, `u32 name_len`, the name |
 | 22 | `MkDir` | — | the path | 0 | — |
 | 23 | `Remove` | bit 0 = recursive | the path | 0 | — |
+| 24 | `Chdir` | bit 0 = set, else report | the path, when setting | 0 | the resulting absolute cwd |
 | 32 | `Sleep` | — | `u32 ms` | 0 | — |
 | 48 | `Clock` | — | — | 0 | `u64 epoch_ms`, `i32 tz_min` |
 | 49 | `Storage` | — | — | 0 | `u64 quota`, `u64 usage`, `u32 flags` |
@@ -637,8 +643,40 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 66 | `ScreenEnter` | bit 0 = enter, else leave | — | 0 | `u32 cols`, `u32 rows` |
 | 67 | `ScreenBlit` | — | seven `u32`s, then `w*h` `Cell`s | 0 | — |
 | 68 | `ScreenClear` | — | — | 0 | — |
+| 80 | `Pipe` | — | — | 0 | `u32 read fd`, `u32 write fd` |
+| 81 | `Spawn` | — | `u32 fd0, fd1, fd2`, then the argv blob | the child's pid | — |
+| 82 | `Wait` | a pid, or `SYS_WAIT_ANY` | — | the child's status, 0–255 | `u32 pid` |
+| 83 | `Kill` | the pid | — | 0 | — |
 
 Every multi-byte field is little-endian, and a `u64` is a low word then a high word.
+
+`Chdir` sits at 24 rather than with the process family because it is the state `Open`, `Stat`,
+`List`, `MkDir` and `Remove` resolve *against* — it belongs with the operations it governs, and a
+program that never spawns anything still uses it. `pwd` is its caller.
+
+**`Spawn`'s three descriptor words.** Slot *i* is either below `SYS_FD_MIN` — "share the stream I
+was given" — or a descriptor of the caller's, which is **moved**: unbound from the parent's table
+and never bound into the child's, because 0, 1 and 2 are not table entries on either side.
+
+| Slot | Shares | Moves | Refused |
+|---|---|---|---|
+| 0 (stdin) | `0` | a `PipeRead` or a `File` | anything else, `Err(Invalid)` |
+| 1 (stdout) | `1`, or `2` for the caller's stderr | a `PipeWrite` or a `File` | `0`, `Err(Invalid)` |
+| 2 (stderr) | `2`, or `1` for the caller's stdout | a `PipeWrite` or a `File` | `0`, `Err(Invalid)` |
+
+Naming the same descriptor in two slots is `Err(Invalid)` — it would be one handle owned twice.
+A `Body`, `Socket`, `PickSet` or `PickFile` is `Err(Perm)`: those are read by a host round trip
+rather than through a `Source`, so they are not stdio whatever they are pointed at. Spawning a
+**builtin** is `Err(Perm)` too; a builtin is the shell's own frame and there is nothing to
+instantiate.
+
+**Statuses are clamped to 0–255 when recorded.** `Sys::Exit` takes whatever the program passed
+it, and a negative status on this wire is an error code.
+
+**The bounds are `SYS_CHILD_MAX` (8 live children) and `SYS_PROC_DEPTH` (8 levels).** Past
+either, `Spawn` is `Err(NoMemory)` — deliberately not `Err(Again)`, which `proc_syscall` retries
+for ever. Every child is an instance with a 16 MB cap, so without them the first fork bomb takes
+the page with it.
 
 ### Constants
 
@@ -652,6 +690,14 @@ Every multi-byte field is little-endian, and a `u64` is a low word then a high w
 | `SYS_O_READ`…`APPEND` | 1, 2, 4, 8, 16 | open flags, restated rather than shared with the VFS |
 | `SYS_KIND_FILE`/`DIR` | 0, 1 | what `Stat` and `List` report |
 | `SYS_STORE_*` | 1, 2, 4, 8 | OPFS, sync, persisted, and "the host answered at all" |
+| `SYS_SPAWN_HEAD` | 3 | the descriptor words before `Spawn`'s argv blob, in `u32`s |
+| `SYS_WAIT_ANY` | 0 | `Wait`'s "whichever finishes first"; zero is never a pid |
+| `SYS_PID_MAX` | 0xffffff | the largest pid `Wait` and `Kill` can name — the op word's arg is 24 bits |
+| `SYS_CHILD_MAX` | 8 | live children per process |
+| `SYS_PROC_DEPTH` | 8 | how deep a chain of spawns may go |
+
+`SYS_PID_MAX` is not decoration: `Spawn` refuses to hand back a pid above it, because a truncated
+pid would name somebody else's process rather than nothing.
 
 `SYS_O_*` and `SYS_KIND_*` are deliberately *not* the VFS's numbers. A process cannot see the
 filesystem, and the numbers a binary compiled today speaks must not move because the VFS's did;
@@ -688,6 +734,8 @@ A `Handle` is a descriptor whatever is behind it, and there are five kinds:
 | `Socket` | `WsOpen` | `ws_recv` | `ws_send` | `Close` |
 | `PickSet` | `Pick` | — | — | `Close` |
 | `PickFile` | `PickOpen` | `pick_read` | — | `Close` |
+| `PipeRead` | `Pipe` | the channel, EOF when the writer goes | — | `Close`, **or being moved into a child** |
+| `PipeWrite` | `Pipe` | — | the channel | `Close`, **or being moved into a child** |
 
 Making the host services descriptors is what lets `Read`, `Write` and `Close` serve all of them.
 The alternative was a `fetch` family, a socket family and a picker family — perhaps six more
@@ -702,6 +750,30 @@ An empty read is the end of a stream, for all of them: a file at EOF, a hung-up 
 body, a socket whose peer has gone. `Error::Closed` from the kernel side becomes status 0 rather
 than an error, and `read_chunk` turns *that* back into `Err(Closed)` for the program
 (`src/proc/io.cpp:17-29`).
+
+### 9.1 A pipe, and why the descriptor moves
+
+A `Sys::Pipe` is one `Channel<String>` on the heap, refcounted, with a `Handle` on each end. The
+ends may be closed in either order and may by then be held by two different processes, so neither
+owns the channel outright. Dropping the write end is `close()` — the reader drains what is queued
+and then reads end of input; dropping the read end is `hangup()`, which stops the writer.
+
+**Two rules follow from `Channel` rather than from taste**, and both would otherwise be a user
+program reaching a kernel invariant:
+
+- **One process holds one end.** A spawn *moves* the descriptor rather than duplicating it, so
+  there is no second copy for the parent to forget to close. That is what makes the reader's end
+  of input arrive at all: with a copy still open in a process that will never write, the channel
+  is never closed and the read parks for ever. It also means two blocked senders — which
+  `Channel::park_sender` answers with `panic` — cannot be arranged.
+- **One task uses one end at a time.** Within a process, a second concurrent read or write on the
+  same end is `Err(Perm)`. A second blocked sender panics; a second suspended receiver is
+  displaced *silently*, which is worse. Both are refused before `Channel` sees them.
+
+**Drain before you wait.** A child parked on a full pipe has not exited, so a parent that waits
+before reading is waiting on a child that is waiting on the parent. The kernel cannot break that
+— POSIX has the same deadlock — and only `^C` will, since every await is cancellable. `watch` is
+written the right way round and says so where it does it.
 
 ---
 
@@ -792,7 +864,7 @@ rather than as a test:
 - **Exactly one `braam` section**, with the right magic and `abi`, `max_pages` of 256, and the
   tier the build asked for.
 - **The same lists at either tier.** `spin` and `tail` are tier 3 and look identical to the other
-  twenty-seven, which is what lets `exec` pick a tier without userland — or the program —
+  twenty-nine, which is what lets `exec` pick a tier without userland — or the program —
   noticing.
 
 ---
@@ -881,14 +953,23 @@ The honest closing. Each of these is absent on purpose, with the argument record
 
 - **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection is the
   only way to bound rather than end, and it is unbuilt.
-- **No namespace isolation.** `open` resolves against one global working directory with the
-  kernel's full authority. Fixing it needs a per-process root and a cwd that is not a global,
-  which is a milestone's worth of work in the VFS and not a line in the dispatcher.
+- **No namespace isolation.** A process has a working directory of its own, but no *root* of its
+  own: once a path is absolute, `open` resolves it with the kernel's full authority. Fixing that
+  needs a per-process mount view, which is a milestone's worth of work in the VFS rather than a
+  line in the dispatcher.
+- **One process at a time may hold the screen, and the code does not enforce it.**
+  `ScreenEnter`'s `Err(Perm)` is per-process, and `KeyInput`/`InputClaim` restore a saved
+  predecessor and so assume they are destroyed in the order they were made. Two claimants was
+  already reachable before spawning existed; a parent and its child make it natural. The claim
+  belongs on the kernel as one pid, and is not there yet.
+- **A descriptor can be closed under a parked syscall**, for a `Body` or a `Socket`: one task
+  reading while another closes the fd. The pipe ends take a counted reference for the length of
+  the call and the older kinds do not.
 - **An instantiation per command**, roughly a millisecond, plus reading the image out of the
   bundle. The host caches the compiled `Module` by path, so the bytes still cross the VFS on
   every `exec` and only the compile is saved.
 - **Duplication.** With no dynamic linking, every binary embeds its own allocator, string types
-  and coroutine runtime. That is why the boot archive is ~370 KB where four binaries once cost
+  and coroutine runtime. That is why the boot archive is ~400 KB where four binaries once cost
   47 KB, and why the process-side runtime is kept deliberately minimal.
 - **Every asynchronous syscall parks.** `await_ready()` is false unconditionally; there is no
   fast path for an answer the kernel already has.

@@ -184,4 +184,29 @@ void test_io()
     }
     sched_reset();
     CHECK_EQ(heap_stats().bytes_in_use, in_use);
+
+    // The owner protocol. A Stdio names the block its three streams point at,
+    // so a process — whose syscall servers may still be parked on one of them a
+    // tick after the stage that built it is gone — can hold that block up. The
+    // ordering it exists for needs a running process and is asserted in
+    // run.mjs; what is testable here is that the count balances and that a
+    // Stdio with no owner is silent rather than a null call.
+    {
+        static i32 held;
+        held     = 0;
+        Stdio io = {};
+        io.hold  = [](void *ctx, bool on) { *static_cast<i32 *>(ctx) += on ? 1 : -1; };
+        io.owner = &held;
+        io.retain();
+        io.retain();
+        CHECK_EQ(held, 2);
+        io.release();
+        io.release();
+        CHECK_EQ(held, 0);
+
+        Stdio bare = {};
+        bare.retain();
+        bare.release();
+        CHECK_EQ(held, 0);
+    }
 }

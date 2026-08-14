@@ -73,8 +73,7 @@ Result<BundleFs *> bundlefs_at(BundleFs &owner, Str root)
         return Err(Error::NoMemory);
 
     for (const BundleFs::File &f : owner.files_) {
-        if (!f.name.starts_with(root) || f.name.size() <= root.size() ||
-            f.name[root.size()] != '/')
+        if (!f.name.starts_with(root) || f.name.size() <= root.size() || f.name[root.size()] != '/')
             continue;
         BundleFs::File sub{ f.name.substr(root.size() + 1), f.off, f.len };
         if (!fs->files_.push(sub)) {

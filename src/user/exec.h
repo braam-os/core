@@ -16,6 +16,7 @@ struct Executable {
     Tier tier              = Tier::Instance;
     const Builtin *builtin = nullptr;
     u32 pid                = 0;
+    u32 depth              = 0; // how many spawns from the shell this is
     String path;
     String image;
     ProcMeta meta{};
@@ -27,12 +28,23 @@ Result<ProcMeta> exec_meta(Str image);
 
 // The builtins first, then /bin, then the name itself once it looks like a
 // path. Err(NotFound) is "no such command"; Err(Invalid) is "not executable".
-Task<Result<void>> exec_resolve(Str name, Executable &out);
+//
+// `cwd` is what a name with a slash in it is relative to. Empty means the
+// shell's, which is what a command typed at the prompt is relative to; a
+// Sys::Spawn passes the spawning process's.
+Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str());
 
 // A tier-2 program as its own instance. The task returned *is* the process:
 // the scheduler runs it, /proc lists it, ^C cancels it, and its destructor
 // drops the instance — so a killed process needs no unwinding of its own.
-Task<i32> exec_process(Executable &exe, Args args, Stdio io);
+//
+// `cwd` is the directory it starts in, inherited from whoever spawned it. Empty
+// means the shell's, which is what a command typed at the prompt gets.
+Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd = Str());
+
+// The working directory of a live process, for /proc to publish. False when the
+// pid is not one, which is every scheduler job that is not a program.
+bool exec_proc_cwd(u32 pid, Str &out);
 
 // The kernel's half of the two process imports, exported by main.cpp. `pid` is
 // the one the host bound into that process's closure at instantiation, never

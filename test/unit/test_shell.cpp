@@ -1,10 +1,10 @@
 #include "fs/vfs.h"
 #include "harness.h"
-#include "user/io.h"
 #include "kernel/alloc.h"
 #include "kernel/key.h"
 #include "kernel/sched.h"
 #include "kernel/screen.h"
+#include "user/io.h"
 #include "user/shell.h"
 
 namespace {

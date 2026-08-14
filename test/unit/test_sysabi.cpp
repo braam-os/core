@@ -62,9 +62,21 @@ void test_sysabi()
     CHECK_EQ(sys_op_fd(sys_op(Sys::Write, 7)), 7);
     CHECK(sys_op_code(sys_op(Sys::Write, 7)) == Sys::Write);
     CHECK_EQ(sys_op_fd(sys_op(Sys::Read)), 0);
-    CHECK_EQ(sys_op_arg(sys_op(Sys::Open, SYS_O_READ | SYS_O_CREATE)),
-             SYS_O_READ | SYS_O_CREATE);
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Open, SYS_O_READ | SYS_O_CREATE)), SYS_O_READ | SYS_O_CREATE);
     CHECK(sys_op_code(sys_op(Sys::Open, SYS_O_TRUNC)) == Sys::Open);
+
+    // Wait and Kill carry a pid in that same field, which is 24 bits wide —
+    // SYS_PID_MAX is the largest that survives the round trip, and Sys::Spawn
+    // refuses to hand back one above it rather than let it truncate into a pid
+    // belonging to somebody else.
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Wait, SYS_PID_MAX)), SYS_PID_MAX);
+    CHECK(sys_op_code(sys_op(Sys::Wait, SYS_PID_MAX)) == Sys::Wait);
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Kill, SYS_PID_MAX + 1)), 0); // truncated, as advertised
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Wait, SYS_WAIT_ANY)), SYS_WAIT_ANY);
+
+    // Chdir's one bit says whether it moves or only reports.
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Chdir, 1)) & 1, 1u);
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Chdir)) & 1, 0u);
 
     // A spawn request's flags word: two page counts and the tier the host puts
     // the instance at, in one word because `aux` is the pid and nothing else
@@ -97,6 +109,25 @@ void test_sysabi()
     // A blob cut short reads as far as it can and no further.
     CHECK(argv_at(p, 6, 0).empty());
     CHECK_EQ(argv_count(p, 2), 0);
+
+    // Sys::Spawn puts three descriptor words in front of that same blob, so the
+    // kernel decodes argv with the encoder _start already uses rather than a
+    // second one. The words say which of the caller's streams the child gets:
+    // below SYS_FD_MIN is a share, anything else is a descriptor being moved.
+    String req;
+    u8 head[SYS_SPAWN_HEAD * 4];
+    sys_put_u32(head, SYS_STDIN);
+    sys_put_u32(head + 4, 5); // a pipe end of the caller's, moved in
+    sys_put_u32(head + 8, SYS_STDERR);
+    CHECK(req.append(Str(reinterpret_cast<const char *>(head), sizeof(head))));
+    CHECK(req.append(blob.str()));
+
+    const u8 *q = reinterpret_cast<const u8 *>(req.data());
+    CHECK_EQ(sys_get_u32(q), SYS_STDIN);
+    CHECK_EQ(sys_get_u32(q + 4), 5);
+    CHECK_EQ(sys_get_u32(q + 8), SYS_STDERR);
+    CHECK_EQ(argv_count(q + SYS_SPAWN_HEAD * 4, req.size() - SYS_SPAWN_HEAD * 4), 4);
+    CHECK(argv_at(q + SYS_SPAWN_HEAD * 4, req.size() - SYS_SPAWN_HEAD * 4, 0) == "tail");
 
     // The metadata is what picks the tier, and it is found after any number of
     // sections the parser does not care about.

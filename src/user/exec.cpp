@@ -1,6 +1,7 @@
 #include "exec.h"
 
 #include "fs/hostfs.h"
+#include "fs/path.h"
 #include "fs/vfs.h"
 #include "io.h"
 #include "kernel/alloc.h"
@@ -14,14 +15,55 @@
 
 namespace {
 
+// A pipe between two processes: the shell's Pipe on the heap and refcounted,
+// because its two ends are two descriptors that close in either order and may
+// by then be held by two different processes.
+//
+// `busy_r` and `busy_w` are the tripwire Channel's rules need. A second blocked
+// sender panics and a second suspended receiver is displaced silently
+// (channel.h), and either would be a user program reaching a kernel invariant,
+// so a second concurrent user of an end is refused instead.
+struct ProcPipe {
+    u32 refs    = 1;
+    bool busy_r = false;
+    bool busy_w = false;
+    Pipe ch;
+};
+
+void pipe_release(ProcPipe *q)
+{
+    if (--q->refs == 0)
+        heap_delete(q);
+}
+
+// One end of one, held as a member so ~Handle stays implicit. Dropping the
+// write end is close() — the reader drains what is queued and then reads end of
+// input; dropping the read end is hangup(), which stops the writer.
+struct PipeEnd {
+    ~PipeEnd()
+    {
+        if (!q)
+            return;
+        if (writer)
+            q->ch.close();
+        else
+            q->ch.hangup();
+        pipe_release(q);
+    }
+
+    ProcPipe *q = nullptr;
+    bool writer = false;
+};
+
 // A descriptor, whatever is behind it. The kinds beyond File are the host
 // services that hand back a JS object: a fetch body, a socket, a set of picked
-// files. Making them descriptors is what lets `read`, `write` and `close`
-// serve all of them — six operations the ABI does not need — and what makes a
-// killed process drop them, since ~Handle releases the externref slot and the
-// host object with it, with no code of its own to reach.
+// files, and the two ends of a pipe. Making them descriptors is what lets
+// `read`, `write` and `close` serve all of them — six operations the ABI does
+// not need — and what makes a killed process drop them, since ~Handle releases
+// the externref slot and the host object with it, with no code of its own to
+// reach.
 struct Handle {
-    enum class Kind : u8 { File, Body, Socket, PickSet, PickFile };
+    enum class Kind : u8 { File, Body, Socket, PickSet, PickFile, PipeRead, PipeWrite };
 
     explicit Handle(Kind k) : kind(k) {}
 
@@ -33,9 +75,40 @@ struct Handle {
     HttpResponse res; // Body
     WebSocket sock;   // Socket
     Picked pick;      // PickSet
+    PipeEnd pipe;     // PipeRead, PipeWrite
     u32 set  = 0;     // PickFile: the descriptor of the set it came from
     usize ix = 0;     // PickFile: which of that set's files
     u64 off  = 0;     // Body and PickFile: how far it has been read
+};
+
+// A counted reference for the length of one syscall: a read that parks must not
+// have its channel freed under it by a Close in another task of the process.
+struct PipeRef {
+    explicit PipeRef(ProcPipe *p) : q(p) { q->refs++; }
+
+    PipeRef(const PipeRef &)            = delete;
+    PipeRef &operator=(const PipeRef &) = delete;
+
+    ~PipeRef() { pipe_release(q); }
+
+    ProcPipe *q;
+};
+
+// Arms the one-user guard for the length of a syscall, and disarms it however
+// the syscall leaves — including a frame destroyed while parked.
+struct PipeBusy {
+    explicit PipeBusy(ProcPipe *p, bool w) : q(p), writer(w)
+    {
+        (writer ? q->busy_w : q->busy_r) = true;
+    }
+
+    PipeBusy(const PipeBusy &)            = delete;
+    PipeBusy &operator=(const PipeBusy &) = delete;
+
+    ~PipeBusy() { (writer ? q->busy_w : q->busy_r) = false; }
+
+    ProcPipe *q;
+    bool writer;
 };
 
 // One syscall a process is parked on: what it asked for, the bytes it staged,
@@ -63,11 +136,22 @@ struct Reply {
 
 constexpr usize PROC_REPLIES = 8; // more than PROC_TASKS, so a send never parks
 
+// One child a process started. It outlives the child itself, because an
+// uncollected status is the whole point of Sys::Wait; the Wait that reports one
+// erases it, so no child is reaped twice and a process that never waits is
+// bounded by SYS_CHILD_MAX rather than by how many it started.
+struct Child {
+    u32 pid      = 0;
+    bool running = true;
+    i32 status   = 0;
+    u32 wait     = 0; // the token a Wait on this pid is parked on
+};
+
 // The kernel's side of one running process. The instance itself is the host's
 // — the kernel holds what only the kernel can hold: the stdio the stage was
 // given, the descriptors the process opened, and the calls it is waiting on.
 struct Proc {
-    Proc(u32 p, Stdio s) : pid(p), io(s) {}
+    Proc(u32 p, Stdio s) : pid(p), io(s) { io.retain(); }
 
     ~Proc()
     {
@@ -78,10 +162,18 @@ struct Proc {
         heap_delete(staging);
         for (Handle *h : fds)
             heap_delete(h);
+        // Last, because a File handle's ~FileIo closes through the VFS and a
+        // redirected one lives in the same block as the pipes.
+        io.release();
     }
 
     u32 pid;
     Stdio io;
+
+    // What keeps the record alive: the stepper's reference, and one more for
+    // every syscall server, taken by value so the frame that may still be
+    // parked on p.io outlives everything it points at.
+    u32 refs = 1;
 
     // The terminal, while this process has it. Both are the kernel's rather
     // than the program's: a killed process runs no destructor, and ~Proc is
@@ -95,6 +187,20 @@ struct Proc {
     Call *staging = nullptr;
     Vec<Call *> calls;
     Channel<Reply, PROC_REPLIES> done;
+
+    // The namespace this process names things in (Concept.md §5.1). Its own,
+    // inherited from whoever spawned it: the shell's `cd` moves the shell's,
+    // and a child that moves this one moves nobody else's feet.
+    String cwd;
+
+    // What this process started, and who is waiting on it. `dead` is the
+    // stepper's End having run: a child that finishes afterwards has nobody
+    // left to report to, and the record is only still here because a server has
+    // not unwound yet.
+    Vec<Child> children;
+    u32 wait_any = 0; // the token a Wait(SYS_WAIT_ANY) is parked on
+    u32 depth    = 0; // how many spawns deep this one is
+    bool dead    = false;
 
     i32 exit = 1;
     Vec<Handle *> fds;
@@ -131,6 +237,35 @@ void proc_remove(Proc *p)
             return;
         }
 }
+
+void proc_release(Proc *p)
+{
+    if (--p->refs == 0)
+        heap_delete(p);
+}
+
+// A counted reference on a process record, taken by a syscall server as a
+// coroutine parameter *by value*. A coroutine's parameter copies are destroyed
+// when the frame is, which is after the body's locals — and one of those locals
+// may be an awaitable parked on the process's stdio, deregistering from a pipe
+// in its destructor (prog.h). So the record, and the block its streams point
+// at, is the last thing to go. Ordering, not politeness: the stepper's End runs
+// while a cancelled server is still on the ready queue.
+struct ProcRef {
+    explicit ProcRef(Proc *q) : p(q) { p->refs++; }
+
+    ProcRef(const ProcRef &o) : p(o.p) { p->refs++; }
+
+    ProcRef &operator=(const ProcRef &) = delete;
+
+    ~ProcRef() { proc_release(p); }
+
+    Proc *operator->() const { return p; }
+
+    Proc &operator*() const { return *p; }
+
+    Proc *p;
+};
 
 // The call the host is about to make, made on demand: Sys::Stage comes first
 // when there is a payload, and sys_async alone when there is not.
@@ -188,6 +323,19 @@ i32 proc_bind(Proc &p, Handle *h)
     return i32(slot + SYS_FD_MIN);
 }
 
+// A path as this process names it, made absolute. Resolution happens here
+// rather than in the VFS because the cwd being resolved against is the
+// process's and not the shell's; what reaches vfs_* is already absolute, and
+// path_resolve ignores its cwd for such a path, so the VFS's own second pass
+// costs a copy and changes nothing (fs/path.cpp).
+//
+// Synchronous, and complete before the caller's first await: p.cwd may move
+// under another task of the same process, and a Str viewing it would not.
+Result<void> proc_path(Proc &p, Str in, String &out)
+{
+    return path_resolve(p.cwd.str(), in, out);
+}
+
 // A process's flags are its own numbers (sysabi.h), mapped rather than shared:
 // the filesystem's are free to move without breaking a compiled binary.
 u32 vfs_flags(u32 f)
@@ -204,6 +352,271 @@ u32 vfs_flags(u32 f)
     if (f & SYS_O_APPEND)
         out |= O_APPEND;
     return out;
+}
+
+// ------------------------------------------------------- a spawned child
+//
+// What a child owns and the syscall that made it does not: the binary, the
+// argv it views, the directory it starts in, and any descriptor moved into its
+// stdio. Refcounted for the reason the shell's Job is — a syscall server of the
+// child's may still be parked on one of these streams a tick after the child
+// itself is gone — and it holds a reference to *its* parent's stdio owner, so a
+// chain of spawns keeps the whole chain's pipes standing.
+struct Spawned {
+    ~Spawned()
+    {
+        for (Handle *h : moved)
+            heap_delete(h);
+        parent_io.release();
+    }
+
+    u32 refs   = 1;
+    u32 parent = 0;
+    u32 pid    = 0;
+    Executable exe;
+    String blob; // the argv bytes, copied out of the staging block
+    Vec<Str> words;
+    String cwd;
+    Handle *moved[3] = {};
+    Stdio parent_io; // retained, for the slots that share rather than move
+    Stdio io;        // what the child is entered with; io.owner is this
+};
+
+void spawn_release(Spawned *s)
+{
+    if (--s->refs == 0)
+        heap_delete(s);
+}
+
+// Stdio::hold for a child's streams. They may come from three different places
+// at once — a pipe of the parent's, a file it opened, the console — so the one
+// owner they all name is this record, which holds each of those up in turn.
+void spawn_hold(void *ctx, bool on)
+{
+    Spawned *s = static_cast<Spawned *>(ctx);
+    if (on)
+        s->refs++;
+    else
+        spawn_release(s);
+}
+
+struct SpawnRef {
+    explicit SpawnRef(Spawned *q) : s(q) { s->refs++; }
+
+    SpawnRef(const SpawnRef &o) : s(o.s) { s->refs++; }
+
+    SpawnRef &operator=(const SpawnRef &) = delete;
+
+    ~SpawnRef() { spawn_release(s); }
+
+    Spawned *operator->() const { return s; }
+
+    Spawned *s;
+};
+
+Task<i32> spawn_run(SpawnRef s);
+
+// A moved descriptor as the stream it becomes for the child. The pipe ends need
+// no guard here: a child's stdio is the only user of it, which is what moving
+// rather than sharing the descriptor buys.
+Source handle_source(Handle &h)
+{
+    return h.kind == Handle::Kind::File ? file_source(h.file) : pipe_source(h.pipe.q->ch);
+}
+
+Stream handle_sink(Handle &h)
+{
+    return h.kind == Handle::Kind::File ? file_sink(h.file) : pipe_sink(h.pipe.q->ch);
+}
+
+// Which entry Sys::Wait and Sys::Kill mean. SYS_WAIT_ANY prefers a child that
+// has already finished, so a status the kernel is holding is reported rather
+// than parked past.
+bool find_child(Proc &p, u32 want, usize &at)
+{
+    if (want) {
+        for (usize i = 0; i < p.children.size(); i++)
+            if (p.children[i].pid == want) {
+                at = i;
+                return true;
+            }
+        return false;
+    }
+    bool found = false;
+    for (usize i = 0; i < p.children.size(); i++) {
+        if (!p.children[i].running) {
+            at = i;
+            return true;
+        }
+        if (!found) {
+            at    = i;
+            found = true;
+        }
+    }
+    return found;
+}
+
+// Sys::Spawn. Reports the child's pid, or a negated Error — including
+// -Cancelled, which the caller turns back into a reply nobody builds.
+Task<i32> proc_spawn_child(Proc &p, Str payload)
+{
+    if (payload.size() < SYS_SPAWN_HEAD * 4)
+        co_return -i32(Error::Invalid);
+
+    const u8 *q = reinterpret_cast<const u8 *>(payload.data());
+    u32 want[3] = { sys_get_u32(q), sys_get_u32(q + 4), sys_get_u32(q + 8) };
+
+    // A slot names one of the streams this process was given, or a descriptor
+    // of its own to hand over — and never the same descriptor twice, which
+    // would be one handle owned in two places.
+    if (want[0] != SYS_STDIN && want[0] < SYS_FD_MIN)
+        co_return -i32(Error::Invalid);
+    for (usize i = 1; i < 3; i++)
+        if (want[i] != SYS_STDOUT && want[i] != SYS_STDERR && want[i] < SYS_FD_MIN)
+            co_return -i32(Error::Invalid);
+    for (usize i = 0; i < 3; i++)
+        for (usize k = i + 1; k < 3; k++)
+            if (want[i] >= SYS_FD_MIN && want[i] == want[k])
+                co_return -i32(Error::Invalid);
+
+    // Every child is an instance with a memory cap of its own, so the bound is
+    // on the count and on the depth. NoMemory rather than Again: proc_syscall
+    // retries an Again for ever.
+    if (p.children.size() >= SYS_CHILD_MAX || p.depth + 1 >= SYS_PROC_DEPTH)
+        co_return -i32(Error::NoMemory);
+
+    Str blob   = payload.substr(SYS_SPAWN_HEAD * 4);
+    usize argc = argv_count(reinterpret_cast<const u8 *>(blob.data()), blob.size());
+    if (argc == 0)
+        co_return -i32(Error::Invalid);
+
+    Spawned *s = heap_new<Spawned>();
+    if (!s)
+        co_return -i32(Error::NoMemory);
+    struct Drop {
+        ~Drop() { spawn_release(s); }
+
+        Spawned *s;
+    } drop{ s };
+
+    // argv is copied rather than viewed: the staging block belongs to the call,
+    // and the child holds its words until it exits.
+    s->parent    = p.pid;
+    s->exe.depth = p.depth + 1;
+    if (!s->blob.append(blob) || !s->cwd.assign(p.cwd.str()) || !s->words.reserve(argc))
+        co_return -i32(Error::NoMemory);
+    const u8 *b = reinterpret_cast<const u8 *>(s->blob.data());
+    for (usize i = 0; i < argc; i++)
+        if (!s->words.push(argv_at(b, s->blob.size(), i)))
+            co_return -i32(Error::NoMemory);
+
+    // Resolved before the descriptors are taken, so a name that turns out not
+    // to be a command leaves the parent's table as it found it.
+    Task<Result<void>> t = exec_resolve(s->words[0], s->exe, p.cwd.str());
+    if (!t)
+        co_return -i32(Error::NoMemory);
+    if (Result<void> r = co_await t; r.is_err())
+        co_return -i32(r.error());
+    if (s->exe.builtin)
+        co_return -i32(Error::Perm); // a builtin is the shell's, not a program
+
+    // From here to sched_spawn there is no await, which is what makes taking
+    // the handles atomic against another task of this process closing one.
+    for (usize i = 0; i < 3; i++) {
+        if (want[i] < SYS_FD_MIN)
+            continue;
+        Handle *h = proc_handle(p, want[i]);
+        if (!h)
+            co_return -i32(Error::Invalid);
+        // A stream this end can stand behind: a file, or the right end of a
+        // pipe. The host services are read by a round trip rather than through
+        // a Source, so they are not stdio whatever they are pointed at.
+        Handle::Kind want_kind = i == 0 ? Handle::Kind::PipeRead : Handle::Kind::PipeWrite;
+        if (h->kind != Handle::Kind::File && h->kind != want_kind)
+            co_return -i32(Error::Perm);
+        p.fds[want[i] - SYS_FD_MIN] = nullptr;
+        s->moved[i]                 = h;
+    }
+
+    s->parent_io = p.io;
+    s->parent_io.retain();
+    s->io.hold  = spawn_hold;
+    s->io.owner = s;
+    s->io.in    = want[0] == SYS_STDIN ? p.io.in : handle_source(*s->moved[0]);
+    s->io.out   = want[1] == SYS_STDOUT   ? p.io.out
+                  : want[1] == SYS_STDERR ? p.io.err
+                                          : handle_sink(*s->moved[1]);
+    s->io.err   = want[2] == SYS_STDOUT   ? p.io.out
+                  : want[2] == SYS_STDERR ? p.io.err
+                                          : handle_sink(*s->moved[2]);
+
+    // The scheduler's name is a view into the child's own word store, which
+    // outlives the task holding it — the same contract a pipeline stage has.
+    u32 pid = sched_spawn(spawn_run(SpawnRef(s)), s->words[0]);
+    if (!pid)
+        co_return -i32(Error::NoMemory);
+    if (pid > SYS_PID_MAX) {
+        // The op word's argument is 24 bits, so Wait and Kill could not name
+        // it. Refusing beats handing back a number that truncates into a pid
+        // belonging to somebody else.
+        sched_cancel(pid);
+        co_return -i32(Error::Unsupported);
+    }
+    s->pid     = pid;
+    s->exe.pid = pid;
+    if (!p.children.push(Child{ pid, true, 0, 0 })) {
+        sched_cancel(pid);
+        co_return -i32(Error::NoMemory);
+    }
+    co_return i32(pid);
+}
+
+// The child, as a scheduler job of its own — so ^C, `kill`, `jobs` and /proc
+// reach it exactly as they reach a stage of a pipeline, and its pid is the one
+// the parent was handed.
+Task<i32> spawn_run(SpawnRef s)
+{
+    i32 status = 130; // cancelled before the instance existed
+
+    // Declared before the body, so the body is destroyed first: the status is
+    // reported only once the child's own End has killed the instance and
+    // released everything it held.
+    struct Report {
+        ~Report()
+        {
+            Proc *par = proc_find(parent);
+            if (!par || par->dead)
+                return;
+            for (Child &ch : par->children) {
+                if (ch.pid != pid)
+                    continue;
+                ch.running = false;
+                // A negative status on the wire is an error code, and Sys::Exit
+                // takes whatever the program passed it.
+                ch.status = *status < 0 || *status > 255 ? 255 : *status;
+                u32 token = ch.wait;
+                ch.wait   = 0;
+                if (!token) {
+                    token         = par->wait_any;
+                    par->wait_any = 0;
+                }
+                if (token)
+                    sched_wake(token, 0, 0);
+                return;
+            }
+        }
+
+        u32 parent;
+        u32 pid;
+        i32 *status;
+    } rep{ s->parent, s->pid, &status };
+
+    Task<i32> body = exec_process(s->exe, Args{ Span<const Str>(s->words.data(), s->words.size()) },
+                                  s->io, s->cwd.str());
+    if (!body)
+        co_return status;
+    status = co_await body;
+    co_return status;
 }
 
 Task<Result<String>> read_file(Str path)
@@ -317,6 +730,28 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 status = r.is_ok() ? i32(payload.size()) : -i32(r.error());
                 break;
             }
+            // The write end of a pipe, which is the same wait a write to
+            // stdout is when stdout *is* a pipe — the shell's own stages have
+            // been doing it since M4.
+            if (h->kind == Handle::Kind::PipeWrite) {
+                if (h->pipe.q->busy_w) {
+                    status = -i32(Error::Perm);
+                    break;
+                }
+                PipeRef hold(h->pipe.q);
+                PipeBusy busy(h->pipe.q, true);
+                Stream out      = pipe_sink(hold.q->ch);
+                Result<usize> r = Err(Error::Again);
+                while (r.is_err() && r.error() == Error::Again)
+                    r = co_await out.write(payload);
+                if (r.is_ok())
+                    status = i32(r.value());
+                else if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                else
+                    status = -i32(r.error());
+                break;
+            }
             if (h->kind != Handle::Kind::File) {
                 status = -i32(Error::Perm);
                 break;
@@ -350,6 +785,31 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             Handle *h = proc_handle(p, fd);
             if (!h) {
                 status = -i32(Error::Invalid);
+                break;
+            }
+
+            // The read end of a pipe. Err(Closed) is status 0 here as it is
+            // everywhere else: the writer's end went, and that is an end of
+            // input rather than a failure.
+            if (h->kind == Handle::Kind::PipeRead) {
+                if (h->pipe.q->busy_r) {
+                    status = -i32(Error::Perm);
+                    break;
+                }
+                PipeRef hold(h->pipe.q);
+                PipeBusy busy(h->pipe.q, false);
+                Source in        = pipe_source(hold.q->ch);
+                Result<String> r = Err(Error::Again);
+                while (r.is_err() && r.error() == Error::Again)
+                    r = co_await in.read();
+                if (r.is_ok()) {
+                    if (!reply.append(r.value().str()))
+                        co_return Err(Error::NoMemory);
+                    status = i32(r.value().size());
+                } else if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                else
+                    status = r.error() == Error::Closed ? 0 : -i32(r.error());
                 break;
             }
 
@@ -401,7 +861,12 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
         }
 
         case Sys::Open: {
-            Task<Result<i32>> t = vfs_open(payload, vfs_flags(sys_op_arg(c.op)));
+            String abs;
+            if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
+            Task<Result<i32>> t = vfs_open(abs.str(), vfs_flags(sys_op_arg(c.op)));
             if (!t) {
                 status = -i32(Error::NoMemory);
                 break;
@@ -444,8 +909,13 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
         }
 
         case Sys::Stat: {
+            String abs;
+            if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
             Result<Stat> r = Err(Error::NoMemory);
-            if (Task<Result<Stat>> t = vfs_stat(payload))
+            if (Task<Result<Stat>> t = vfs_stat(abs.str()))
                 r = co_await t;
             if (r.is_err()) {
                 if (r.error() == Error::Cancelled)
@@ -464,8 +934,13 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
         }
 
         case Sys::List: {
+            String abs;
+            if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
             Result<Vec<Entry>> r = Err(Error::NoMemory);
-            if (Task<Result<Vec<Entry>>> t = vfs_list(payload))
+            if (Task<Result<Vec<Entry>>> t = vfs_list(abs.str()))
                 r = co_await t;
             if (r.is_err()) {
                 if (r.error() == Error::Cancelled)
@@ -493,8 +968,13 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
         }
 
         case Sys::MkDir: {
+            String abs;
+            if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
             Result<void> r = Err(Error::NoMemory);
-            if (Task<Result<void>> t = vfs_mkdir(payload))
+            if (Task<Result<void>> t = vfs_mkdir(abs.str()))
                 r = co_await t;
             if (r.is_err() && r.error() == Error::Cancelled)
                 co_return Err(Error::Cancelled);
@@ -503,12 +983,53 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
         }
 
         case Sys::Remove: {
+            String abs;
+            if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
             Result<void> r = Err(Error::NoMemory);
-            if (Task<Result<void>> t = vfs_remove(payload, sys_op_arg(c.op) & 1))
+            if (Task<Result<void>> t = vfs_remove(abs.str(), sys_op_arg(c.op) & 1))
                 r = co_await t;
             if (r.is_err() && r.error() == Error::Cancelled)
                 co_return Err(Error::Cancelled);
             status = r.is_ok() ? 0 : -i32(r.error());
+            break;
+        }
+
+        // Get and set in one operation, as KeyClaim and ScreenEnter are: the
+        // answer to both is the resulting cwd, and a program that has just
+        // moved wants it as much as one that only asked.
+        case Sys::Chdir: {
+            if (sys_op_arg(c.op) & 1) {
+                String abs;
+                if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                    status = -i32(a.error());
+                    break;
+                }
+                Result<Stat> r = Err(Error::NoMemory);
+                if (Task<Result<Stat>> t = vfs_stat(abs.str()))
+                    r = co_await t;
+                if (r.is_err()) {
+                    if (r.error() == Error::Cancelled)
+                        co_return Err(Error::Cancelled);
+                    status = -i32(r.error());
+                    break;
+                }
+                if (r.value().kind != NodeKind::Dir) {
+                    status = -i32(Error::NotDir);
+                    break;
+                }
+                // Last, so a cwd that could not be stored leaves the old one
+                // standing rather than an empty string nothing resolves against.
+                if (!p.cwd.assign(abs.str())) {
+                    status = -i32(Error::NoMemory);
+                    break;
+                }
+            }
+            if (!reply.append(p.cwd.str()))
+                co_return Err(Error::NoMemory);
+            status = 0;
             break;
         }
 
@@ -872,6 +1393,130 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             status = 0;
             break;
 
+        // Both ends in this process's table. Whichever is moved into a child is
+        // closed here by the move, and that is what gives the other end an end
+        // of input — there is no second copy left open to prevent it.
+        case Sys::Pipe: {
+            ProcPipe *q = heap_new<ProcPipe>();
+            Handle *r   = q ? heap_new<Handle>(Handle::Kind::PipeRead) : nullptr;
+            Handle *w   = r ? heap_new<Handle>(Handle::Kind::PipeWrite) : nullptr;
+            if (!w) {
+                heap_delete(r);
+                heap_delete(q);
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            r->pipe.q      = q;
+            w->pipe.q      = q;
+            w->pipe.writer = true;
+            q->refs        = 2; // one per end, and the ends close in either order
+
+            i32 rfd = proc_bind(p, r);
+            i32 wfd = rfd < 0 ? -1 : proc_bind(p, w);
+            if (wfd < 0) {
+                if (rfd >= 0)
+                    p.fds[usize(rfd) - SYS_FD_MIN] = nullptr;
+                heap_delete(r);
+                heap_delete(w);
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            u8 head[8];
+            sys_put_u32(head, u32(rfd));
+            sys_put_u32(head + 4, u32(wfd));
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
+        case Sys::Spawn: {
+            status = -i32(Error::NoMemory);
+            if (Task<i32> t = proc_spawn_child(p, payload))
+                status = co_await t;
+            if (status == -i32(Error::Cancelled))
+                co_return Err(Error::Cancelled);
+            break;
+        }
+
+        // Parks until a child stops, and erases it when it reports. The loop is
+        // for the stray wake: being woken is not proof the child this call
+        // named is the one that finished.
+        case Sys::Wait: {
+            u32 want = sys_op_arg(c.op);
+            for (;;) {
+                usize at = 0;
+                if (!find_child(p, want, at)) {
+                    status = -i32(Error::NotFound);
+                    break;
+                }
+                if (!p.children[at].running) {
+                    u32 pid = p.children[at].pid;
+                    i32 st  = p.children[at].status;
+                    p.children.erase(at);
+                    u8 head[4];
+                    sys_put_u32(head, pid);
+                    if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                        co_return Err(Error::NoMemory);
+                    status = st;
+                    break;
+                }
+
+                // One waiter per child, and one for "any": the token is a
+                // single slot, and a second would displace the first silently.
+                u32 pid = p.children[at].pid;
+                if (want ? p.children[at].wait != 0 : p.wait_any != 0) {
+                    status = -i32(Error::Perm);
+                    break;
+                }
+
+                Wake w;
+                // By pid rather than by a pointer into the Vec: another task of
+                // this process may push a child onto it while this one is
+                // parked, and that moves every element.
+                struct Clear {
+                    ~Clear()
+                    {
+                        if (want) {
+                            usize k = 0;
+                            if (find_child(*p, want, k) && p->children[k].wait == token)
+                                p->children[k].wait = 0;
+                        } else if (p->wait_any == token) {
+                            p->wait_any = 0;
+                        }
+                    }
+
+                    Proc *p;
+                    u32 want;
+                    u32 token;
+                } clear{ &p, want, w.token() };
+
+                if (want)
+                    p.children[at].wait = w.token();
+                else
+                    p.wait_any = w.token();
+
+                if ((co_await w).is_err())
+                    co_return Err(Error::Cancelled);
+                (void)pid;
+            }
+            break;
+        }
+
+        // Told, not asked, and only about one's own: the child's stepper is a
+        // scheduler job, so cancelling it is what `kill %n` and ^C already do.
+        case Sys::Kill: {
+            usize at = 0;
+            if (!find_child(p, sys_op_arg(c.op), at) || sys_op_arg(c.op) == SYS_WAIT_ANY) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            if (p.children[at].running)
+                sched_cancel(p.children[at].pid);
+            status = 0;
+            break;
+        }
+
         default:
             break;
         }
@@ -883,13 +1528,17 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
 // One syscall, performed in a job of its own, reporting back to the stepper.
 // The Call stays the process's: this frame may be destroyed while suspended,
 // and freeing from here would leave the process holding a dangling pointer.
-Task<i32> serve(Proc *p, Call *c)
+Task<i32> serve(ProcRef p, Call *c)
 {
+    // Before the await, not after: on the cancelled path ~Proc has already
+    // freed the Call by the time this frame is resumed.
+    u32 token = c->token;
+
     Task<Result<String>> t = proc_syscall(*p, *c);
     Result<String> r       = t ? co_await t : Err(Error::NoMemory);
 
     Reply rep;
-    rep.token = c->token;
+    rep.token = token;
     if (r.is_ok()) {
         rep.payload = move(r.value());
     } else {
@@ -948,7 +1597,7 @@ Result<ProcMeta> exec_meta(Str image)
     return Err(Error::Invalid);
 }
 
-Task<Result<void>> exec_resolve(Str name, Executable &out)
+Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
 {
     // A builtin shadows everything: `cd` is the shell's, whatever a file of
     // that name in /bin might claim.
@@ -966,6 +1615,14 @@ Task<Result<void>> exec_resolve(Str name, Executable &out)
     bool ok = name.contains("/") ? path.assign(name) : path.assign("/bin/") && path.append(name);
     if (!ok)
         co_return Err(Error::NoMemory);
+
+    // `./prog` is relative to whoever asked — the shell for a typed command,
+    // the parent for a Sys::Spawn, and those are two different directories now.
+    if (!cwd.empty()) {
+        String abs;
+        CO_TRY_VOID(path_resolve(cwd, path.str(), abs));
+        path = move(abs);
+    }
 
     Task<Result<String>> t = read_file(path.str());
     if (!t)
@@ -991,11 +1648,18 @@ Task<Result<void>> exec_resolve(Str name, Executable &out)
     co_return {};
 }
 
-Task<i32> exec_process(Executable &exe, Args args, Stdio io)
+Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd)
 {
     Proc *p = heap_new<Proc>(exe.pid, io);
     if (!p || !proc_add(p)) {
         heap_delete(p);
+        co_await io.err.write("braam: out of memory\n");
+        co_return 1;
+    }
+    p->depth = exe.depth;
+    if (!p->cwd.assign(cwd.empty() ? vfs_cwd() : cwd)) {
+        proc_remove(p);
+        proc_release(p);
         co_await io.err.write("braam: out of memory\n");
         co_return 1;
     }
@@ -1009,13 +1673,23 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io)
             // Every server goes with the process. A request nobody will answer
             // would otherwise leak its record for the life of the page, and
             // there is one per parked task rather than one per process now.
+            // A process going takes its children with it — §3.6's structured
+            // concurrency, put back by hand, exactly as run_line does it for a
+            // pipeline. Their own Ends do the same one level down.
+            p->dead = true;
+            for (Child &ch : p->children)
+                if (ch.running)
+                    sched_cancel(ch.pid);
             for (Call *c : p->calls)
                 if (c->server)
                     sched_cancel(c->server);
             if (spawned)
                 proc_kill(p->pid);
-            proc_remove(p);
-            heap_delete(p);
+            proc_remove(p); // so a syscall arriving after this is NotFound
+            // Not a delete: a cancelled server is only queued, not unwound, so
+            // the record has to outlive this frame by however long the
+            // scheduler takes to resume the last of them.
+            proc_release(p);
         }
 
         Proc *p;
@@ -1071,7 +1745,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io)
         for (Call *c : p->calls) {
             if (c->server)
                 continue;
-            c->server = sched_spawn(serve(p, c), exe.path.str());
+            c->server = sched_spawn(serve(ProcRef(p), c), exe.path.str());
             if (!c->server)
                 co_return 1;
             alive++;
@@ -1092,6 +1766,15 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io)
         token   = r.value().token;
         payload = move(r.value().payload);
     }
+}
+
+bool exec_proc_cwd(u32 pid, Str &out)
+{
+    Proc *p = proc_find(pid);
+    if (!p)
+        return false;
+    out = p->cwd.str();
+    return true;
 }
 
 i32 exec_sys(u32 pid, u32 op, u32 a0, u32, u32)

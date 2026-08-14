@@ -340,8 +340,8 @@ is claimed, so a program that has taken the screen and stopped answering stays k
   token, and every `co_await` point checks it and unwinds by returning, so destructors run
   correctly. The name is a view the scheduler holds rather than owns, and `sched_procs()` reads
   the table back out — which is what /proc is made of (§5.1). There is no `Process` type: argv
-  and stdio belong to the pipeline stage (`src/user/prog.h`) and the working directory is one
-  global (§5.1), so a job is the smaller thing the kernel actually needs.
+  and stdio belong to the pipeline stage (`src/user/prog.h`) and a working directory to the
+  process record `exec` keeps (§5.1), so a job is the smaller thing the kernel actually needs.
 
   **Cancellation does not propagate down a tree, and this section once said it would.**
   `CancelState::waiting` is a single slot, so a job cannot have two children parked at once —
@@ -456,7 +456,7 @@ build is refused rather than misread.
 
 What is left in the kernel is not a weaker tier but a different kind of thing: a **shell
 builtin**, which is not a program at all and has no file in `/bin`. The six are the ones no
-syscall could serve — `cd` moves the one global working directory (§5.1), `jobs`, `fg` and `kill`
+syscall could serve — `cd` moves the *shell's* working directory (§5.1), `jobs`, `fg` and `kill`
 read and signal the shell's own job table, `fg` claims the keyboard route of the very pipeline it
 is a stage of (§3.5), `exit` ends the shell's loop, and `help` lists the rest. A builtin is an
 ordinary pipeline stage — a `Task<i32>(Args, Stdio)` handed to the job runtime like any other —
@@ -567,11 +567,42 @@ five terminal operations for a program that takes the whole screen. Every one ha
 `src/cmd/`, which is the rule that keeps the table from growing on speculation.
 [System_Calls.md](System_Calls.md) lists them all, with what each carries.
 
+**A process can start a process, and that took five more.** The table is thirty-two: `chdir`
+beside the filesystem operations, and `pipe`, `spawn`, `wait` and `kill` as a family of their
+own. What forced them is that a program whose job is to run another program had nowhere to
+live — a builtin is the shell's own frame and the six that exist are the six no syscall could
+serve, so `timeout` and `watch` were unwritable rather than merely unwritten. Those two are the
+callers, and the rule above is why there are two and not a plausible half-dozen.
+
+All five are asynchronous, because the synchronous half is closed and stays closed. That costs a
+park and a step even for `wait` on a child that has already exited, which is the cost model of
+§4.4 arriving where it always does.
+
+**A descriptor named in a spawn is moved, not duplicated.** The parent's slot is closed and the
+child owns it. POSIX duplicates and expects the parent to close its copy, and forgetting is the
+classic bug where the reader never sees end of input, because a write end is still open in a
+process that will never write. Moving makes that unrepresentable — and it is not only tidiness:
+a `Channel` has one receiver and panics on a second blocked sender (§3.6), so two processes
+holding one pipe end is a user program reaching a kernel invariant. One end, one owner, by
+construction.
+
+**A child is an ordinary scheduler job**, spawned exactly as a pipeline stage is, so `^C`,
+`kill`, `jobs` and `/proc` reach it with nothing added. Its parent's destructor cancels it, which
+is §3.6's structured concurrency put back by hand a second time, one level further down. Both
+bounds on it — eight live children, eight levels deep — are there because every child is an
+instance with a memory cap of its own, and nothing else would stop the first fork bomb.
+
 **What the kernel already publishes as text needs no operation.** `/proc` is a filesystem, so a
-process reads it with `open` and `read` like anything else: `pwd` is `/proc/cwd`, `mount` is
-`/proc/mounts`, and `df` needs `storage` only for the three numbers behind a host round trip,
-because ProcFs generates its files synchronously and asking the host is not. Adding a line to
-`/proc` is cheaper than adding a syscall and leaves `cat` and `grep` able to read it.
+process reads it with `open` and `read` like anything else: `mount` is `/proc/mounts`, and `df`
+needs `storage` only for the three numbers behind a host round trip, because ProcFs generates its
+files synchronously and asking the host is not. Adding a line to `/proc` is cheaper than adding a
+syscall and leaves `cat` and `grep` able to read it.
+
+There is one thing this argument cannot reach, and `pwd` is it. ProcFs generates a file at
+`open` and has no idea who is reading, so `/proc/cwd` can only ever be one answer — and once
+every process has a working directory of its own, the one answer is the shell's. That is why
+`chdir` is an operation and `pwd` calls it: not because the text was expensive, but because
+"which process is asking" is not a question a filesystem can be asked.
 
 **The synchronous half is closed.** Tier 3 answers `exit`, `getpid`, `now` and `stage` inside the
 process's own worker, with no kernel to ask — that is the whole reason the same binary runs at
@@ -699,6 +730,23 @@ Several of those differ from what this section first said:
   `/proc/42` is a file, not a directory — because a process here has one line of state, and a
   generated directory level would hold exactly one file. Content is produced at `open` and read
   out of that snapshot, so a two-block read cannot describe two different moments.
+
+  `/proc/cwd` is **the shell's** working directory, and a process's own is a line in its own
+  `/proc/<pid>`. The two are different things now, which is the paragraph below.
+
+**There are two kinds of working directory.** The shell's is one global, moved by `cd` and by
+nothing else, and it is what a command typed at the prompt starts in — which is also what a
+redirection on that line is relative to, since the shell opens those before any stage runs. Every
+process then has one of its own, inherited from whoever spawned it and moved only by its own
+`chdir`. A child inherits its parent's, not the shell's, so a `cd` in one process moves nobody
+else's feet.
+
+This is why `cd` stays a builtin, and the reason has changed: not that there is only one
+directory, but that the one it moves is the shell's, and no syscall may reach another process's
+anything. It also splits what used to be one sentence — a process is now isolated in address
+space, memory, descriptors *and* the directory it names things from. What it is still not
+isolated in is the namespace itself: there is no per-process root, and `open` resolves with the
+kernel's full authority once the path is absolute.
 
 ### 5.2 OPFS is the primary store
 

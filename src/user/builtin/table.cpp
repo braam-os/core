@@ -1,6 +1,5 @@
-#include "user/builtin.h"
-
 #include "decl.h"
+#include "user/builtin.h"
 
 namespace {
 

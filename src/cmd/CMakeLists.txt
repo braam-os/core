@@ -8,7 +8,7 @@
 # the same number the link uses, so the two cannot disagree.
 set(BRAAM_BIN_LIST cat chat clear curl date df echo edit export false grep head hog
                    import less ls mkdir mount pbcopy pbpaste pwd rm sleep spin tail
-                   touch true version wc)
+                   timeout touch true version watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 set(BRAAM_BIN_INITIAL_PAGES 4)
 set(BRAAM_BIN_MAX_PAGES 256)

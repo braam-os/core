@@ -35,7 +35,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 2;
+constexpr u32 PROC_ABI       = 3;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -96,6 +96,13 @@ enum class Sys : u32 {
     MkDir,      // payload = the path
     Remove,     // arg bit 0 = recursive; payload = the path
 
+    // The working directory the five above resolve against, which is this
+    // process's own and nobody else's — inherited from whoever spawned it, the
+    // shell for a top-level command. It sits in this block rather than with the
+    // process family because it is the state those operations read, and a
+    // program that never spawns still moves it.
+    Chdir, // arg bit 0 = set, else just report; payload = the path; data = the cwd
+
     // Time. The timer queue is the kernel's, and Sys::Now is monotonic and
     // says nothing about a day, so both of these have to be asked for.
     Sleep = 32, // payload = u32 milliseconds
@@ -128,10 +135,41 @@ enum class Sys : u32 {
     ScreenEnter,   // arg bit 0 = the alternate screen, else back; data = cols, rows
     ScreenBlit,    // payload = u32 x, y, w, h, cursor_x, cursor_y, cursor_on, then w*h Cells
     ScreenClear,   // blank the shell's screen and home its cursor
+
+    // Processes. A program that supervises another one cannot be a shell
+    // builtin — the builtins are the six things no syscall could serve — so
+    // this is what makes `timeout` and `watch` writable at all.
+    //
+    // A descriptor named in a Spawn is *moved*: the parent's slot is closed and
+    // the child owns it. That is what closes a pipe's write end and therefore
+    // what produces the reader's end of input, and it keeps one process holding
+    // one end, which is what Channel's single-sender rule needs (channel.h).
+    Pipe = 80, // data = u32 read fd, u32 write fd
+    Spawn,     // payload = u32 fd0, fd1, fd2, then the argv blob; status = the child's pid
+               //   an fd below SYS_FD_MIN shares the stream this process was given
+    Wait,      // arg = a pid, or SYS_WAIT_ANY;  status = the child's status; data = u32 pid
+    Kill,      // arg = the pid, which must be a child of the caller
 };
 
 // The header ScreenBlit's payload begins with, in u32s.
 constexpr usize SYS_BLIT_HEAD = 7;
+
+// The three descriptor words Sys::Spawn's payload begins with, in u32s.
+constexpr usize SYS_SPAWN_HEAD = 3;
+
+// Sys::Wait's "whichever finishes first". Zero is never a pid.
+constexpr u32 SYS_WAIT_ANY = 0;
+
+// The largest pid Wait and Kill can name, because the op word's argument is
+// 24 bits. Spawn refuses one above it rather than handing back a number that
+// would be truncated into somebody else's.
+constexpr u32 SYS_PID_MAX = 0xffffff;
+
+// How many children a process may have at once, and how deep a chain of them
+// may go. Every one is an instance with a memory cap of its own, so without a
+// bound the first fork bomb takes the page with it.
+constexpr usize SYS_CHILD_MAX = 8;
+constexpr u32 SYS_PROC_DEPTH  = 8;
 
 // The most a blit may carry, which is the largest grid there can be. Sys::Stage
 // is capped at the same number: a process asks the host for room before it

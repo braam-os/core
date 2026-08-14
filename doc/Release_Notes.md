@@ -7,6 +7,143 @@ of the two needs amending.
 
 ---
 
+## Processes that spawn processes
+
+Five operations — `chdir`, `pipe`, `spawn`, `wait`, `kill` — take the §4.3 table from
+twenty-seven to thirty-two, and every process gets a working directory of its own. `PROC_ABI` is
+3. The shell stays resident: it is not a process, and `cd` is still a builtin.
+
+**What forced it.** A program whose job is to run another program had nowhere to live. It could
+not be a builtin — the six that exist are the six no syscall could serve, and running a child
+inside the shell's own frame would be the applet tier coming back through the side door — and it
+could not be a binary, because a binary had no way to start one. So `timeout`, `watch` and
+`xargs` were not unwritten but unwritable, and the gap was in the ABI rather than in `src/cmd/`.
+The two that landed are the two the rule allows: every operation has a caller, and `timeout`
+covers `spawn`/`wait`/`kill` while `watch` is the one program that wants what its child *printed*
+rather than wanting it printed.
+
+**Why `chdir` came with them.** M5 recorded that a per-process cwd had nowhere to live "until
+§4.3's ABI gives a process a context, which is M8". M8 landed and the global stayed, which was
+defensible while nothing could spawn: with one shell running, a global and a per-process cwd are
+indistinguishable. A child changes that immediately — `ls` in a spawned process would walk the
+shell's directory rather than its parent's, and `Spawn` would be incoherent before it was useful.
+The two arrived together for that reason and not for tidiness.
+
+`chdir` is numbered 24, with the filesystem block, rather than 84 with the process family. It is
+the state `open`, `stat`, `list`, `mkdir` and `remove` resolve *against*, so it belongs with the
+operations it governs; a program that never spawns anything still moves it. Its caller is `pwd`,
+which stopped reading `/proc/cwd` — ProcFs generates a file at `open` and has no way to know who
+is reading, so that file can only ever be one answer, and the one answer is the shell's. This is
+the one place the "publish it under /proc instead" argument runs out, and it is worth naming: the
+question `pwd` asks is not "what is the cwd" but "what is *mine*".
+
+**The dispatcher resolves, and the VFS did not have to change.** The obvious move was a
+cwd-parametric twin of each of the six `vfs_*` entry points. None was needed. `path_resolve`
+already takes its cwd as an argument and already ignores it for an absolute path, so the five
+sites in `proc_syscall` resolve against `p.cwd` and hand the VFS something absolute, and
+`vfs_abs`'s second pass is a copy that changes nothing. One helper, five call sites, and
+`vfs_cwd`/`vfs_chdir` left alone as what they always were: the shell's. `test_path` now asserts
+the idempotence that whole simplification rests on.
+
+**A descriptor moves into a child rather than being duplicated.** POSIX dups and expects the
+parent to close its copy; forgetting is the classic bug where the reader never sees end of input,
+because a write end is still open in a process that will never write. Moving makes it
+unrepresentable, and that is the smaller half of the argument. The larger half is that a
+`Channel` has one receiver and *panics* on a second blocked sender — a tripwire M4 put there
+deliberately — so two processes holding one pipe end would be a user program reaching a kernel
+invariant. One end, one owner, by construction. Within a process the same rule is enforced by
+hand: a second concurrent read or write on an end is `Err(Perm)`, because a second sender panics
+and a second receiver is displaced *silently*, which is worse.
+
+### The ownership chain, and the bug it was hiding
+
+The subtle half of this change is not the wire. A child inheriting fds 0/1/2 gets a copy of its
+parent's `Stdio` — three function pointers and a ctx — and that ctx is a `Pipe` owned by the
+shell's refcounted `Job` block, released when the stage's frame is destroyed. A child is an
+independent scheduler job and cancellation is deferred, so it would still be unwinding a tick
+after the block was freed, deregistering a waiter from a `Channel` that no longer existed.
+
+Writing that down made it obvious that **the bug was already there**, with no children involved.
+`~End` cancels a process's syscall servers, but `sched_cancel` only pushes a frame onto the ready
+queue, and `sched_tick`'s drain has finished by the time the sweep destroys the stage. A server
+parked in `p.io.out.write()` therefore unwinds *after* `StageEnd` released the `Job`. The second
+one was smaller and in the same function: `serve` read `c->token` before the `Cancelled` check
+that would have told it `~Proc` had already freed the `Call`.
+
+The fix is one rule — *anything that can still touch a `Stdio` it did not create holds a
+reference for as long as that is true* — and three holders of it. `Stdio` carries a `hold`/`owner`
+pair naming the block behind its three streams (null is the console, which nobody owns). `Proc`
+retains it and releases it last in `~Proc`, after the handle table, because a redirected `File`
+handle closes through the VFS and lives in that same block. And every syscall server takes a
+counted `ProcRef` **by value as a coroutine parameter**.
+
+That last detail is the whole thing, so it is worth stating plainly: a coroutine's parameter
+copies are destroyed when the frame is, which is *after* the body's locals — and one of those
+locals is the awaitable that deregisters from the pipe in its destructor. The reference therefore
+outlives the deregistration by construction rather than by luck. `~End` stops deleting the
+record; it marks it dead, unlinks it so a late syscall is `NotFound`, and drops one reference.
+
+A parent-created pipe needs none of this. A `ProcPipe` is refcounted and reachable only through
+the handles holding its ends, so moving one into a child transfers the pointer and the child
+keeps the channel alive with no `Job` involved. The owner reference is for fds 0/1/2 alone.
+
+**The cost, stated.** Two words on `Stdio`, one `u32` on `Proc`, one refcount bump per syscall,
+and a shell `Job` that may outlive `run_line` for as long as a spawned descendant is alive —
+bounded, because a process's destructor cancels its children the way `run_line` cancels its
+stages. §3.6's structured concurrency, put back by hand a second time.
+
+### What this did not fix
+
+Two things were found while doing it and deliberately not folded in, because each is its own
+change and neither is made worse by this one.
+
+`KeyInput` and `InputClaim` restore a saved predecessor and so assume they are destroyed in the
+order they were made, and `ScreenEnter`'s `Err(Perm)` is per-process rather than global — so
+CLAUDE.md's "one process at a time may hold the screen" is not what the code enforces. Two
+claimants was already reachable; a parent and a child make it natural. The claim wants to be one
+pid on the kernel.
+
+And a `Body` or a `Socket` can still have its descriptor closed by one task while another is
+parked reading it. The pipe ends take a counted reference for the length of the call; the older
+kinds do not.
+
+### Smaller decisions
+
+- **All five are asynchronous**, which costs a park and a step even for a `wait` on a child that
+  has already exited. The synchronous half is closed at four permanently and for a reason that has
+  not weakened: tier 3 answers those four inside the process's own worker, and a fifth would fail
+  at tier 3 alone. The upside is that **no JavaScript changed at all** — `sys_async` is opaque to
+  `web/proc.js`, `web/procworker.js` and the fakes, so a new operation really is a number on each
+  side.
+- **The caps are eight children and eight levels.** Every child is an instance with a 16 MB cap,
+  so nothing else would stop the first fork bomb. Past either is `Err(NoMemory)` and deliberately
+  *not* `Err(Again)`, which `proc_syscall` retries for ever.
+- **`SYS_PID_MAX` is 0xffffff**, because `wait` and `kill` carry the pid in the op word's 24-bit
+  argument. `Spawn` refuses to hand back a pid above it: a truncated pid would name somebody
+  else's process rather than nothing. Pids are never reused, so the parent a finishing child
+  looks up by number cannot be a different one.
+- **A status is clamped to 0–255 when recorded.** `Sys::Exit` takes whatever the program passed,
+  and a negative status on this wire is an error code.
+- **`Wait` holds no pointer across its await.** A concurrent `Spawn` in another task of the same
+  process pushes onto the child `Vec` and moves every element, so the parked call re-finds its
+  child by pid on the way out as well as on the way in.
+- **`Spawn` resolves before it takes the descriptors.** A name that turns out not to be a command
+  leaves the parent's table as it found it, and there is no await between taking them and
+  spawning, which is what makes the take atomic against another task closing one.
+- **`tools/stamp.py` reads `PROC_ABI` out of `sysabi.h`** rather than restating it. The old copy
+  fell behind the moment the number moved, and it stamps the field whose whole job is to make a
+  stale binary a diagnostic — a wrong copy there is the one place the mechanism cannot report
+  itself.
+- **The test driver now loops while `tick` reports 0.** It stopped when the *host* had nothing
+  left to do, but a wake issued during the scheduler's end-of-tick sweep — a child reporting its
+  status to its parent, exactly — lands on the ready queue after the drain that would have run
+  it. `web/worker.js` has always answered a delay of 0 with another pump; the driver now does the
+  same, which is one fewer way for it to disagree with the browser.
+- **The boot archive is ~400 KB**, from ~379 KB: two more binaries, each carrying its own copy of
+  everything. §4.4's duplication, still arriving on schedule.
+
+---
+
 ## System_Calls.md, and what writing it found
 
 The kernel↔process mechanism was documented in three places that each held a piece of it:

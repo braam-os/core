@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Repository state
 
 **The plan is finished: M0–M9 are all done.** Since then the kernel applet has been retired:
-every program is a binary, `src/prog/` and the program registry are gone, and twenty-nine
+every program is a binary, `src/prog/` and the program registry are gone, and thirty-one
 programs live in `src/cmd/` beside six shell builtins in `src/user/builtin/`. `kernel.wasm` is
-about 169 KB against a 256 KiB budget and `bundle.bin` is 370 KB; the wasm ABI is still six
+about 181 KB against a 256 KiB budget and `bundle.bin` is 406 KB; the wasm ABI is still six
 imports and nine exports, and the three CTest cases pass. Work here is change to a working
 system, so the bar is that nothing above regresses, and Milestones.md is history rather than a
 to-do list.
@@ -57,7 +57,14 @@ favour of `/bin` and `/share` as two views of the one bundle, the §4.3 syscall 
 eight operations to twenty-seven to meet what the applets used to reach for directly, `src/ui/`
 turned into a library over
 a `Grid` that a process links, and the step protocol given a token so a process can have several
-calls outstanding at once. `PROC_ABI` is 2.
+calls outstanding at once.
+
+**Since then, a process can start a process.** The §4.3 table is thirty-two: `chdir` beside the
+filesystem operations, and `pipe`/`spawn`/`wait`/`kill` as a family at 80. Every process has a
+working directory of its own, inherited from its spawner; the shell stays resident and `cd` is
+still a builtin, moving the shell's. A descriptor named in a spawn is *moved* into the child, and
+a child is an ordinary scheduler job its parent's destructor cancels. `timeout` and `watch` are
+the callers. `PROC_ABI` is 3, and none of it touched the wasm ABI or any JavaScript.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -239,9 +246,21 @@ Further constraints that are easy to violate by habit:
   on `keys()`, which would displace the pump silently and lose `^C`. `^C` is never routed to a
   claimant. And since `CancelState::waiting` is one slot, no task can be parked on a pipe and on
   the keyboard at once — which is why `less` reads its input to the end before it paints.
+
+  The same rule is why a `Sys::Spawn` **moves** a descriptor into the child rather than
+  duplicating it: one end, one owner, so two blocked senders cannot be arranged from userland.
+  Within a process, a second concurrent use of a pipe end is `Err(Perm)` for the same reason —
+  `Channel::park_sender` panics, and a second receiver is displaced silently, which is worse.
 - **Every awaiter deregisters in its destructor.** `sched_unwait` from `~Awaiter` is what makes
   destroying a suspended frame safe rather than a dangling `Waiter *` in the wake table. An
   awaitable that parks and has no destructor is a use-after-free waiting to happen.
+- **Whoever may still touch a `Stdio` holds a reference to what is behind it.** The three streams
+  are function pointers into a block somebody else owns — the shell's `Job`, for a pipeline
+  stage — and cancellation is deferred, so a frame parked on one unwinds a tick after the stage
+  that built it is gone. `Stdio::hold`/`owner` names that block; `Proc` retains it and releases it
+  last in `~Proc`, and a syscall server takes a counted `ProcRef` **by value as a coroutine
+  parameter**. That is not style: a parameter copy is destroyed after the body's locals, and one
+  of those locals is the awaitable that deregisters from the pipe.
 - **`memory.grow` detaches the `ArrayBuffer`**, killing cached `Uint8Array` views. Route JS-side
   access through a `view()` accessor that re-derives after growth.
 - **A namespace-scope global must be trivially destructible.** A non-trivial destructor pulls in
@@ -257,8 +276,8 @@ Every program is a binary; there is no in-kernel program and no way to write one
 between the two isolated tiers from binary metadata, so userland does not notice (Concept.md §4):
 
 - **Shell builtin** — not a program and not a file: `cd`, `fg`, `jobs`, `kill`, `help`, `exit`,
-  in `src/user/builtin/`. Each is one no syscall could serve — the working directory is one
-  global, and the job table and the tty pump are the shell's. A builtin is an ordinary pipeline
+  in `src/user/builtin/`. Each is one no syscall could serve — the shell's own working directory
+  is what a typed command inherits, and the job table and the tty pump are the shell's. A builtin is an ordinary pipeline
   stage, so it pipes, redirects and takes `^C` with nothing added for it. The table is an
   explicit array, not a registrar: `braam_user` is an archive, and `--gc-sections` would drop an
   unreferenced registrar silently — which is the trap `src/prog/` needed an OBJECT library to
@@ -292,6 +311,11 @@ header so neither can drift alone. Three rules about it are load bearing:
   would let the second call overwrite the first, and one proxy performing them in turn would let
   a socket read that never completes starve the keystroke behind it. The resume token rides in
   the step request's `flags`.
+- **A process's children are cancelled by its destructor**, the way `run_line` cancels a
+  pipeline's stages: §3.6's structured concurrency, put back by hand one level further down. A
+  child is an ordinary scheduler job, so `^C`, `kill`, `jobs` and `/proc` reach it with nothing
+  written for them, and its status is recorded on the parent's record by a destructor that finds
+  the parent by pid — pids are never reused, so that lookup cannot land on a different process.
 - **A process ends when its root task returns**, whatever the others are doing — as a process
   ends when main does. The kernel then drops the instance and cancels the servers of anything
   the other tasks had outstanding.
@@ -332,9 +356,18 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   resume-side twin of `CancelToken` and would have to reach every awaitable.
 - **Resize drops rows from the top rather than re-wrapping logical lines**, which §3.5 had
   promised to M7.
-- **One global working directory.** A process is isolated in address space, memory and
-  descriptors, but not in the namespace it can name. It is the reason `cd` is a builtin and
-  `pwd` reads `/proc/cwd` rather than either being a syscall.
+- **No per-process root.** A process has its own working directory now, but once a path is
+  absolute `open` resolves it with the kernel's full authority. A per-process mount view is a
+  milestone's worth of work in the VFS. `cd` is still a builtin because what it moves is the
+  *shell's* cwd, which is what a typed command inherits; `/proc/cwd` is that one, and a process's
+  own is a line in its `/proc/<pid>`.
+- **The screen claim is not enforced the way it is documented.** `ScreenEnter`'s `Err(Perm)` is
+  per-process rather than global, and `KeyInput`/`InputClaim` restore a saved predecessor and so
+  assume LIFO destruction. Two claimants was already reachable; a parent and its child make it
+  natural. The claim wants to be one pid on the kernel, and is not one yet.
+- **A `Body` or a `Socket` can be closed under a parked read** by another task of the same
+  process. The pipe ends take a counted reference for the length of the call; the older kinds do
+  not.
 - **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection was
   considered and not built.
 - **`Pane` is a primitive, not a multiplexer.** Two jobs visible at once needs per-pane output
@@ -343,7 +376,7 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
 - **Every command costs an instantiation** — roughly a millisecond, plus reading the image out of
   `BundleFs`, where an applet cost nothing. The host caches the compiled `Module` by path, so the
   bytes still cross the VFS on every `exec` and only the compile is saved.
-- **The boot archive is ~379 KB**, against 47 KB when four programs were binaries. That is §4.4's
+- **The boot archive is ~406 KB**, against 47 KB when four programs were binaries. That is §4.4's
   duplication: every binary carries the allocator, the string types and the coroutine runtime.
   `bundle.bin` carries a size budget of its own, so the number stays visible.
 - **Two tier-3 fidelity losses (§4.3):** a binary that will not instantiate reads as a crash

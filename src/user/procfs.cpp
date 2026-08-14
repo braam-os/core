@@ -1,5 +1,6 @@
 #include "procfs.h"
 
+#include "exec.h"
 #include "fs/vfs.h"
 #include "job.h"
 #include "kernel/alloc.h"
@@ -31,9 +32,9 @@ bool generate(Str name, String &out)
         return out.append(b.str());
     }
 
-    // The one global working directory (Concept.md §5.1), which is how `pwd`
-    // reads it: a process is not isolated in the namespace it can name, so
-    // there is one answer and it is text.
+    // The *shell's* working directory (Concept.md §5.1) — what `cd` moves and
+    // what a command typed at the prompt inherits. A process's own is under its
+    // pid below, because this file cannot know who is reading it.
     if (name == "cwd") {
         b.put(vfs_cwd()).put('\n');
         return out.append(b.str());
@@ -93,6 +94,11 @@ bool generate(Str name, String &out)
                     : procs[i].waiting ? Str("waiting")
                                        : Str("ready");
         b.put("\nstate ").put(state);
+        // Only a program has one; a scheduler job that is not a process names
+        // things with the kernel's authority and no directory of its own.
+        Str cwd;
+        if (exec_proc_cwd(procs[i].pid, cwd))
+            b.put("\ncwd   ").put(cwd);
         b.put('\n');
         return out.append(b.str());
     }

@@ -133,9 +133,15 @@ const names = (list) => list.map((e) => `${e.module ? e.module + "." : ""}${e.na
 // itself — so the driver does the round trips, exactly as web/worker.js does
 // with a microtask. Returns the last delay tick reported, so every assertion
 // about the timer queue still reads the same.
+//
+// A delay of 0 means the kernel has ready work and wants running again at once,
+// which web/worker.js answers with setTimeout(pump, 0). Looping on it here is
+// the same rule: a wake issued while the scheduler sweeps its finished jobs —
+// a process reporting its exit status to its parent, say — lands on the ready
+// queue after the drain that would have run it.
 function run(now) {
     let delay = instance.exports.tick(now);
-    while (net.drain())
+    while (net.drain() || delay === 0)
         delay = instance.exports.tick(now);
     return delay;
 }
@@ -189,7 +195,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 2)
+        if (m[0] !== 0x6d617262 || m[1] !== 3)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         const tier = want_tier[basename(binary)] || 2;
         if (m[2] !== tier)
@@ -267,7 +273,7 @@ if (mode === "--kernel") {
     for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "edit",
                         "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
                         "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "pwd", "rm", "sleep",
-                        "tail", "touch", "true", "version", "wc"])
+                        "tail", "timeout", "touch", "true", "version", "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
 
@@ -370,10 +376,27 @@ if (mode === "--kernel") {
         fail(`echo 'a b' | wc printed ${JSON.stringify(rows(s))}, expected 1 2 4`);
 
     // M5: the shell starts in /home, which is where a redirection lands.
+    // `pwd` reads its own cwd through Sys::Chdir now, so this is also the proof
+    // that a top-level command inherits the shell's rather than starting at /.
     s = submit("clear", 1165);
     s = submit("pwd", 1166);
     if (!rows(s).includes("/home"))
         fail(`pwd printed ${JSON.stringify(rows(s))}, expected /home`);
+
+    // ...and it follows `cd`, since that is what a process inherits.
+    submit("cd /bin", 1167);
+    s = submit("clear", 1168);
+    s = submit("pwd", 1169);
+    if (!rows(s).includes("/bin"))
+        fail(`pwd after cd printed ${JSON.stringify(rows(s))}, expected /bin`);
+
+    // A relative path from a program resolves against that inherited cwd, not
+    // against the root: `ls .` in /bin has to find the binaries.
+    s = submit("clear", 1169.2);
+    s = submit("ls . | grep wc", 1169.4);
+    if (!rows(s).includes("wc"))
+        fail(`ls . in /bin printed ${JSON.stringify(rows(s))}, expected wc`);
+    submit("cd /home", 1169.6);
 
     // M5, first criterion, first half: a redirection that really writes, an
     // append that follows it, and a file argument that reads it back.
@@ -973,6 +996,143 @@ if (mode === "--kernel") {
     if (net.proc.live() !== 0)
         fail(`${net.proc.live()} instances outlived kill %1`);
     net.release();
+
+    // ---------------------------------------------------------- processes
+    //
+    // A program that starts a program. Everything below runs through Sys::Spawn,
+    // Sys::Wait and Sys::Kill, and none of it could be a builtin.
+    // The ordinary path: the child runs, writes to the stdio it shared with its
+    // parent, and its status is what `timeout` reports.
+    s = submit("clear", 9100);
+    s = submit("timeout 10000 echo child", 9101);
+    if (!rows(s).includes("child"))
+        fail(`a spawned child printed ${JSON.stringify(rows(s))}, expected child`);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`timeout over a fast child left ${row(s, s.cursor_y)}, expected a bare prompt`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived timeout`);
+
+    // The kill path: the child outlasts the delay, so the alarm task kills it
+    // and 124 says which of the two ended it. The clock has to be moved past
+    // the delay by hand, exactly as `sleep 30` above needs it.
+    s = submit("clear", 9110);
+    type("timeout 20 sleep 10000");
+    press(KEY.ENTER);
+    run(9111);
+    if (net.proc.live() !== 2)
+        fail(`timeout over a slow child left ${net.proc.live()} instances, expected 2`);
+    run(9200); // past the delay: the alarm fires here
+    s = descriptor(addr);
+    if (!rows(s).includes("[124] $"))
+        fail(`timeout did not fire: ${JSON.stringify(rows(s))}`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived a fired timeout`);
+
+    // The ownership chain, under the load it exists for: the child writes into
+    // a pipe the *shell's* Job owns, and that block has to outlive both the
+    // stage and every syscall server still parked on it.
+    s = submit("clear", 9115);
+    s = submit("timeout 10000 echo one two | wc", 9116);
+    if (!rows(s).some((line) => line.trim() === "1 2 8"))
+        fail(`a supervised child in a pipeline printed ${JSON.stringify(rows(s))}`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived a supervised pipeline`);
+
+    // A child's exit status reaches the parent, and the parent's reaches the
+    // shell — two Waits deep, since `false` is a process of its own.
+    s = submit("clear", 9120);
+    s = submit("timeout 10000 false", 9121);
+    if (!rows(s).includes("[1] $"))
+        fail(`a child's status did not reach the shell: ${JSON.stringify(rows(s))}`);
+
+    // A name that is not a command is the parent's diagnostic, not a crash.
+    s = submit("clear", 9130);
+    s = submit("timeout 10000 nosuchthing", 9131);
+    if (!rows(s).includes("[127] $"))
+        fail(`spawning a missing command gave ${JSON.stringify(rows(s))}, expected 127`);
+
+    // A builtin is the shell's own state and cannot be spawned into a process.
+    s = submit("clear", 9140);
+    s = submit("timeout 10000 cd", 9141);
+    if (!rows(s).some((line) => line.startsWith("timeout: cd:")))
+        fail(`spawning a builtin gave ${JSON.stringify(rows(s))}, expected a refusal`);
+
+    // The child inherits the parent's cwd, which the parent inherited from the
+    // shell — the whole chain, asserted in one line.
+    submit("cd /bin", 9150);
+    s = submit("clear", 9151);
+    s = submit("timeout 10000 pwd", 9152);
+    if (!rows(s).includes("/bin"))
+        fail(`a child's inherited cwd printed ${JSON.stringify(rows(s))}, expected /bin`);
+    submit("cd /home", 9153);
+
+    // A pipe between a process and its child. `watch` moves the write end into
+    // the child, so the child exiting is what closes the channel and gives the
+    // read its end of input — nothing else ends that loop.
+    s = submit("clear", 9145);
+    type("watch -n 100000 echo tick");
+    press(KEY.ENTER);
+    run(9146);
+    if (!rows(descriptor(addr)).includes("tick"))
+        fail(`watch printed ${JSON.stringify(rows(descriptor(addr)))}, expected tick`);
+    if (net.proc.live() !== 1)
+        fail(`${net.proc.live()} instances between rounds, expected watch alone`);
+    press("c".codePointAt(0), CTRL);
+    if (run(9147) !== -1)
+        fail("^C on watch left the scheduler with work to do");
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C on watch left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived watch`);
+
+    // A child at tier 3 gets the worker kill through its parent, which is the
+    // proof that a spawned process is an ordinary scheduler job.
+    //
+    // The pool has to be warm before the link is held: `spin` with no argument
+    // never comes back, and a tier-3 binary that cannot be given a worker runs
+    // at tier 2 instead (§4's fallback) — where the driver would step that loop
+    // on its own stack and never return.
+    s = submit("spin 1", 9155);
+    if (net.proc.pooled() !== 1)
+        fail(`the pool holds ${net.proc.pooled()} workers, expected one to hold spin`);
+
+    net.terminated.length = 0;
+    net.hold();
+    s = submit("clear", 9160);
+    type("timeout 20 spin");
+    press(KEY.ENTER);
+    run(9161);
+    if (net.proc.live() !== 2)
+        fail(`a supervised tier-3 child left ${net.proc.live()} instances, expected 2`);
+    run(9200); // past the delay, so the kill is the alarm's and not ^C's
+    net.release();
+    run(9201);
+    if (net.terminated.length !== 1)
+        fail(`timeout over a tier-3 child terminated ${net.terminated.length} workers, expected 1`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived a killed tier-3 child`);
+
+    // ^C reaches a whole chain: the shell cancels the stage, the stage's End
+    // cancels the child, and neither is left behind.
+    s = submit("spin 1", 9205); // warm the pool again, for the reason above
+    net.hold();
+    s = submit("clear", 9210);
+    type("timeout 100000 spin");
+    press(KEY.ENTER);
+    run(9211);
+    if (net.proc.live() !== 2)
+        fail(`a supervised child left ${net.proc.live()} instances, expected 2`);
+    press("c".codePointAt(0), CTRL);
+    if (run(9212) !== -1)
+        fail("^C on a spawned pair left the scheduler with work to do");
+    net.release();
+    run(9213);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived ^C on a parent and its child`);
+    s = submit("echo after", 9214);
+    if (!rows(s).includes("after"))
+        fail(`the shell did not survive ^C on a spawned pair: ${JSON.stringify(rows(s))}`);
 
     // Where a worker cannot be made, a binary asking for tier 3 runs at tier 2
     // — the same program, the same output, one isolation weaker (§4).

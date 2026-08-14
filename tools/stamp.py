@@ -15,13 +15,24 @@ dropped first, so stamping twice is stamping once.
 """
 
 import argparse
+import re
 import struct
 import sys
 from pathlib import Path
 
 MAGIC = 0x6D617262  # "bram"
-ABI = 2
 NAME = b"braam"
+
+SYSABI = Path(__file__).resolve().parent.parent / "src" / "kernel" / "sysabi.h"
+
+
+def abi() -> int:
+    """PROC_ABI, read rather than restated: the number is what makes a stale
+    binary a diagnostic, and a copy here that fell behind would stamp one."""
+    m = re.search(r"PROC_ABI\s*=\s*(\d+)", SYSABI.read_text())
+    if not m:
+        sys.exit(f"stamp.py: no PROC_ABI in {SYSABI}")
+    return int(m.group(1))
 
 
 def leb128(n: int) -> bytes:
@@ -67,7 +78,7 @@ def strip(data: bytes) -> bytes:
 
 
 def section(tier: int, flags: int, initial_pages: int, max_pages: int) -> bytes:
-    meta = struct.pack("<IIIIII", MAGIC, ABI, tier, flags, initial_pages, max_pages)
+    meta = struct.pack("<IIIIII", MAGIC, abi(), tier, flags, initial_pages, max_pages)
     body = leb128(len(NAME)) + NAME + meta
     return b"\0" + leb128(len(body)) + body
 

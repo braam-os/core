@@ -359,6 +359,18 @@ Task<i32> reaper(Job *j, JobEntry *e, usize want, u8 last)
 
 } // namespace
 
+// The stage's own reference is taken by run_line before it spawns; this is for
+// everyone who comes after it, and the Job outlives the shell frame by exactly
+// as long as one of them holds on.
+void job_hold(void *ctx, bool on)
+{
+    Job *j = static_cast<Job *>(ctx);
+    if (on)
+        j->refs++;
+    else
+        job_release(j);
+}
+
 usize jobs_count()
 {
     return table().jobs.size();
@@ -597,11 +609,18 @@ Task<i32> run_line(Str line, Stdio io)
         sio.out = f->out.fd >= 0 ? file_sink(f->out) : (out ? pipe_sink(*out) : io.out);
         sio.err = f->err.fd >= 0 ? file_sink(f->err) : io.err;
 
+        // Every one of those three points at something this Job owns — a pipe,
+        // a redirected file — or at the console, which nobody owns. Naming the
+        // owner uniformly means whoever holds the Stdio can hold the block up
+        // without asking which of the three it got.
+        sio.hold  = job_hold;
+        sio.owner = j;
+
         // The name the scheduler keeps is argv[0], a view into the job's word
         // store, which outlives every stage — a binary has no name of its own
         // in the kernel, and the path is not what /proc should show.
-        Executable *e = j->execs[i];
-        Args a        = j->pl.args(i);
+        Executable *e  = j->execs[i];
+        Args a         = j->pl.args(i);
         Task<i32> body = e->builtin ? e->builtin->run(a, sio) : exec_process(*e, a, sio);
 
         j->refs++; // the stage's own reference, dropped by StageEnd

@@ -189,9 +189,31 @@ struct Source {
 
 // Concept.md §3.6's stdio. `in` is empty rather than absent for a program the
 // shell gave no input: reading it reports EOF immediately.
+//
+// `hold` and `owner` are who the three of them point *at*. A Stream is a
+// function pointer and a ctx, and the ctx is a pipe some other block owns — the
+// shell's Job, for a pipeline stage. Anything that may still touch these
+// streams after the stage that built them is gone holds a reference for as long
+// as that is true. Null is the console, which nobody owns.
 struct Stdio {
+    using HoldFn = void (*)(void *ctx, bool on);
+
     Source in;
     Stream out, err;
+    HoldFn hold = nullptr;
+    void *owner = nullptr;
+
+    void retain() const
+    {
+        if (hold)
+            hold(owner, true);
+    }
+
+    void release() const
+    {
+        if (hold)
+            hold(owner, false);
+    }
 };
 
 // What the job runtime enters, whether it is a shell builtin or the proxy task

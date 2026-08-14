@@ -13,8 +13,8 @@ void Grid::touch(u32 x, u32 y, u32 w, u32 h)
         damage = Rect{ x, y, x1 - x, y1 - y };
         return;
     }
-    u32 dx1 = max(damage.x + damage.w, x1);
-    u32 dy1 = max(damage.y + damage.h, y1);
+    u32 dx1  = max(damage.x + damage.w, x1);
+    u32 dy1  = max(damage.y + damage.h, y1);
     damage.x = min(damage.x, x);
     damage.y = min(damage.y, y);
     damage.w = dx1 - damage.x;

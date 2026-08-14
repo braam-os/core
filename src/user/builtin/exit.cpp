@@ -1,5 +1,4 @@
 #include "decl.h"
-
 #include "kernel/text.h"
 #include "user/io.h"
 #include "user/shell.h"
