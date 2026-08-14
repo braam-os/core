@@ -13,7 +13,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Whole history: the version's third number is the commit count, and the
+      # default shallow clone would build every revision as revision 1.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -49,9 +53,10 @@ jobs:
             $(find src test -name '*.cpp' -o -name '*.h')
 
       # Same entry points a developer uses; the generator is Unix Makefiles,
-      # so nothing beyond cmake, make and node is needed.
+      # so nothing beyond cmake, make and node is needed. BRAAM_WERROR is on by
+      # default, so CI passes only the toolchain.
       - name: Build
-        run: make CMAKE_ARGS="-DBRAAM_LLVM=$WASI_SDK_DIR -DBRAAM_WERROR=ON"
+        run: make CMAKE_ARGS="-DBRAAM_LLVM=$WASI_SDK_DIR"
 
       - name: Test
         run: make run

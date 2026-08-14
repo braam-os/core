@@ -1,2 +1,4 @@
 build/
 .DS_Store
+# release.py imports version.py, so the tools directory gains a cache.
+__pycache__/

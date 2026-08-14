@@ -7,6 +7,65 @@ of the two needs amending.
 
 ---
 
+## Warnings are errors, everywhere
+
+`BRAAM_WERROR` defaults to ON and `-Wshadow` joins `-Wall -Wextra`. It had been CI-only since M0,
+which sounds like the same thing and is not: the developer who can still fix the code cheaply is
+the one who does not see the failure, and CI reports it to whoever pushes next. `rows_equal` in
+`test_shell.cpp` is the proof — the applet retirement deleted its only caller and left an unused
+function warning sitting in the tree, invisible to every local build.
+
+`-Wshadow` is the one warning worth adding on purpose here rather than trusting to review. A
+coroutine frame keeps every local alive across a suspension, so an inner `Result<usize> r` over an
+outer one is not the transient confusion it is in straight-line code: the two have different
+lifetimes and the wrong one can be the one that survives a `co_await`. The tree needed no changes
+to build clean under it, which is the argument for turning it on now rather than after it would
+cost something.
+
+The option stays, because a bisect through old commits with a newer clang meets warnings that did
+not exist when they were written, and `-DBRAAM_WERROR=OFF` is the difference between reading that
+history and not. It is for that, not for pushing past a warning of one's own.
+
+## 0.2 — A version that names the commit
+
+The version is `0.2.24-35f6924`: a base edited by hand, then a commit count and a short hash
+that nobody edits. The hand-edited patch number it replaces was wrong more often than it was
+right — it moved when someone remembered, so two archives could carry one name and a banner
+could describe a tree from a week earlier. A commit count is not a semantic patch level and does
+not pretend to be one; it is an identifier that cannot go stale, and the two numbers in front of
+it are still the ones that mean something.
+
+**The count orders builds and the hash identifies one.** Either alone is half an answer. A count
+says which of two builds is later and is ambiguous across branches, where two commits share a
+number; a hash names exactly one tree and says nothing about age, so `a3f19c2` against `35f6924`
+is unreadable without a repository to ask. Together they are sortable by eye and exact, which is
+what a bug report pasted out of the boot banner has to be. The hash is `%h` rather than the full
+40: it is being read aloud and typed, and git's abbreviation grows on its own when the short form
+stops being unique.
+
+**It is taken at build time, for the same reason the archive name was.** M7's `file(STRINGS)`
+argument was that editing a header does not re-run cmake; committing does not either, and it is
+the more frequent event. So `tools/version.py` runs from an always-run target and writes
+`build/gen/kernel/revision.h`, which `version.h` includes — the one generated file in the tree,
+and small enough that the alternative (a `-D` on the compile line, fixed at configure time) is
+just the stale case wearing a different hat. It rewrites the header only when the revision
+changes, so `make` after a rebuild relinks nothing; without that, every build would recompile
+three translation units and relink the kernel and a binary to no effect.
+
+**One implementation, two callers.** The kernel gets the string through the generated header and
+`release.py` imports `version.py`, rather than each parsing `version.h` with a regex of its own.
+That was the shape before, and it was already one regex too many: the archive is named after
+what the banner prints, so the two agreeing is the whole requirement.
+
+Three edges are answered rather than left to surprise someone. A tree with no repository — an
+unpacked release building itself — is revision `0` with no hash instead of a failure, because the
+base still identifies it and a build that dies for want of `git` is a worse trade. CI checks out
+with `fetch-depth: 0`: the default shallow clone answers 1 to `rev-list --count`, which is not an
+error anywhere, merely a wrong version on every artifact it builds. And a build from a dirty tree
+names the last commit, which is the honest limit of a hash rather than a bug — an uncommitted
+change has no identity to print, and a `-dirty` suffix would make every working build look
+suspect while saying nothing about what changed.
+
 ## One program model — retiring the kernel applet
 
 There is one kind of program now. `src/prog/` is gone, the program registry with it, and every

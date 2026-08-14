@@ -9,10 +9,12 @@ timestamped alike, so one tree gives one archive, byte for byte.
 """
 
 import argparse
-import re
 import sys
 import zipfile
 from pathlib import Path
+
+# version.py sits beside this script, which is sys.path[0] as it is run.
+from version import version_of
 
 # What a built site cannot be missing.
 REQUIRED = ("index.html", "kernel.wasm", "bundle.bin")
@@ -21,13 +23,6 @@ REQUIRED = ("index.html", "kernel.wasm", "bundle.bin")
 # builds. 1980-01-01 is the earliest a zip can express.
 STAMP = (1980, 1, 1, 0, 0, 0)
 MODE = 0o100644 << 16
-
-
-def version_of(path: Path):
-    m = re.search(r'BRAAM_VERSION\s*=\s*"([^"]+)"', path.read_text())
-    if not m:
-        sys.exit(f"release.py: no BRAAM_VERSION in {path}")
-    return m.group(1)
 
 
 def collect(root: Path, extras):

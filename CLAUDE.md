@@ -102,17 +102,31 @@ so editing a file under `web/` and running `make` refreshes what `make serve` se
 assembled by `copy_directory`, which never *deletes*: a file removed from `web/` lingers in an
 old build tree, and `make release` would pack it. Cut a release from a clean tree.
 
-`make release` runs `tools/release.py` over `build/web/`, naming the archive after
-`BRAAM_VERSION`, which the script reads out of `src/kernel/version.h` at run time rather than
-at configure time — a CMake `file(STRINGS)` would go stale, since editing a header does not
-re-run cmake. The archive is deterministic: sorted entries and one fixed timestamp, so the same
-tree gives the same bytes.
+The version reads `0.2.24-35f6924`: `BRAAM_VERSION_BASE` from `src/kernel/version.h` — edited by
+hand, `0.2` — then `git rev-list HEAD --count` and `git log -1 --format=%h`. `tools/version.py`
+is the one implementation: the always-run `revision` target has it write
+`build/gen/kernel/revision.h`, which `version.h` includes, and it rewrites that header only when
+the revision moves, so an ordinary build relinks nothing. Taking it at build time is the point —
+a commit does not re-run cmake, so a configure-time version would name a release after whatever
+the tree was when it was configured. Outside a repository (an unpacked release) the revision is
+`0` with no hash. CI checks out with `fetch-depth: 0`, since a shallow clone would call every
+revision 1.
+
+`make release` runs `tools/release.py` over `build/web/`, naming the archive after that same
+version — the script imports `version.py` rather than restating it, and both run at build time
+rather than at configure time. The archive is deterministic: sorted entries and one fixed
+timestamp, so the same tree gives the same bytes.
+
+The warning set is `-Wall -Wextra -Wshadow`, and `BRAAM_WERROR` is **ON by default** — so a
+warning is a build failure locally and in CI alike, and the tree is warning-clean. Fix the
+warning rather than reaching for `-DBRAAM_WERROR=OFF`, which exists for bisecting old commits.
 
 `CMAKE_ARGS` passes flags to the configure step, which only happens on a fresh tree or after
-`make clean` — so `make CMAKE_ARGS="-DBRAAM_WERROR=ON"` on an already-configured tree does
+`make clean` — so `make CMAKE_ARGS="-DBRAAM_WERROR=OFF"` on an already-configured tree does
 nothing. `-DBRAAM_LLVM=<path>` relocates the toolchain (`-DBRAAM_WASI_SDK=` is the former name,
-kept as an alias); `-DBRAAM_WERROR=ON` is what CI uses. The build produces `build/kernel.wasm`,
-a separate `build/test/tests.wasm`, and a ready-to-serve `build/web/`.
+kept as an alias); CI passes only that, since the warning settings are the defaults. The build
+produces `build/kernel.wasm`, a separate `build/test/tests.wasm`, and a ready-to-serve
+`build/web/`.
 
 Note that `make -jN` does **not** reach the compiler: make's jobserver descriptors do not
 survive the intervening cmake process, so the wrapper passes `-j $(JOBS)` explicitly. Change

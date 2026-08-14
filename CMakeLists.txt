@@ -12,7 +12,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "" FORCE)
 endif()
 
-option(BRAAM_WERROR "Treat warnings as errors" OFF)
+option(BRAAM_WERROR "Treat warnings as errors" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,7 +25,7 @@ add_library(braam_flags INTERFACE)
 target_compile_options(braam_flags INTERFACE
     -fno-exceptions -fno-rtti -fno-threadsafe-statics
     -ffunction-sections -fdata-sections
-    -Wall -Wextra)
+    -Wall -Wextra -Wshadow)
 if(BRAAM_WERROR)
     target_compile_options(braam_flags INTERFACE -Werror)
 endif()
@@ -39,9 +39,21 @@ target_link_options(braam_flags INTERFACE
     -Wl,--stack-first
     -Wl,-z,stack-size=${BRAAM_STACK_SIZE})
 
-target_include_directories(braam_flags INTERFACE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(braam_flags INTERFACE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/gen)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+# The version ends in the commit count and hash, so it must be taken at build
+# time: a commit does not re-run cmake, and a configure-time count would name a
+# release after whatever the tree was when it was configured. The target always
+# runs and the script rewrites the header only when the revision moves.
+set(BRAAM_VERSION_SOURCE ${CMAKE_SOURCE_DIR}/src/kernel/version.h)
+set(BRAAM_REVISION_HEADER ${CMAKE_BINARY_DIR}/gen/kernel/revision.h)
+add_custom_target(revision ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/version.py
+            --source ${BRAAM_VERSION_SOURCE} --header ${BRAAM_REVISION_HEADER}
+    BYPRODUCTS ${BRAAM_REVISION_HEADER}
+    VERBATIM)
 
 add_subdirectory(src/kernel)
 add_subdirectory(src/fs)
@@ -56,6 +68,13 @@ add_subdirectory(src/cmd)
 add_executable(kernel src/kernel/main.cpp)
 target_link_libraries(kernel PRIVATE
     braam_user braam_fs braam_svc braam_core braam_flags)
+
+# Every target with a translation unit that includes version.h, named one by
+# one: linking braam_core would order the two under Makefiles and not under
+# Ninja, which is free to compile a dependent's objects early.
+add_dependencies(kernel revision)
+add_dependencies(braam_user revision)
+add_dependencies(bin_version revision)
 
 # bundle/ is packed rather than copied: BundleFs reads one archive, so the
 # worker loads one file instead of fetching a tree file by file. The process
@@ -112,7 +131,7 @@ add_custom_target(serve
 add_custom_target(release
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/release.py
             ${CMAKE_BINARY_DIR}/web ${CMAKE_BINARY_DIR}
-            --version-file ${CMAKE_SOURCE_DIR}/src/kernel/version.h
+            --version-file ${BRAAM_VERSION_SOURCE}
             --extra ${CMAKE_SOURCE_DIR}/LICENSE
     DEPENDS web
     VERBATIM

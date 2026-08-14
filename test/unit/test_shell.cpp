@@ -56,15 +56,6 @@ bool has_row(Str want)
     return false;
 }
 
-usize rows_equal(Str want)
-{
-    usize n = 0;
-    for (u32 y = 0; y < screen().rows; y++)
-        if (row(y) == want)
-            n++;
-    return n;
-}
-
 bool some_row_starts(Str want)
 {
     for (u32 y = 0; y < screen().rows; y++)
