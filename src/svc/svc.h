@@ -27,7 +27,7 @@ enum class SvcOp : u32 {
     // Isolated processes (Concept.md §4.3), in src/svc/proc.h. They are here
     // rather than behind an import of their own because §2.2 asks for one
     // import per calling convention, and this is that convention exactly.
-    ProcSpawn, // aux = pid, arg = path, buf = the image, flags = the page counts
+    ProcSpawn, // aux = pid, arg = path, buf = the image, flags = the pages and the tier
     ProcStep,  // aux = pid, buf = the payload for _start or _resume
                //   -> result_lo = ProcStep
     ProcKill,  // req = pid; no record, no reply

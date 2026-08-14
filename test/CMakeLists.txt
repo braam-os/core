@@ -39,10 +39,11 @@ target_link_libraries(tests PRIVATE
 find_program(BRAAM_NODE node REQUIRED)
 
 # The bundle comes along so that the packer and BundleFs are checked against
-# each other, not each against its own reading of the format.
+# each other, not each against its own reading of the format. One binary per
+# tier follows, since the surface and the metadata are an ABI of their own.
 add_test(NAME smoke
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --kernel $<TARGET_FILE:kernel>
-            ${CMAKE_BINARY_DIR}/web/bundle.bin $<TARGET_FILE:bin_wc>)
+            ${CMAKE_BINARY_DIR}/web/bundle.bin $<TARGET_FILE:bin_wc> $<TARGET_FILE:bin_spin>)
 
 add_test(NAME unit
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --tests $<TARGET_FILE:tests>)

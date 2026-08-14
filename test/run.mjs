@@ -9,11 +9,13 @@ import { FakeStore, makeFakeImports } from "./fakefs.mjs";
 import { FakeNet, makeFakeSvc } from "./fakesvc.mjs";
 
 function usage() {
-    console.error("usage: run.mjs --kernel <wasm> [<bundle.bin> [<proc.wasm>]] | --tests <wasm>");
+    console.error("usage: run.mjs --kernel <wasm> [<bundle.bin> [<proc.wasm>...]] |" +
+                  " --tests <wasm>");
     process.exit(2);
 }
 
-const [mode, file, bundle, binary] = process.argv.slice(2);
+const [mode, file, bundle] = process.argv.slice(2);
+const binaries = process.argv.slice(5);
 if (!file || (mode !== "--kernel" && mode !== "--tests"))
     usage();
 
@@ -157,7 +159,11 @@ if (mode === "--kernel") {
     // rule applies to it: drift is a bug. Note what is *not* there — a process
     // imports nothing from the host, and `sys` has no pid argument, which is
     // the whole of "a process cannot issue a syscall on behalf of another".
-    if (binary) {
+    // A tier is the binary's claim and nothing more: the surface is the same
+    // one at either, which is what lets `exec` pick without userland noticing.
+    const want_tier = { "spin.wasm": 3 };
+
+    for (const binary of binaries) {
         const bin = new WebAssembly.Module(readFileSync(binary));
         const want_bin_imports = ["env.memory", "kernel.sys", "kernel.sys_async"];
         const want_bin_exports = ["_alloc", "_free", "_resume", "_start"];
@@ -179,8 +185,9 @@ if (mode === "--kernel") {
         const m = new Uint32Array(meta[0]);
         if (m[0] !== 0x6d617262 || m[1] !== 1)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
-        if (m[2] !== 2)
-            fail(`${basename(binary)} asks for tier ${m[2]}, expected 2`);
+        const tier = want_tier[basename(binary)] || 2;
+        if (m[2] !== tier)
+            fail(`${basename(binary)} asks for tier ${m[2]}, expected ${tier}`);
         if (m[5] !== 256)
             fail(`${basename(binary)} asks for ${m[5]} pages, expected 256`);
     }
@@ -777,9 +784,102 @@ if (mode === "--kernel") {
     addr = instance.exports.resize(100, 48);
     s = submit("clear", 9040);
     s = submit("help", 9041);
-    for (const name of ["echo", "hog", "sleep", "tail", "wc"])
+    for (const name of ["echo", "hog", "sleep", "spin", "tail", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}`);
+    addr = instance.exports.resize(60, 16);
+
+    // M9. `tail` is a tier-3 binary, so the pipeline above already ran a
+    // process in a worker of its own, feeding one in this one — that assertion
+    // is M8's, unedited, and this is the only line that notices.
+    if (!net.bound.length)
+        fail("nothing ran at tier 3");
+
+    // A tier-3 program end to end: getpid answered inside its own worker, a
+    // write relayed back through the kernel, an exit status carried on the
+    // step that reported it.
+    net.terminated.length = 0;
+    s = submit("clear", 9050);
+    s = submit("spin 1", 9051);
+    if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
+        fail(`a tier-3 program printed ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`spin 1 exited ${row(s, s.cursor_y)}, expected a bare prompt`);
+    if (net.terminated.length !== 0)
+        fail("a process that exited had its worker terminated rather than pooled");
+    if (net.proc.pooled() !== 1)
+        fail(`the pool holds ${net.proc.pooled()} workers, expected the one just freed`);
+
+    // M9, first criterion: a program that does not come back. The fake link
+    // leaves its step undelivered, which is all the kernel ever sees of a real
+    // loop — there is no reply, no timer, and nothing to cancel but the proxy.
+    net.hold();
+    type("spin");
+    press(KEY.ENTER);
+    if (run(9060) !== -1)
+        fail("a spinning process left the kernel with work to do");
+    if (net.proc.live() !== 1)
+        fail("spin did not reach an instance");
+
+    s = submit("clear", 9061); // the ^C below needs the process still running
+    press("c".codePointAt(0), CTRL);
+    if (run(9062) !== -1)
+        fail("^C left the process scheduled");
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C on a spinning process left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (net.terminated.length !== 1)
+        fail(`${net.terminated.length} workers were terminated, expected 1`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived their processes`);
+
+    // The reply the terminated worker will never send, arriving anyway: it is
+    // dropped, and the shell is none the wiser.
+    net.release();
+    run(9063);
+    s = submit("echo after", 9064);
+    if (!rows(s).includes("after"))
+        fail(`the shell did not survive a killed process: ${JSON.stringify(rows(s))}`);
+
+    // M9, second criterion: the shell keeps working while one is spinning.
+    // Backgrounded, since a foreground job is waited for at every tier — what
+    // is being asserted is that the kernel is free, not that the shell is rude.
+    net.hold();
+    s = submit("clear", 9070);
+    s = submit("spin &", 9071);
+    const announced = rows(s).find((line) => /^\[\d+\] \d+$/.test(line));
+    if (!announced)
+        fail(`a backgrounded process did not announce itself: ${JSON.stringify(rows(s))}`);
+    const job = announced.slice(1, announced.indexOf("]"));
+
+    s = submit("echo alive", 9072);
+    if (!rows(s).includes("alive"))
+        fail(`the shell stalled behind a spinning process: ${JSON.stringify(rows(s))}`);
+    s = submit("jobs", 9073);
+    if (!rows(s).some((line) => line.startsWith(`[${job}]`) && line.includes(" running spin")))
+        fail(`jobs did not list the spinning process: ${JSON.stringify(rows(s))}`);
+
+    net.terminated.length = 0;
+    s = submit(`kill %${job}`, 9074);
+    if (net.terminated.length !== 1)
+        fail(`kill terminated ${net.terminated.length} workers, expected 1`);
+    if (net.proc.live() !== 0)
+        fail(`${net.proc.live()} instances outlived kill %1`);
+    net.release();
+
+    // Where a worker cannot be made, a binary asking for tier 3 runs at tier 2
+    // — the same program, the same output, one isolation weaker (§4).
+    net.workers = false;
+    net.proc.shutdown();
+    net.bound.length = 0;
+    s = submit("clear", 9080);
+    s = submit("spin 1", 9081);
+    if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
+        fail(`the tier-2 fallback printed ${JSON.stringify(rows(s))}`);
+    if (net.bound.length !== 0)
+        fail("the fallback still bound a worker");
+    if (row(s, s.cursor_y) !== "$")
+        fail(`the fallback exited ${row(s, s.cursor_y)}, expected a bare prompt`);
 
     console.log(`smoke ok: ${got_imports.length} imports, ${got_exports.length} exports`);
 } else {

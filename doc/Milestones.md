@@ -237,5 +237,32 @@ See [Release_Notes.md](Release_Notes.md).
 The own-worker tier: worker pool, `worker.terminate()` as `SIGKILL`, module `postMessage`.
 Optionally, fuel injection as a metering alternative.
 
-- [ ] `while(1){}` in an untrusted program is killable without reloading the page
-- [ ] The shell stays responsive while such a program runs
+- [x] `while(1){}` in an untrusted program is killable without reloading the page
+- [x] The shell stays responsive while such a program runs
+
+**The §4.3 ABI did not change**, which was not the expectation: `sys` is synchronous and a worker
+boundary has no synchronous direction. It survives because none of its four operations has to
+reach the kernel — `getpid` is bound into the worker, `now` is a clock the step message carried,
+`exit` rides back on the step's reply, and `stage` is the host's call and is refused with the
+"no room" answer the runtime already handles. So `src/proc/` and the binaries are untouched and
+the same binary runs at either tier; the kernel diff is three edits, and 93 bytes.
+
+The kill needed no kernel code either — `^C` cancels the proxy, `~End` calls `proc_kill`, and the
+host terminates a worker instead of dropping a Map entry — except for one thing that would have
+leaked forever: the in-flight step has to be *failed* when the worker goes, because an abandoned
+request is only reaped by `wake()` on its token.
+
+Departures from the plan: the tier-3 protocol carries a syscall and an exit status on the step's
+reply rather than as messages of their own, so a step is one message each way. The worker pool
+doubles as the capability probe, which is what makes §4's "runs at tier 2 until there is a worker
+to put it in" a shipped fallback. `spin` is new and exists to be un-killable by cooperation;
+`tail` moved to tier 3, so M8's own `tail … | wc` assertion is now a tier-3 process feeding a
+tier-2 one. Two fidelity losses are recorded in §4.3: a binary that will not instantiate reads as
+a crash rather than as a refusal, and `Sys::Now` is relative. Fuel injection was not built — a
+kill is what the criteria asked for, and metering is still the only way to *bound* CPU.
+
+CI runs the whole protocol over a link with no thread in it (`test/fakeworker.mjs`), so what it
+cannot prove is preemption: a looping program is modelled as a step that never comes back, which
+is exactly what the kernel sees of one. The real thread was driven by hand against the shipping
+`web/procworker.js`, and `terminate()` returned in 2 ms with the instance mid-loop.
+See [Release_Notes.md](Release_Notes.md).

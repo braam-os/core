@@ -116,6 +116,12 @@ sequence to mis-parse. Rendering is roughly 300 lines of JavaScript.
 │  ┌──── (M8+) per-process WebAssembly.Instance ──────────┐ │
 │  │  own linear memory, own import closure, own limits   │ │
 │  └──────────────────────────────────────────────────────┘ │
+└───────────────────────────┬────────────────────────────────┘
+                            │  postMessage: bind, step
+┌───────────────────────────┴───────────────────────────────┐
+│         (M9+) Web Worker, one untrusted process            │
+│  the same instance, one thread further out, where          │
+│  terminate() does not need its cooperation                 │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,6 +129,9 @@ The kernel runs in a **Web Worker** and communicates by plain `postMessage`. Ren
 happens against an `OffscreenCanvas` transferred into the worker, so the main thread stays
 free. A runaway program hangs its own worker rather than the page, and a "reset kernel"
 button is just `worker.terminate()` followed by a reboot.
+
+Since M9 a runaway program does not even hang the kernel's worker: a tier-3 process is a worker
+of its own (§4.2), and the kernel is merely waiting for a reply it can stop waiting for.
 
 ### 3.1 Toolchain and language subset
 
@@ -393,10 +402,12 @@ and `exec` picks one from a flag in the binary's metadata — userland does not 
 | **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | normal programs |
 | **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | untrusted or long-running |
 
-**M0–M7 built only the first tier; M8 builds the second.** Tier 3 arrives in M9. `exec` reads
-the tier out of a binary's `braam` custom section (§4.3): a name that is in the program registry
-is an applet, a name in `/usr/bin` is a binary, and a binary asking for tier 3 runs at tier 2
-until there is a worker to put it in.
+**M0–M7 built only the first tier; M8 built the second and M9 the third.** `exec` reads the tier
+out of a binary's `braam` custom section (§4.3): a name that is in the program registry is an
+applet, a name in `/usr/bin` is a binary, and the binary says which of the other two it wants.
+A binary asking for tier 3 still runs at tier 2 where the host has no worker to put it in —
+which is now a *fallback* rather than a milestone, and covers a browser without nested workers
+and a `procworker.js` that will not load.
 
 One thing the tier does decide, and it is not userland's business either: the in-wasm unit tests
 can drive an applet and cannot drive a binary, because stepping an instance means returning to
@@ -427,10 +438,23 @@ isolation and *liveness* isolation are separate problems, and we should be expli
 which one we are solving. Two options:
 
 1. **One worker per untrusted process**, so `worker.terminate()` is our `SIGKILL`. This is
-   tier 3, and it is the plan.
+   tier 3, and it is what M9 built.
 2. **Fuel counters** — a binary-rewriting pass injecting `if (--fuel < 0) trap;` at loop
    headers and function entries. This is what standalone runtimes do for metering; it costs
    perhaps 5–15% throughput. Optional, and a self-contained project of its own.
+
+The first is enough for a *kill*, which is what an operating system owes its user, and it needs
+no metering: the kernel does not have to notice that a process is looping, because it is not
+waiting on anything it cannot abandon. A tier-3 step is one more asynchronous host request, so a
+process that never answers is a request that never lands — and `^C`, `kill` and a cancelled job
+already know what to do with one of those. The second option is still the only way to *bound*
+CPU rather than end it, and is still unbuilt.
+
+What tier 3 does not change is the shape: one worker per process, hired from a small pool and
+terminated rather than pooled when it is killed, and the process's own memory created inside it,
+so the kernel's page counts still decide the cap. A worker that has finished its process is
+clean — the instance is dropped and wasm cannot have touched the worker's own scope — so it goes
+back to the pool. One that was terminated is gone, which is the point.
 
 ### 4.3 The kernel↔process ABI
 
@@ -480,6 +504,35 @@ through a block the host takes from the process's own `_alloc`.
 A trap is how a process reports a fatal error: it has no host imports to log through, so the
 kernel turns a trap into an exit status and says the process crashed.
 
+**Tier 3 changes none of it.** The same binary runs at either tier; only the wiring behind its
+two imports differs, which is what lets `exec` pick a tier from metadata without userland — or
+the program — noticing. That is worth stating plainly, because a worker boundary has no
+synchronous direction at all (§1 rules out `SharedArrayBuffer`, and therefore `Atomics.wait`),
+and `sys` is by construction synchronous. The reason it survives is that every one of its four
+operations can be answered *without the kernel*:
+
+- `GetPid` is the pid the host bound into the worker when it made it — the same closure trick as
+  at tier 2, one thread further out, so a process still holds no function that names another.
+- `Now` is a clock reading the step message carried, plus the worker's own elapsed time. It is
+  monotonic and relative rather than bit-identical to the kernel's tick clock, which nothing in
+  `src/proc/` or `src/bin/` depends on.
+- `Exit` is buffered and rides back on the step's reply. A process only ever issues it
+  immediately before returning, so nothing observes the delay.
+- `Stage` is refused with 0, the "no room" answer the runtime already handles. It is the
+  *host's* syscall rather than a program's — but a hostile binary can still call it, so it needs
+  an answer rather than an assumption. Any unknown operation is likewise refused locally.
+
+So the asynchronous half is the only thing that crosses: `sys_async` is recorded beside the step
+result, and the kernel worker performs the `Sys::Stage` copy on the process's behalf exactly as
+the tier-2 closure does. One message down, one up, per step — the protocol between the two
+workers is the *host's*, not an ABI a binary can see, and it is written once in `web/proc.js`
+with both halves in the same file.
+
+Two things do lose fidelity, and neither is worth an ABI change. A tier-3 instance is created
+inside its worker, so a binary that will not instantiate reads as a crash (132) rather than as
+"will not instantiate" (126) — the module is still compiled in the kernel worker, so a malformed
+one is still refused before anything runs. And `Now`, as above, is relative.
+
 ### 4.4 Cost model
 
 Compilation is expensive; instantiation is cheap. Keep the `Module` in a cache keyed by path and
@@ -490,6 +543,16 @@ The compile is *not* streaming, as this section assumed it would be: a binary re
 as bytes the kernel read through the VFS, so it can come from OPFS or a copy in `/home` and not
 only from a URL beside `kernel.wasm`. `new WebAssembly.Module(bytes)` is synchronous, which is
 allowed in a worker at any size and keeps `exec` one round trip rather than two.
+
+The `postMessage` of a module is what M9 uses, and it is why the cache stays in the kernel worker
+rather than moving out with the instance: a binary is compiled once however many workers run it.
+Starting a worker is the other cost the tier adds, and the pool is the answer — a small free list
+of workers with no process in them, topped up with one at boot, which doubles as the capability
+probe. Where the constructor throws, tier 3 is off and §4's fallback applies.
+
+A tier-3 **syscall** is the cost that does not go away: two `postMessage` hops and two copies,
+order 0.1 ms, against a direct call and one copy at tier 2. That is the reason the tier is a
+claim a binary makes rather than a default — a syscall-bound program pays it per `SYS_CHUNK`.
 
 The real cost is **duplication**: with no dynamic linking, every binary embeds its own copy
 of the allocator, the string types, and the coroutine runtime. Keep the process-side runtime
@@ -752,6 +815,14 @@ The only wrinkle it needed was `dstPtr`. The kernel cannot be handed a buffer it
 allocate, so the host asks for one: `Sys::Stage` is a synchronous syscall the *host* issues on
 the process's behalf, returning the address of a staging block the process's kernel-side record
 owns. The reverse direction needs no such call, because `_alloc` is already in the ABI.
+
+**M9 added a third route, for the case where the two memories are not in the same agent.** A
+tier-3 process is a worker away, so the copy is in two halves with a `postMessage` between them:
+the process's worker `slice`s the payload out into a transferable `ArrayBuffer`, and the kernel's
+worker copies that into the staging block `Sys::Stage` gave it. The kernel half of that is the
+same two lines as above; only the source changed. `slice` rather than `subarray` is load-bearing
+on both sides — a view is detached by the next `memory.grow` (§8.4), and one that has been
+transferred cannot be re-derived.
 
 **If we want the kernel itself to do the copy, multi-memory is the tool.** A module may
 declare several memories, and `memory.copy` can move bytes between two of them. It is at

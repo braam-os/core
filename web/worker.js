@@ -30,6 +30,9 @@ const persistedKnown = new Promise((resolve) => {
 
 let store = null;
 
+// The isolated processes, so that a dispose can let go of their workers.
+let proc = null;
+
 // The same handshake for the embedder's options, which decide where the module
 // is fetched from and therefore cannot be applied after boot has started.
 let configured = null;
@@ -67,20 +70,23 @@ async function boot() {
         pump();
     });
 
-    // Isolated processes live here too: one worker, several instances
-    // (Concept.md §4). It is handed a getter rather than the exports, because
-    // the kernel does not exist yet.
+    // Isolated processes live here too (Concept.md §4): tier 2 as instances in
+    // this worker, tier 3 in workers of their own. It is handed a getter rather
+    // than the exports, because the kernel does not exist yet.
     //
-    // A step runs off the kernel's stack, which a microtask is enough for. Now
-    // and then it takes the slower route instead: a process in a tight syscall
-    // loop would otherwise chain microtasks without the worker ever painting.
+    // A tier-2 step runs off the kernel's stack, which a microtask is enough
+    // for. Now and then it takes the slower route instead: a process in a tight
+    // syscall loop would otherwise chain microtasks without the worker ever
+    // painting. A tier-3 step is a message and is already an event-loop turn.
     let steps = 0;
-    const proc = makeProc(mem, () => self.kernel, (drain) => {
+    proc = makeProc(mem, () => self.kernel, (drain) => {
         if (++steps % 64)
             queueMicrotask(drain);
         else
             setTimeout(drain, 0);
-    });
+    }, () => new Worker(new URL(options.procWorkerUrl || "./procworker.js", import.meta.url),
+                        { type: "module" }),
+       () => performance.now());
 
     // The same rule as storage: a reply must reach the kernel on a promise,
     // never inside the import call that asked for it.
@@ -176,6 +182,16 @@ self.onmessage = ({ data }) => {
         persisted(!!data.value);
         if (store)
             store.persisted = !!data.value;
+        return;
+    }
+
+    // The page is letting go, and answered before boot has finished as well as
+    // after: a tier-3 process is a worker of this one, and one spinning in a
+    // loop is a core burning until somebody says stop.
+    if (data.kind === "dispose") {
+        if (proc)
+            proc.shutdown();
+        self.close();
         return;
     }
 

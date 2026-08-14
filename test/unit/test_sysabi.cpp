@@ -63,6 +63,16 @@ void test_sysabi()
     CHECK(sys_op_code(sys_op(Sys::Write, 7)) == Sys::Write);
     CHECK_EQ(sys_op_fd(sys_op(Sys::Read)), 0);
 
+    // A spawn request's flags word: two page counts and the tier the host puts
+    // the instance at, in one word because `aux` is the pid and nothing else
+    // may ride on that.
+    ProcMeta pm{ PROC_MAGIC, PROC_ABI, 3, 0, 4, PROC_MAX_PAGES };
+    u32 flags = proc_pack(pm, Tier::Worker);
+    CHECK_EQ(proc_initial(flags), 4);
+    CHECK_EQ(proc_max(flags), PROC_MAX_PAGES);
+    CHECK(proc_tier(flags) == Tier::Worker);
+    CHECK(proc_tier(proc_pack(pm, Tier::Instance)) == Tier::Instance);
+
     // argv crosses an address space as one blob.
     Str argv[] = { "tail", "-n", "2", "" };
     usize n    = argv_size(argv, 4);

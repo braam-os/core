@@ -30,8 +30,13 @@ processes) is done: the §4.3 process ABI in `src/kernel/sysabi.h`, the process-
 `src/proc/`, binaries in `src/bin/` stamped by `tools/stamp.py` and packed into `/usr/bin`,
 `exec` and the syscall dispatcher in `src/user/exec.{h,cpp}`, the three process operations on
 `host_svc` in `src/svc/proc.{h,cpp}`, the per-pid import closure and module cache in
-`web/proc.js`, and two new exports — `sys` and `sys_async` — with no new import. Thirty applets
-and three binaries. M9 (liveness isolation) is next.
+`web/proc.js`, and two new exports — `sys` and `sys_async` — with no new import. M9 (liveness
+isolation) is done: the own-worker tier, with **no change to the §4.3 process ABI** — the same
+binary runs at tier 2 or tier 3, because each synchronous syscall is answerable inside the
+process's own worker. Both halves of the kernel↔process-worker protocol live in `web/proc.js`,
+`web/procworker.js` is its wiring, the worker pool doubles as the capability probe behind §4's
+tier-2 fallback, and `test/fakeworker.mjs` runs the whole protocol in CI over a link with no
+thread in it. Thirty applets and four binaries; `tail` and the new `spin` run at tier 3.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -199,7 +204,11 @@ notice (Concept.md §4):
   memory-cap isolation. A binary in `/usr/bin` carrying a `braam` custom section; `exec` reads
   the tier out of it.
 - **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
-  preempted.
+  preempted: `worker.terminate()`. A binary asks for it with `--tier 3` in `src/bin/CMakeLists.txt`,
+  and runs at tier 2 where the host cannot make a worker. The protocol is one message each way
+  per step, the tier rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and
+  a tier-3 syscall costs two `postMessage` hops rather than a call — which is why the tier is a
+  claim a binary makes rather than a default.
 
 The kernel↔process ABI is Concept.md §4.3 and `src/kernel/sysabi.h`, and both ends include the
 header so neither can drift alone. Three rules about it are load bearing:
@@ -211,14 +220,23 @@ header so neither can drift alone. Three rules about it are load bearing:
   `web/worker.js`, an explicit `drain()` in the test driver. Synchronous syscalls are the other
   direction and re-enter the kernel at top level, exactly as `key()` does.
 - **A process's pid is written into its import closure, not passed.** That is the whole of "a
-  process cannot issue a syscall on behalf of another PID": there is no argument for it.
+  process cannot issue a syscall on behalf of another PID": there is no argument for it. At
+  tier 3 the pid is bound into the worker at creation, and the step protocol's messages carry
+  *that* pid — never one read out of a message body, which would give it back.
 - **The in-wasm unit tests cannot run a tier-2 program.** Stepping one means returning to the
   host, and `run_tests()` does that once. Anything `test/unit/` drives must stay an applet —
   which is why `echo` and `sleep` are still in `src/prog/`.
+- **Both halves of the tier-3 step protocol live in `web/proc.js`** — `serveProc` is the
+  process's side and `makeProc` the host's, and `web/procworker.js` and `test/fakeworker.mjs`
+  are wiring around them. Two files describing one wire is how it drifts.
+- **A terminated worker's in-flight step must be failed by whoever killed it.** An abandoned
+  `HostReq` is reaped by `wake()` on its token and by nothing else, so a request nobody will ever
+  answer leaks the record and its payload for the life of the page.
 
 A tier-2 program is an ordinary scheduler job: a proxy task in `src/user/exec.cpp` steps the
 instance and performs its syscalls with its own `CancelToken`, so `^C`, `kill`, `jobs`, `/proc`
-and the stage epilogue need nothing added. Its destructor drops the instance.
+and the stage epilogue need nothing added. Its destructor drops the instance — or, at tier 3,
+terminates the worker holding it, which is the same sentence one thread further out.
 
 Since M4 a pipeline's stages are independent scheduler jobs rather than a child group the shell
 `co_await`s: `CancelState::waiting` is a single slot, so one job cannot have two children parked
@@ -243,7 +261,8 @@ quietly.
   `src/ui/` (the layout layer: `Pane`, `FullScreen`, `TextBuf`, `TextView`), `src/user/` (line
   editor, grammar, job runtime and job table, shell, `exec`, `BinFs`, `ProcFs`, boot),
   `src/prog/` (one self-registering file per applet), `src/proc/` (a process binary's runtime)
-  and `src/bin/` (one file per binary), `test/unit/`, `web/`, `bundle/`, `tools/`, `cmake/`.
+  and `src/bin/` (one file per binary), `test/unit/`, `web/` (`proc.js` both halves of the
+  process protocol, `procworker.js` a tier-3 process's worker), `bundle/`, `tools/`, `cmake/`.
   Concept.md §7. `braam_fs`,
   `braam_svc` and `braam_ui` are siblings above the kernel and below userland, and must not
   depend upwards or on each other: anything needing the program registry belongs in `src/user/`,

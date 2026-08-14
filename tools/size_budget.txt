@@ -6,5 +6,6 @@ kernel.wasm = 262144
 # coroutine runtime and the string types, which is the duplication Concept.md
 # §4.4 warns about — these numbers are how it stays visible.
 hog.wasm = 16384
+spin.wasm = 16384
 tail.wasm = 32768
 wc.wasm = 32768

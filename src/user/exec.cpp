@@ -372,14 +372,15 @@ Task<Result<void>> exec_resolve(Str name, Executable &out)
 
     ProcMeta meta = CO_TRY(exec_meta(image.value().str()));
 
-    // A binary claiming tier 1 is a contradiction — an applet has no binary —
-    // and tier 3 is M9's, so it runs here until there is a worker to run it in.
+    // A binary claiming tier 1 is a contradiction — an applet has no binary.
+    // Tier 3 is asked for here and granted by the host, which falls back to
+    // tier 2 where it cannot make a worker (Concept.md §4).
     if (meta.tier != u32(Tier::Instance) && meta.tier != u32(Tier::Worker))
         co_return Err(Error::Invalid);
     if (meta.max_pages == 0 || meta.max_pages > PROC_MAX_PAGES)
         meta.max_pages = PROC_MAX_PAGES;
 
-    out.tier  = Tier::Instance;
+    out.tier  = Tier(meta.tier);
     out.meta  = meta;
     out.path  = move(path);
     out.image = move(image.value());
@@ -411,7 +412,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io)
         bool spawned = false;
     } end{ p };
 
-    Task<Result<void>> t = proc_spawn(p->pid, exe.path.str(), move(exe.image), exe.meta);
+    Task<Result<void>> t = proc_spawn(p->pid, exe.path.str(), move(exe.image), exe.meta, exe.tier);
     if (!t)
         co_return 1;
     if (Result<void> r = co_await t; r.is_err()) {

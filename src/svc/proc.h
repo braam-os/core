@@ -9,10 +9,10 @@
 #include "svc.h"
 
 // Compiles `image` (cached by `path`) and instantiates it with a memory of
-// `meta.initial_pages`, capped at `meta.max_pages`. Takes the image, because
-// the record has to own it past a cancelled await and the caller has no more
-// use for it.
-Task<Result<void>> proc_spawn(u32 pid, Str path, String &&image, const ProcMeta &meta);
+// `meta.initial_pages`, capped at `meta.max_pages`, at `tier` — in this worker
+// or in one of its own. Takes the image, because the record has to own it past
+// a cancelled await and the caller has no more use for it.
+Task<Result<void>> proc_spawn(u32 pid, Str path, String &&image, const ProcMeta &meta, Tier tier);
 
 // One _start or _resume. `payload` is argv the first time and a syscall reply
 // afterwards; the answer is what the process did with it.

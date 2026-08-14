@@ -66,6 +66,7 @@ export function mount(options = {}) {
         options: {
             wasmUrl: options.wasmUrl,
             bundleUrl: options.bundleUrl,
+            procWorkerUrl: options.procWorkerUrl,
             palette: options.palette,
             fontFamily: options.fontFamily,
             fontSize: options.fontSize,
@@ -275,7 +276,15 @@ export function mount(options = {}) {
                 picker.parentNode.removeChild(picker);
             worker.onmessage = null;
             worker.onerror = null;
-            worker.terminate();
+
+            // Asked first, told after. A tier-3 process is a worker of the
+            // kernel's worker, and terminating a parent is specified to take
+            // its children with it — but a leaked one is a core spinning for
+            // the life of the page, which is too much to leave to a spec
+            // nobody here can check. The timeout is the backstop for a kernel
+            // worker too wedged to read the message.
+            worker.postMessage({ kind: "dispose" });
+            setTimeout(() => worker.terminate(), 0);
         },
     };
 }

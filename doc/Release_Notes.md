@@ -7,6 +7,142 @@ of the two needs amending.
 
 ---
 
+## M9 — Liveness isolation
+
+`while(1){}` is killable. A binary can ask to run in a Web Worker of its own, and a process
+there is ended by `worker.terminate()` rather than by asking it to stop — which is the one thing
+M8's isolation could not do, and the reason Concept.md §4.2 exists. 236,965 bytes of
+`kernel.wasm` against an unchanged 256 KiB budget: **93 bytes**, which is the headline.
+
+`Concept.md` is amended in five places — the §3 diagram, §4's tier prose, §4.2, §4.3 and §4.4,
+and Appendix B — and none of them is structural.
+
+### The ABI did not have to move, and that is the whole result
+
+The obvious reading of M8's §4.3 is that tier 3 breaks it. `sys` is synchronous and returns a
+value; a worker boundary has no synchronous direction, because §1 rules out `SharedArrayBuffer`
+and therefore `Atomics.wait`. The conclusion looks like "tier 3 needs a second ABI", which would
+have meant two process runtimes, two sets of binaries, and a tier that userland could see.
+
+It does not, because the question is not *how does a process reach the kernel synchronously from
+another thread* but *does it have to reach the kernel at all*. Taken one at a time, none of the
+four synchronous calls does. `GetPid` is a constant the host already binds into the closure.
+`Now` is a clock, and a clock reading shipped with the step plus the worker's own elapsed time is
+a better answer than a round trip would be. `Exit` is issued by `status_of` immediately before
+returning, so buffering it onto the step's reply is not merely equivalent, it is exact — tier 2
+keeps the last `Exit` before the step returned, and so does this. And `Stage` is not a program's
+syscall at all: it exists so the *host* can ask for somewhere to copy into, and at tier 3 the
+host doing the asking is the kernel's worker, which is on the kernel's thread.
+
+So `src/proc/`, `src/bin/` and the four exports are untouched, the same `wc.wasm` runs at either
+tier, and the smoke test asserts one binary per tier against the same import and export lists.
+The protocol between the two workers is the *host's*, not an ABI: both halves of it live in
+`web/proc.js`, and `web/procworker.js` is ten lines of wiring with no logic to drift.
+
+`Stage` is answered `0` rather than assumed unreachable. A tier-3 process is the untrusted one
+by definition, and "no program calls this" is not a property of a binary somebody else compiled.
+Zero is the "no room" answer `proc_syscall` already turns into `NoMemory`, so a binary that calls
+it gets a defined answer instead of a hole. Unknown operations are refused locally for the same
+reason, and never relayed.
+
+### One message per step, not four
+
+The first sketch had `sys_async` and `Sys::Exit` each post their own message, arguing that a
+message port is FIFO so the kernel would see them in the right order. It would have worked and
+it was still wrong: a suspension is *always* immediately preceded by exactly one `sys_async`
+(there is one outstanding call and `_resume` returns right after it), and `Exit` only ever
+precedes a return. Both therefore fit on the reply to the step that caused them. Two messages
+per syscall instead of four, no ordering argument to get right, and the kernel-side relay is
+straight-line code in one handler — the same two lines as M8's `sys_async` closure, with the
+source of the bytes changed.
+
+### The kill needed no kernel code
+
+M8 wrote that a tier-2 stage is a `Task<i32>` like any other and that the destructor is the whole
+kill path. That turned out to be literally true across a thread boundary as well: `^C` cancels
+the proxy, `~End` calls `proc_kill`, and the host terminates a worker instead of dropping a Map
+entry. `jobs`, `kill %n`, `/proc`, the tty pump and the stage epilogue needed nothing, and the
+kernel diff is three edits — one line of `exec.cpp`, a tier argument on `proc_spawn`, and four
+inline helpers in `sysabi.h`.
+
+The one thing that *did* need writing is easy to miss and would have leaked forever: **the
+in-flight step must be failed when the worker is terminated.** An abandoned `HostReq` is freed by
+`host_orphan_reply` from `wake()`, and `wake()` only happens if somebody answers — so a request
+whose worker no longer exists has to be answered by the code that killed it. At tier 2 this
+happens for free, because a queued step still runs and finds the pid gone.
+
+Two smaller cases of the same shape: a worker that errors marks its process crashed and drops its
+own link, so `kill` cannot hand a dead worker to the next process; and `kill` after a *normal*
+exit is not a kill at all, because `exec` kills every process it spawned, including the ones that
+exited. That is where the finished worker goes back to the pool.
+
+### The pool is the capability probe
+
+Nested workers are not universal, and Concept.md already promised that a binary asking for tier 3
+runs at tier 2 where there is no worker for it. Making that promise good needed somewhere to find
+out, and the pool was already going to exist: one worker is hired at boot with no process in it,
+so a `Worker` constructor that throws throws at boot rather than under the first `exec`, and the
+first `exec` of a tier-3 binary costs an instantiation rather than a worker start.
+
+The pool saves worker startup and not memory — a process's sixteen megabytes go when its instance
+does, not when its worker is recycled — which is worth saying because the opposite is the natural
+assumption. Idle workers are capped at two.
+
+### The tier on the wire, and the alternative not taken
+
+`HostRequest` had no room: `flags` held both page counts and `aux` is the pid, which is the one
+field that must not share. The tier went into the top nibble of `flags`, with `proc_pack` /
+`proc_initial` / `proc_max` / `proc_tier` in `sysabi.h` and a `static_assert` that the page
+counts still fit — the same shape as `sys_op`'s descriptor packing, and mirrored in `web/proc.js`
+as `abi.js` already mirrors `HostRequest`.
+
+The tempting alternative was to let the host read the tier out of the `braam` custom section
+itself, which it can: it holds the module, and `WebAssembly.Module.customSections` is right
+there. Two ends reading the same bytes provably cannot disagree. It was rejected because §4 says
+*`exec`* picks the tier, and a host that picked it independently would leave the kernel unable to
+say what it got — and the kernel is the thing that has to report `126` or `132`.
+
+### `spin`, and a loop the compiler was entitled to delete
+
+`spin` exists to be un-killable by cooperation, and the first version of it did not spin at all:
+an infinite loop with no side effects is not required to make progress, and clang deletes it. A
+`volatile` counter is the fix and the comment above it is the point of the file. `spin N` runs a
+bounded number of turns and exits, so the tier's ordinary path — instantiate, write, exit — has a
+program that exercises it without waiting for a kill.
+
+`tail` moved to tier 3 as well, which is how the protocol is *checked* rather than argued:
+`tail -n 1 /usr/share/motd | wc` is M8's own assertion, unedited, now a tier-3 process feeding a
+tier-2 one through a kernel pipe. It buys that coverage at 0.1 ms per 512-byte chunk, which is
+the tier's standing cost and the reason it is a claim a binary makes rather than a default.
+
+### What CI proves, and what it cannot
+
+`test/run.mjs` is a straight-line synchronous driver — microtasks do not run during it, which is
+why `step()` grew an explicit completion callback and lost its promise. A real thread does not
+fit that at all, so `test/fakeworker.mjs` wires the two halves of the protocol back to back over
+queues the driver pumps. The whole protocol runs in CI: bind, step, the syscall relay, the exit
+status, the pool, and the tier-2 fallback. Only the thread is fake.
+
+Which means the one thing CI cannot prove is preemption, since Node is as single-threaded as the
+kernel's worker. So a looping program is *modelled*: a held step is one that sits undelivered,
+which is precisely and completely what the kernel sees of a real one — no reply, no timer, and
+nothing to cancel but the proxy. The assertions on top of that are the two acceptance criteria:
+`^C` on a held process leaves `[130]`, terminates exactly one worker and leaves no instance
+behind; and with one held in the background, `echo` and `jobs` still answer.
+
+The real thread was checked by hand, driving the shipping `web/procworker.js` from
+`node:worker_threads`: `{k:"ready"}` on load, a bind and a step returning `SUSPENDED` with a
+write of `spin: pid 7, spinning` — which is `GetPid` answered inside the worker with the pid the
+host bound — then the reply that sends it into its loop, no answer, and `terminate()` returning
+in 2 ms. That is the criterion, once, outside a browser.
+
+`dispose()` gained a handshake for the same reason. It used to terminate the kernel's worker
+outright; a nested worker is specified to go with its parent, but a leaked one is a core spinning
+for the life of the page, which is too much to leave to a spec this code cannot check. The page
+now says so first and terminates on the next turn as the backstop.
+
+---
+
 ## M8 — Isolated processes
 
 A program can now be a binary of its own, in a `WebAssembly.Instance` of its own, with an

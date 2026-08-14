@@ -12,8 +12,8 @@
 #include "types.h"
 
 // Isolation tiers (Concept.md §4). Tier 1 is an in-kernel coroutine and never
-// appears in a binary; tier 3 is M9's, and a binary asking for it runs at
-// tier 2 until then.
+// appears in a binary; tier 3 is a worker of its own, and a binary asking for
+// it runs at tier 2 where the host cannot make one.
 enum class Tier : u8 {
     Applet = 1,
     Instance,
@@ -37,6 +37,32 @@ constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
 constexpr u32 PROC_ABI       = 1;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
+
+// What a spawn request's `flags` word carries: the two page counts the host
+// needs before it can make a Memory, and the tier that says where to put the
+// instance. One word because the record has no second scalar left — `aux` is
+// the pid, and nothing else may ride on that.
+static_assert(u32(PROC_MAX_PAGES) < 4096, "the page counts no longer fit beside the tier");
+
+inline u32 proc_pack(const ProcMeta &m, Tier tier)
+{
+    return m.initial_pages | (m.max_pages << 16) | (u32(tier) << 28);
+}
+
+inline u32 proc_initial(u32 flags)
+{
+    return flags & 0xffff;
+}
+
+inline u32 proc_max(u32 flags)
+{
+    return (flags >> 16) & 0xfff;
+}
+
+inline Tier proc_tier(u32 flags)
+{
+    return Tier(flags >> 28);
+}
 
 // Syscalls. The synchronous half answers inside the export and never parks;
 // the asynchronous half records a request the process's proxy task performs,
