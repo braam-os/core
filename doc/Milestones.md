@@ -9,6 +9,15 @@ only when a design decision changes. This file changes as work proceeds.
 the way it does. Reasoning belongs there, not here; notes below record only how a milestone
 departed from its plan.
 
+**M0–M9 are all done, and this file is now history.** Work since then is change to a working
+system rather than milestone work, and is recorded in Release_Notes.md. One such change reaches
+back through every milestone below and is worth knowing before reading them: the kernel applet
+tier has been retired, so where a milestone says a program was added to the registry, that
+program is now a binary in `src/cmd/`, and `/bin` holds the binaries rather than `BinFs` over the
+registry. **The acceptance criteria are unchanged and still hold** — they are about what the
+system does, not where the code lives — but the criteria that named `echo` and `sleep` as applets
+are now met by binaries, and by `test/run.mjs` rather than by the in-wasm suite.
+
 ---
 
 ## M0 — Nucleus — **done**

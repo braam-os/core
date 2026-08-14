@@ -58,49 +58,15 @@ Source file_source(FileIo &f);
 // FileIo alive for as long as it reads from the Source.
 Task<Result<void>> file_open_read(Str path, FileIo &out);
 
-// The files named on a command line, read end to end as one stream — which is
-// what `cat a b` and `wc a b` both mean. They are opened up front rather than
-// one at a time, because a Source's read is synchronous and cannot wait for an
-// open; a command line names few enough files for that to cost nothing.
-struct Inputs {
-    Inputs() = default;
-
-    Inputs(const Inputs &)            = delete;
-    Inputs &operator=(const Inputs &) = delete;
-
-    ~Inputs();
-
-    // Opens every path. On failure `failed` names the one that stopped it.
-    Task<Result<void>> open(Args paths, Str &failed);
-
-    bool any() const { return !files_.empty(); }
-
-    Source source();
-
-private:
-    static Result<String> read_next(void *ctx);
-
-    Vec<FileIo *> files_;
-    usize at_ = 0;
-};
-
-// The stream a program should read: the files it was given, or its own stdin
-// when it was given none.
-inline Source input_of(Inputs &in, Stdio &io)
-{
-    return in.any() ? in.source() : io.in;
-}
-
-// Opens a program's file arguments and reports the first failure on stderr,
-// under `who`. Returns 0, or the status the program should exit with. An empty
-// list is success and leaves the program reading its own stdin.
-Task<i32> open_inputs(Inputs &in, Args paths, Str who, Stdio io);
-
 // Writes all of `s`, retrying the stray wake that leaves a write unfinished.
 Task<Result<void>> write_all(Stream out, Str s);
 
 // Splits a source into lines. A line may span any number of chunks, and a
 // final fragment with no newline is a line.
+//
+// The kernel has no reader of its own left — every program is a binary — so
+// this is the reference the process-side twin in src/proc/io.h mirrors, and
+// test_io is what keeps it honest.
 struct LineReader {
     explicit LineReader(Source in) : in_(in) {}
 

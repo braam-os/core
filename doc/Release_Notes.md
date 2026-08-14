@@ -7,6 +7,88 @@ of the two needs amending.
 
 ---
 
+## One program model — retiring the kernel applet
+
+There is one kind of program now. `src/prog/` is gone, the program registry with it, and every
+command in the system is a wasm binary in an instance of its own with a 16 MB cap, a descriptor
+table nobody else can name, and a kill switch. `kernel.wasm` went from 236,965 bytes to 168,804
+— a quarter of it was userland — and the boot archive from 47 KB to 379 KB, which is the same
+code paying §4.4's duplication cost instead.
+
+**Why the applet had to go rather than stay as a fast path.** It was not a tier so much as a
+second program model. Two models meant two `Args` types, two `io.h`s, and `cat` written twice;
+they had already begun to diverge, since only one of them could be tested by the in-wasm suite
+and only one of them had a memory cap. The tiering argument in §4 is that isolation is chosen by
+trust — but nothing in `src/prog/` was more trusted than `wc`, it was merely older. Keeping a
+tier for "programs we happened to write first" is not a trust boundary, and it was the tier with
+nothing between a bug and the kernel's heap.
+
+**What the ABI cost.** M8 fixed the syscall table at eight and wrote down the rule that keeps it
+honest: every operation has a caller, because a syscall nothing calls is an ABI nothing tests.
+Moving thirty programs across meant the table had to grow to whatever they actually reached for,
+and it roughly tripled — the filesystem's `stat`, `list`, `mkdir` and `remove`; `sleep`; the host
+services behind `curl`, `date`, `df`, the clipboard and the file picker; and a terminal family
+for the two full-screen programs. Every one of them has a caller in `src/cmd/`, and three
+programs got none at all: `pwd` reads a new `/proc/cwd`, `mount` reformats `/proc/mounts`, and
+`version` is a constant. Publishing a line of text under `/proc` is cheaper than an operation and
+leaves `cat` and `grep` able to read it, which is the same argument M7 made for `/proc` existing.
+
+**Descriptors did most of the work.** The alternative to a `fetch` family, a socket family and a
+picker family was to make each of them hand back a descriptor, and let `read`, `write` and
+`close` serve all three. That saved perhaps six operations, but the reason to prefer it is what
+happens on `^C`: the process's handle table dies with the process, `JsRef`'s destructor releases
+the externref slot, and the socket closes with no code written for it. The M6 and M8 machinery
+composed exactly as designed, which is the strongest evidence either was designed right.
+
+**The terminal is where the cell grid paid off.** A full-screen program cannot be given the
+kernel's grid — it is in another address space — so it paints a grid of its own and blits the
+damaged rectangle across with one syscall, cursor included. `src/ui/` became a library over a
+`Grid` rather than over the kernel's screen, which is what let `Pane`, `TextBuf` and `TextView`
+link into `less` and `edit` unchanged; the kernel no longer links it at all. Had the terminal
+been a byte stream this would have been an escape-sequence dialect instead, and §2.3 would have
+been paying for itself in the wrong direction.
+
+**Both claims are the kernel's, not the program's.** `KeyClaim` and `ScreenEnter` create a
+`KeyInput` and a `FullScreen` on the process's kernel-side record, and `~Proc` destroys them. A
+killed tier-2 process runs no destructor of its own, so a program that had taken the screen and
+then met `^C` would otherwise leave the shell painting into a grid it does not own. The
+destructor that does it is the one M8 already wrote for dropping the instance.
+
+**The step protocol grew a token, which is the one place M9 was at risk.** `chat` listens to a
+socket while it reads what is typed, so a process needed two tasks, and two tasks need two
+syscalls outstanding. The process side was the easy half — a four-slot waiter table, and
+`_resume` already took a token. The kernel half was not: it had assumed one call per process, so
+`Sys::Stage` was one reused buffer (the second call would overwrite the first before its server
+read it) and the proxy task performed the syscall itself (a socket read that never completes
+would have starved the keystroke behind it). So the staging block moved into the call record, and
+the proxy split into a stepper and one server job per call. The host now hears which call a step
+answers rather than remembering the last, which is a small improvement in isolation on its own.
+
+`chat` gets something back for it: as a binary its descriptors live exactly as long as it does,
+so the receiver writes to stdout like anything else and `chat > log` finally captures what
+arrives. As an applet it had to write to the screen, because the pipe it would have used belonged
+to a job that might already be freed.
+
+**What the tests lost, and where it went.** The in-wasm suite cannot step an instance, so with no
+applets left it can drive only the six builtins. That is enough for more than it sounds — a
+builtin is an ordinary pipeline stage, so `jobs | help` is a real two-stage pipeline, and the
+boot-cost guard and the heap-leak check never needed a program at all. What it cannot do is watch
+a program run: the filters, `^C` reaching a running pipeline, typing into a job's stdin, `fg`
+waiting. All of that moved to `test/run.mjs`, where the stages are the real binaries. The suite
+is a worse unit test and a better system test than it was, and `test_prog.cpp` is gone.
+
+**Smaller decisions.** The op word's upper bits became the operation's argument rather than
+specifically a descriptor, so `open` carries its flags there and a payload is only ever the
+operation's data; `PROC_ABI` went to 2 for it, which is what the field is for. `Sys::Stage` is
+capped at 1 MiB — the largest blit there can be — because a hostile binary may call it directly
+and an uncapped `heap_alloc` is an interesting thing to hand one. `/bin` and `/share` are two
+re-rooted views of the one bundle, so `BinFs` is deleted and `/usr` with it: M5 promised that
+when programs became binaries the mount would change and nothing above it would, and that is how
+it read. `help` lists the builtins and then `/bin`, taking its usage lines from
+`/share/help`, because the kernel no longer holds a usage string for a program it has never run.
+And `src/bin/` became `src/cmd/`: it holds C++ sources, and "bin" only ever distinguished it from
+`src/prog/`.
+
 ## 0.1.0 — Packaging
 
 `make release` packs `build/web/` into `build/braam-<version>.zip`. The version string, which
@@ -70,7 +152,7 @@ keeps the last `Exit` before the step returned, and so does this. And `Stage` is
 syscall at all: it exists so the *host* can ask for somewhere to copy into, and at tier 3 the
 host doing the asking is the kernel's worker, which is on the kernel's thread.
 
-So `src/proc/`, `src/bin/` and the four exports are untouched, the same `wc.wasm` runs at either
+So `src/proc/`, `src/cmd/` and the four exports are untouched, the same `wc.wasm` runs at either
 tier, and the smoke test asserts one binary per tier against the same import and export lists.
 The protocol between the two workers is the *host's*, not an ABI: both halves of it live in
 `web/proc.js`, and `web/procworker.js` is ten lines of wiring with no logic to drift.
@@ -256,7 +338,7 @@ field and saved four bytes.
 module says only what it needs to start with, and the host supplies
 `new WebAssembly.Memory({initial, maximum: 256})`. A binary cannot ask for more by being
 compiled differently. That is what §4.1 means by an rlimit without cgroups, and `hog` is in
-`src/bin/` to demonstrate it: it takes 64 KiB at a time until the allocator says no, gives one
+`src/cmd/` to demonstrate it: it takes 64 KiB at a time until the allocator says no, gives one
 span back so it has somewhere to put the coroutine frames that report the answer, and asks
 `memory.grow` for one more page.
 
@@ -269,7 +351,7 @@ rather than fight the toolchain, `tools/stamp.py` appends the section after the 
 
 That turned out to be the better place anyway. The section carries `initial_pages`, which has
 to agree with `-Wl,--initial-memory`, and the stamper is invoked from the same four lines of
-`src/bin/CMakeLists.txt` that set the link flag. A number that must match another number should
+`src/cmd/CMakeLists.txt` that set the link flag. A number that must match another number should
 be written once.
 
 ### What the port of `wc` and `tail` proves, and what stopped `echo`
@@ -295,7 +377,7 @@ hand-maintained count of programs whose names contain an `e`.
 ### The syscall table, and the isolation this does not buy
 
 Eight calls: `exit`, `getpid`, `now` and `stage` synchronously, `write`, `read`, `open` and
-`close` asynchronously. Every one has a caller in `src/bin/`; a `sleep` syscall was written and
+`close` asynchronously. Every one has a caller in `src/cmd/`; a `sleep` syscall was written and
 then removed when `sleep` stayed an applet, because a syscall nothing calls is an ABI nothing
 tests.
 

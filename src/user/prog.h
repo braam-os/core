@@ -1,6 +1,5 @@
-// The program registry (Concept.md §3.6): a list of Task<i32>(Args, Stdio)
-// functions, populated at static-init time. One self-registering file per
-// program in src/prog/, so adding a command edits nothing else.
+// argv, stdio and the pipes behind them — what a command is entered with,
+// whichever side of the process boundary it runs on (Concept.md §3.6).
 #pragma once
 
 #include "kernel/coroutine.h"
@@ -195,31 +194,8 @@ struct Stdio {
     Stream out, err;
 };
 
+// What the job runtime enters, whether it is a shell builtin or the proxy task
+// standing in for a process. There is no registry behind it any more: a program
+// is a file in /bin, and the only things with this shape inside the kernel are
+// the six builtins (builtin.h).
 using ProgramFn = Task<i32> (*)(Args, Stdio);
-
-// A descriptor, linked into the registry at static-init time. Trivially
-// destructible, so it needs no __cxa_atexit.
-struct Program {
-    Str name;
-    Str usage; // one line, what `help` prints
-    ProgramFn run;
-    Program *next; // program_register links it in, sorted by name
-};
-
-void program_register(Program &p);
-
-const Program *program_find(Str name);
-
-// Iteration, in name order: for (const Program *p = program_first(); p; p = p->next)
-const Program *program_first();
-
-struct ProgramRegistrar {
-    explicit ProgramRegistrar(Program &p) { program_register(p); }
-};
-
-// Defines a program and registers it. The body sees `args` and `io`.
-#define BRAAM_PROGRAM(fn, prog_name, prog_usage)                                                \
-    static Task<i32> fn(Args, Stdio);                                                           \
-    static Program fn##_desc{ prog_name, prog_usage, fn, nullptr };                             \
-    [[maybe_unused]] __attribute__((used)) static const ProgramRegistrar fn##_reg{ fn##_desc }; \
-    static Task<i32> fn([[maybe_unused]] Args args, [[maybe_unused]] Stdio io)

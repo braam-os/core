@@ -162,8 +162,10 @@ export function makeFakeSvc(mem, net, kernel) {
                 peer.queue.push(msg);
                 settle(peer);
             }
-            // With no peer, a socket hears itself: one tab is still a chat.
-            if (net.sockets.length === 1) {
+            // With no peer, a socket hears itself: one tab is still a chat. A
+            // closed socket is not a peer — counting it would leave a second
+            // conversation talking to nobody once the first had hung up.
+            if (net.sockets.filter((s) => !s.closed).length === 1) {
                 ref.queue.push(msg);
                 settle(ref);
             }

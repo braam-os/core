@@ -6,6 +6,15 @@
 #include "user/job.h"
 #include "user/shell.h"
 
+// The job table, as far as it can be driven without a program that keeps
+// running. Filing a job means backgrounding a pipeline, and every program is a
+// binary now: stepping one means returning to the host, and run_tests() does
+// that once. So a job that stays running — `jobs` listing it, `fg` waiting for
+// it, `^C` reaching what `fg` adopted, `kill %n` cancelling its stages — is
+// asserted in run.mjs, against real programs. What is left here is the table's
+// own behaviour: an empty table, the answers it gives for an id that is not in
+// it, and a job that is filed and finishes within the tick that filed it.
+
 namespace {
 
 void press(u32 code, u32 mods = 0)
@@ -14,8 +23,6 @@ void press(u32 code, u32 mods = 0)
     sched_tick(0);
 }
 
-// Types a line and submits it. The clock does not move, so a `sleep` started
-// here is still running afterwards — which is the point of the cases below.
 void submit(Str s)
 {
     for (usize i = 0; i < s.size(); i++)
@@ -56,88 +63,66 @@ void boot(u32 cols, u32 rows)
     sched_tick(0);
 }
 
+i32 waited;
+
+Task<i32> wait_for(u32 id)
+{
+    waited                = -2;
+    Task<Result<i32>> t   = jobs_wait(id);
+    Result<i32> r         = t ? co_await t : Err(Error::NoMemory);
+    waited                = r.is_ok() ? r.value() : -i32(r.error());
+    co_return 0;
+}
+
 } // namespace
 
 void test_jobs()
 {
     test_begin("jobs");
 
-    // M7, second criterion. `&` starts the pipeline and comes straight back to
-    // a prompt, and the job is in the table with its stages still running.
+    // An empty table answers, rather than being asked not to be empty.
     boot(60, 12);
     CHECK_EQ(jobs_count(), 0);
-    submit("sleep 5000 &");
-    CHECK_EQ(jobs_count(), 1);
+    CHECK_EQ(jobs_current(), 0);
 
     JobInfo j;
+    CHECK(!jobs_at(0, j));
+    CHECK(!jobs_find(1, j));
+    CHECK(!jobs_kill(1));
+    CHECK(jobs_input(1) == nullptr);
+
+    // An unknown id is Err(Invalid) rather than a wait that never ends.
+    sched_spawn(wait_for(9));
+    sched_tick(0);
+    CHECK_EQ(waited, -i32(Error::Invalid));
+
+    // M7, second criterion, as far as a builtin reaches: `&` files the job,
+    // comes straight back to a prompt, and announces it.
+    boot(60, 12);
+    submit("jobs &");
+    CHECK_EQ(jobs_count(), 1);
     CHECK(jobs_at(0, j));
     CHECK_EQ(j.id, 1);
-    CHECK(j.running);
-    CHECK(j.cmd == "sleep 5000 &");
+    CHECK(j.cmd == "jobs &");
     CHECK(j.pid != 0);
-    CHECK(sched_alive(j.pid));
     CHECK_EQ(jobs_current(), 1);
     CHECK(some_row_starts("[1] "));
 
-    // The shell is at a prompt while it runs, and `jobs` lists it from there.
-    submit("jobs");
-    CHECK(some_row_starts("[1]+ running sleep 5000 &"));
-
-    // A background job has no keyboard: it is not the pump's job, and its
-    // stdin is at end of input from the start.
-    submit("cat &");
-    CHECK_EQ(jobs_count(), 2);
+    // It finishes within the tick that ran it, so the next prompt announces it
+    // and the entry is dropped — which is the half of the job table that needs
+    // no program still running.
     sched_tick(0);
-    CHECK(jobs_at(1, j));
-    CHECK_EQ(j.id, 2);
-
-    // Its finish is announced at the next prompt, and the entry is dropped.
-    submit("");
-    CHECK(some_row_starts("[2] done"));
-    CHECK_EQ(jobs_count(), 1);
-
-    // The timer fires; the sleeper finishes and is reported in its turn.
-    sched_tick(6000);
     submit("");
     CHECK(some_row_starts("[1] done"));
     CHECK_EQ(jobs_count(), 0);
+    CHECK_EQ(jobs_current(), 0);
 
-    // kill %n cancels every stage of a job. Cancellation is cooperative: the
-    // sleeper unwinds at its await point, which is this same tick.
+    // fg and kill both refuse an id that is not there, and say so.
     boot(60, 12);
-    submit("sleep 5000 &");
-    CHECK(jobs_at(0, j));
-    u32 sleeper = j.pid;
-    CHECK(sched_alive(sleeper));
-    submit("kill %1");
-    CHECK(!sched_alive(sleeper));
-    CHECK_EQ(jobs_count(), 0); // reported at the prompt and dropped
-    submit("kill %9");
-    CHECK(some_row_starts("kill: no such job"));
-
-    // fg waits for a job in the foreground: the shell does not come back to a
-    // prompt until the sleeper is done.
-    boot(60, 12);
-    submit("sleep 100 &");
-    submit("fg");
-    CHECK_EQ(jobs_count(), 1); // still there: fg has not finished waiting
-    sched_tick(500);
-    CHECK_EQ(jobs_count(), 0); // reaped by fg, not announced at the prompt
-    CHECK(!some_row_starts("[1] done"));
-
-    // ^C during fg reaches the job it adopted, through fg's own destructor:
-    // the pump cancels the pipeline fg is a stage of, and fg passes it on.
-    boot(60, 12);
-    submit("sleep 5000 &");
-    CHECK(jobs_at(0, j));
-    sleeper = j.pid;
-    submit("fg %1");
-    CHECK(sched_alive(sleeper)); // fg is waiting; the job is still running
-    press('c', MOD_CTRL);
-    CHECK(!sched_alive(sleeper));
-
     submit("fg %9");
     CHECK(some_row_starts("fg: no such job"));
+    submit("kill %9");
+    CHECK(some_row_starts("kill: no such job"));
 
     jobs_reset();
     sched_reset();

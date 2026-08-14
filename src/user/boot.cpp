@@ -1,6 +1,5 @@
 #include "boot.h"
 
-#include "binfs.h"
 #include "fs/bundlefs.h"
 #include "fs/hostfs.h"
 #include "fs/memfs.h"
@@ -19,24 +18,42 @@ void say(Str s)
     screen_newline();
 }
 
-// Mounts the archive the host loaded beside kernel.wasm, if there is one. A
-// missing bundle is ordinary — the page may be served without it.
+// Mounts the archive the host loaded beside kernel.wasm as /bin and /share —
+// two views of the one bundle, since the programs and the files that ship
+// beside them are one download and two directories.
+//
+// Without it there is no /bin at all, and the shell has only its builtins. That
+// was ordinary when programs were in-kernel; now it is worth saying out loud.
 Task<void> mount_bundle()
 {
     Task<Result<String>> t = storage_bundle();
     if (!t)
         co_return;
     Result<String> r = co_await t;
-    if (r.is_err())
+    if (r.is_err()) {
+        say("braam: no boot bundle — /bin is empty and only builtins will run");
         co_return;
+    }
 
     Result<BundleFs *> b = bundlefs_create(move(r.value()));
     if (b.is_err()) {
         say("braam: the boot bundle is malformed");
         co_return;
     }
-    if (vfs_mount("/usr", b.value()).is_err())
-        say("braam: /usr would not mount");
+
+    Result<BundleFs *> bin   = bundlefs_at(*b.value(), "bin");
+    Result<BundleFs *> share = bundlefs_at(*b.value(), "share");
+
+    // The whole archive is not itself something to mount: the two views hold
+    // the bytes between them, so the object that parsed them can go.
+    heap_delete(b.value());
+
+    // vfs_mount refuses a null and takes ownership of anything else, so a
+    // failed view and a failed mount are the same line.
+    if (vfs_mount("/bin", bin.is_ok() ? bin.value() : nullptr).is_err())
+        say("braam: /bin would not mount");
+    if (vfs_mount("/share", share.is_ok() ? share.value() : nullptr).is_err())
+        say("braam: /share would not mount");
 }
 
 // Concept.md §5.2: OPFS is absent in Safari private browsing, and the sync
@@ -94,10 +111,6 @@ Task<void> boot_filesystem()
         co_await t;
     if (Task<Result<void>> t = vfs_mkdir("/mnt/import"))
         co_await t;
-
-    if (Fs *bin = binfs_create())
-        if (vfs_mount("/bin", bin).is_err())
-            say("braam: /bin would not mount");
 
     // The scheduler, the heap and the job table, readable with cat and grep.
     if (Fs *proc = procfs_create())

@@ -57,11 +57,14 @@ void test_sysabi()
 {
     test_begin("sysabi");
 
-    // The op word carries the descriptor, so a write hands over its bytes and
-    // nothing else (Concept.md §4.3).
+    // The op word carries the operation's argument, so a write hands over its
+    // bytes and nothing else, and an open hands over its path (Concept.md §4.3).
     CHECK_EQ(sys_op_fd(sys_op(Sys::Write, 7)), 7);
     CHECK(sys_op_code(sys_op(Sys::Write, 7)) == Sys::Write);
     CHECK_EQ(sys_op_fd(sys_op(Sys::Read)), 0);
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Open, SYS_O_READ | SYS_O_CREATE)),
+             SYS_O_READ | SYS_O_CREATE);
+    CHECK(sys_op_code(sys_op(Sys::Open, SYS_O_TRUNC)) == Sys::Open);
 
     // A spawn request's flags word: two page counts and the tier the host puts
     // the instance at, in one word because `aux` is the pid and nothing else

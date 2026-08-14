@@ -65,6 +65,21 @@ struct SysReply {
     Str data;
 };
 
+// How many tasks a process may have at once, and therefore how many syscalls
+// it may have outstanding: one each. Four, because the one program that needs
+// more than the root task needs exactly one more, and a table this small costs
+// bytes rather than a design.
+constexpr usize PROC_TASKS = 4;
+
+// A second task, for a program that must await two things at once — `chat`
+// listens to a socket while it reads what is typed. The task starts at once and
+// runs until its first suspension. Reports 0 when the table is full.
+//
+// The process ends when *the root task* returns, whatever the others are doing,
+// exactly as a process ends when main does: the kernel then drops the instance
+// and fails any request the others had outstanding.
+u32 proc_spawn(Task<i32> t);
+
 // Hands a payload to the kernel and suspends the task until _resume brings the
 // answer back. Used as an awaiter directly, so the payload is still on the
 // caller's stack when the host copies it out.
@@ -83,6 +98,7 @@ struct SysCall {
 private:
     u32 op_;
     Str payload_;
+    usize slot_ = 0; // which waiter await_suspend took; await_resume reads it
 };
 
 inline SysCall sys_call(Sys op, u32 fd, Str payload = Str())

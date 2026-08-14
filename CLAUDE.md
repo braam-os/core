@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**The plan is finished: M0–M9 are all done, and this is the first complete version.** Thirty
-applets in `src/prog/` and four binaries in `src/bin/`; `kernel.wasm` is 236,965 bytes against
-a 256 KiB budget; the ABI is six imports and nine exports and the three CTest cases pass. Work
-from here is no longer milestone work — it is change to a working system, so the bar is that
-nothing above regresses, and Milestones.md is history rather than a to-do list.
+**The plan is finished: M0–M9 are all done.** Since then the kernel applet has been retired:
+every program is a binary, `src/prog/` and the program registry are gone, and twenty-nine
+programs live in `src/cmd/` beside six shell builtins in `src/user/builtin/`. `kernel.wasm` is
+168,804 bytes against a 256 KiB budget and `bundle.bin` is 379 KB; the wasm ABI is still six
+imports and nine exports, and the three CTest cases pass. Work here is change to a working
+system, so the bar is that nothing above regresses, and Milestones.md is history rather than a
+to-do list.
 
 What each milestone left behind, since the layout still reflects it:
 
@@ -18,24 +20,25 @@ is done: `Task<T>`, the ready and timer queues, wake tokens, `tick()`/`wake()`, 
 `CancelToken`, `HashMap` and `String`. M2 (screen and keys) is done: the cell grid and its
 damage rectangle, `Channel<T>`, `Key`, the `key()`/`resize()` exports, the `host_present`
 import, and the canvas renderer in `web/render.js`. M3 (userland shell) is done: the
-`LineEditor` coroutine, the tokeniser, the self-registering program registry, `Args`/`Stdio`,
-exit codes, and seven programs in `src/prog/`. M4 (streams) is done: `co_await send()` with
+`LineEditor` coroutine, the tokeniser, a self-registering program registry (since removed),
+`Args`/`Stdio`, exit codes, and seven programs. M4 (streams) is done: `co_await send()` with
 `close`/`hangup`, pipes as `Channel<String>`, `Stream`/`Source` behind `Stdio`, the full shell
 grammar in `src/user/parse.{h,cpp}`, the job runtime and tty pump in `src/user/job.{h,cpp}`,
 and thirteen programs. M5 (filesystem) is done: `src/fs/` with the `Fs` interface, path
 resolution, the mount and open-file tables, `MemFs`, `BundleFs`, `OpfsFs` and the `host_fs`/
-`host_fs_sync` ABI; `BinFs` and the boot mounting in `src/user/`; working redirection; and
+`host_fs_sync` ABI; `BinFs` (since removed) and the boot mounting in `src/user/`; redirection; and
 twenty programs. M6 (host services) is done: the `externref` table and `JsRef` in
 `src/kernel/jsref.h`, the generic request record in `src/kernel/hostcall.h` shared by both
 asynchronous imports, the `host_svc` ABI and `src/svc/` (fetch, WebSocket, clipboard, file
 transfer, wall clock), the `ref` export, the page-side relay in `web/`, `tools/wsd.mjs`, and
 twenty-seven programs. M7 (depth) is done: the layout layer in `src/ui/` (`Pane`, `FullScreen`,
-`TextBuf`, `TextView`) with `screen_touch` under it, the keyboard claims in `src/user/tty.h`
+`TextBuf`, `TextView`) — `FullScreen` has since moved to `src/user/tty.h` and the rest onto a
+`Grid` — the keyboard claims in `src/user/tty.h`
 routed by the tty pump, `less` and `edit`, `&` with the job table in `src/user/job.{h,cpp}` and
 `jobs`/`fg`/`kill`, `ProcFs` on `/proc` with `sched_procs` under it, the `web/braam.js`
 embedding API, and thirty-two programs — all with no change to the wasm ABI. M8 (isolated
 processes) is done: the §4.3 process ABI in `src/kernel/sysabi.h`, the process-side runtime in
-`src/proc/`, binaries in `src/bin/` stamped by `tools/stamp.py` and packed into `/usr/bin`,
+`src/proc/`, binaries in `src/cmd/` stamped by `tools/stamp.py` and packed into `/bin`,
 `exec` and the syscall dispatcher in `src/user/exec.{h,cpp}`, the three process operations on
 `host_svc` in `src/svc/proc.{h,cpp}`, the per-pid import closure and module cache in
 `web/proc.js`, and two new exports — `sys` and `sys_async` — with no new import. M9 (liveness
@@ -44,7 +47,16 @@ binary runs at tier 2 or tier 3, because each synchronous syscall is answerable 
 process's own worker. Both halves of the kernel↔process-worker protocol live in `web/proc.js`,
 `web/procworker.js` is its wiring, the worker pool doubles as the capability probe behind §4's
 tier-2 fallback, and `test/fakeworker.mjs` runs the whole protocol in CI over a link with no
-thread in it. Thirty applets and four binaries; `tail` and the new `spin` run at tier 3.
+thread in it. `tail` and `spin` run at tier 3.
+
+**After M9, one program model.** The applet tier is retired, in the change
+[doc/Release_Notes.md](doc/Release_Notes.md) opens with: `src/prog/` and the registry deleted,
+every program a binary in `src/cmd/`, `cd`/`fg`/`jobs`/`kill`/`help`/`exit` moved into
+`src/user/builtin/` as true shell builtins with no file behind them, `BinFs` and `/usr` gone in
+favour of `/bin` and `/share` as two views of the one bundle, the §4.3 syscall table roughly
+tripled to meet what the applets used to reach for directly, `src/ui/` turned into a library over
+a `Grid` that a process links, and the step protocol given a token so a process can have several
+calls outstanding at once. `PROC_ABI` is 2.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -75,7 +87,7 @@ CMake with a toolchain file, generating Unix Makefiles — so the whole toolchai
 make and node, with no ninja. The top-level `Makefile` wraps it and configures on first use:
 
 ```
-make            # build kernel.wasm, the /usr/bin binaries and tests.wasm
+make            # build kernel.wasm, the /bin binaries and tests.wasm
 make run        # ctest
 make serve      # serve build/web/ and open a browser
 make release    # pack build/web/ as build/braam-<version>.zip
@@ -190,8 +202,11 @@ Further constraints that are easy to violate by habit:
   not apply to tables, so the table is module-defined: the host deposits through the `ref` export
   and receives an object as an argument of `host_svc`. Do not try to hand the table to JS.
 - **A process binary shares headers with the kernel, not code.** `src/proc/` links `alloc.cpp`,
-  `result.cpp` and `text.cpp` and nothing else from `src/kernel/`, because anything reaching a
-  host import would appear in the binary's import list — which `test/run.mjs` asserts exactly.
+  `result.cpp`, `text.cpp` and `fs/path.cpp` and nothing else from the kernel's trees, plus
+  `braam_ui` — because anything reaching a host import would appear in the binary's import list,
+  which `test/run.mjs` asserts for every binary. It asserts a *subset*: `true` never makes an
+  asynchronous syscall, so it does not import `sys_async` at all, and what matters is that
+  nothing else is imported.
   That is why `panic` is declared in `host.h` and defined once per binary, and why it takes
   `(ptr, len)` rather than a `Str`: the wasm ABI passes an 8-byte struct indirectly, and that
   cost 2,812 bytes across the kernel's call sites.
@@ -216,16 +231,21 @@ Further constraints that are easy to violate by habit:
 
 ## Process model
 
-Isolation is tiered by trust, and `exec` picks a tier from binary metadata so userland does not
-notice (Concept.md §4):
+Every program is a binary; there is no in-kernel program and no way to write one. `exec` picks
+between the two isolated tiers from binary metadata, so userland does not notice (Concept.md §4):
 
-- **Kernel applet** — in-kernel coroutine, no isolation, no overhead. `/bin` is `BinFs` over the
-  program registry, and the working directory is still one global rather than per-process.
+- **Shell builtin** — not a program and not a file: `cd`, `fg`, `jobs`, `kill`, `help`, `exit`,
+  in `src/user/builtin/`. Each is one no syscall could serve — the working directory is one
+  global, and the job table and the tty pump are the shell's. A builtin is an ordinary pipeline
+  stage, so it pipes, redirects and takes `^C` with nothing added for it. The table is an
+  explicit array, not a registrar: `braam_user` is an archive, and `--gc-sections` would drop an
+  unreferenced registrar silently — which is the trap `src/prog/` needed an OBJECT library to
+  avoid.
 - **Separate instance, shared worker** (M8) — address-space, capability, descriptor and
-  memory-cap isolation. A binary in `/usr/bin` carrying a `braam` custom section; `exec` reads
+  memory-cap isolation. A binary in `/bin` carrying a `braam` custom section; `exec` reads
   the tier out of it.
 - **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
-  preempted: `worker.terminate()`. A binary asks for it with `--tier 3` in `src/bin/CMakeLists.txt`,
+  preempted: `worker.terminate()`. A binary asks for it with `--tier 3` in `src/cmd/CMakeLists.txt`,
   and runs at tier 2 where the host cannot make a worker. The protocol is one message each way
   per step, the tier rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and
   a tier-3 syscall costs two `postMessage` hops rather than a call — which is why the tier is a
@@ -244,9 +264,20 @@ header so neither can drift alone. Three rules about it are load bearing:
   process cannot issue a syscall on behalf of another PID": there is no argument for it. At
   tier 3 the pid is bound into the worker at creation, and the step protocol's messages carry
   *that* pid — never one read out of a message body, which would give it back.
-- **The in-wasm unit tests cannot run a tier-2 program.** Stepping one means returning to the
-  host, and `run_tests()` does that once. Anything `test/unit/` drives must stay an applet —
-  which is why `echo` and `sleep` are still in `src/prog/`.
+- **A process may have several syscalls outstanding, and the step says which one it answers.**
+  `PROC_TASKS` is 4 on the process side; on the kernel side each parked call is a `Call` record
+  with its own staging block, served by a scheduler job of its own. One reused staging buffer
+  would let the second call overwrite the first, and one proxy performing them in turn would let
+  a socket read that never completes starve the keystroke behind it. The resume token rides in
+  the step request's `flags`.
+- **A process ends when its root task returns**, whatever the others are doing — as a process
+  ends when main does. The kernel then drops the instance and cancels the servers of anything
+  the other tasks had outstanding.
+- **The in-wasm unit tests cannot run a program at all.** Stepping one means returning to the
+  host, and `run_tests()` does that once. With no applets left, `test/unit/` can drive only the
+  six builtins — which is enough for pipelines (`jobs | help` is two real stages), redirection,
+  the boot-cost guard and the leak check. Everything that needs a program to actually run is in
+  `test/run.mjs`: put it there rather than reaching for a test-only applet.
 - **Both halves of the tier-3 step protocol live in `web/proc.js`** — `serveProc` is the
   process's side and `makeProc` the host's, and `web/procworker.js` and `test/fakeworker.mjs`
   are wiring around them. Two files describing one wire is how it drifts.
@@ -280,11 +311,19 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
 - **Resize drops rows from the top rather than re-wrapping logical lines**, which §3.5 had
   promised to M7.
 - **One global working directory.** A process is isolated in address space, memory and
-  descriptors, but not in the namespace it can name.
+  descriptors, but not in the namespace it can name. It is the reason `cd` is a builtin and
+  `pwd` reads `/proc/cwd` rather than either being a syscall.
 - **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection was
   considered and not built.
 - **`Pane` is a primitive, not a multiplexer.** Two jobs visible at once needs per-pane output
-  routing and a window manager in the shell; that is why `chat` writes to the screen.
+  routing and a window manager in the shell. One process at a time may hold the screen: a second
+  `ScreenEnter` is refused with `Err(Perm)` rather than left to nest politely.
+- **Every command costs an instantiation** — roughly a millisecond, plus reading the image out of
+  `BundleFs`, where an applet cost nothing. The host caches the compiled `Module` by path, so the
+  bytes still cross the VFS on every `exec` and only the compile is saved.
+- **The boot archive is ~379 KB**, against 47 KB when four programs were binaries. That is §4.4's
+  duplication: every binary carries the allocator, the string types and the coroutine runtime.
+  `bundle.bin` carries a size budget of its own, so the number stays visible.
 - **Two tier-3 fidelity losses (§4.3):** a binary that will not instantiate reads as a crash
   rather than as a refusal, and `Sys::Now` is relative.
 
@@ -297,20 +336,21 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
 - Layout: `src/kernel/`, `src/fs/` (paths, the VFS, the filesystems, the host storage ABI),
   `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock, the process operations),
-  `src/ui/` (the layout layer: `Pane`, `FullScreen`, `TextBuf`, `TextView`), `src/user/` (line
-  editor, grammar, job runtime and job table, shell, `exec`, `BinFs`, `ProcFs`, boot),
-  `src/prog/` (one self-registering file per applet), `src/proc/` (a process binary's runtime)
-  and `src/bin/` (one file per binary), `test/unit/`, `web/` (`proc.js` both halves of the
+  `src/ui/` (the layout layer over a `Grid`: `Pane`, `TextBuf`, `TextView`), `src/user/` (line
+  editor, grammar, job runtime and job table, shell, `exec`, `ProcFs`, boot) with
+  `src/user/builtin/` under it, `src/proc/` (a process binary's runtime, `screen.cpp` included)
+  and `src/cmd/` (one file per program), `test/unit/`, `web/` (`proc.js` both halves of the
   process protocol, `procworker.js` a tier-3 process's worker), `bundle/`, `tools/`, `cmake/`.
-  Concept.md §7. `braam_fs`,
-  `braam_svc` and `braam_ui` are siblings above the kernel and below userland, and must not
-  depend upwards or on each other: anything needing the program registry belongs in `src/user/`,
-  which is why `BinFs` and `ProcFs` live there, and `braam_ui` must stay clear of the VFS.
-- **`src/prog/` is an `OBJECT` library, not `STATIC`.** Nothing references those translation
-  units by name — they reach the link only through their static-init registrars, and
-  `--gc-sections` never extracts an unreferenced archive member. As an archive it would link
-  cleanly and produce an empty registry, silently. `test_prog` asserts the exact program count
-  for that reason.
+  Concept.md §7. `braam_fs` and `braam_svc` are siblings above the kernel and below userland and
+  must not depend upwards or on each other; anything needing the job table or the shell belongs
+  in `src/user/`, which is why `ProcFs` lives there. **`braam_ui` is no longer one of them**: it
+  links `braam_flags` alone and the kernel does not link it at all, because `less` and `edit` are
+  binaries and a process links it instead. Keep it clear of the VFS, the screen and every host
+  import, or the exact-import assertion over each binary will say so.
+- **The builtin table is an explicit array, and must stay one.** `braam_user` is `STATIC`, and
+  `--gc-sections` never extracts an unreferenced archive member, so a self-registering builtin
+  would be dropped without a word. This is why `src/prog/` had to be an `OBJECT` library while it
+  existed; six entries named in one file need no such trick and no count tripwire.
 - Exports are declared with `BRAAM_EXPORT("name")`, imports with `BRAAM_IMPORT("name")` — never
   by linker flag. Either one changes the ABI, so update the expected surface in
   [test/run.mjs](test/run.mjs) in the same commit.

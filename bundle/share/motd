@@ -1,4 +1,4 @@
 braam — a small operating system in a browser tab.
 
-/home persists, /tmp does not, and /bin is the program registry.
-Try: ls /bin, df, mount, echo hello > notes, cat notes
+/home persists, /tmp does not, and every program is a file in /bin.
+Try: ls /bin, help, df, mount, echo hello > notes, cat notes

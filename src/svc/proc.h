@@ -15,8 +15,11 @@
 Task<Result<void>> proc_spawn(u32 pid, Str path, String &&image, const ProcMeta &meta, Tier tier);
 
 // One _start or _resume. `payload` is argv the first time and a syscall reply
-// afterwards; the answer is what the process did with it.
-Task<Result<ProcStep>> proc_step(u32 pid, Str payload);
+// afterwards, and `token` names the call being answered — 0 for _start. The
+// kernel says which one because a process may have several outstanding, and
+// the host is not the one keeping track. It rides in `flags`, which nothing
+// else on a step uses.
+Task<Result<ProcStep>> proc_step(u32 pid, u32 token, Str payload);
 
 // Drops the instance. Told, not asked: it has no reply, and it is issued from
 // a destructor, where there is nothing left to await with.

@@ -111,7 +111,7 @@ sequence to mis-parse. Rendering is roughly 300 lines of JavaScript.
 │  ┌──────────────────────┴─── kernel.wasm ───────────────┐ │
 │  │  allocator · core types · Task<T> · scheduler        │ │
 │  │  Channel<T> · Process · CancelToken                  │ │
-│  │  screen cells · VFS mount table · program registry   │ │
+│  │  screen cells · VFS mount table · shell and builtins │ │
 │  └──────────────────────────────────────────────────────┘ │
 │  ┌──── (M8+) per-process WebAssembly.Instance ──────────┐ │
 │  │  own linear memory, own import closure, own limits   │ │
@@ -322,8 +322,9 @@ is claimed, so a program that has taken the screen and stopped answering stays k
   back out — which is what /proc is made of (§5.1).
 - **The job table** — a pipeline started with `&` outlives the shell frame that started it, so
   M7 filed it here: an id, the command text, the stages' pids, and a reaper task standing where
-  the shell stands for a foreground pipeline. `jobs`, `fg` and `kill` are ordinary programs
-  over it, and the shell announces a finished job at the next prompt. There is no `bg` and no
+  the shell stands for a foreground pipeline. `jobs`, `fg` and `kill` are shell builtins over it
+  (§4) — the table is the shell's, and no syscall shows one process another's — and the shell
+  announces a finished job at the next prompt. There is no `bg` and no
   `^Z`: stopping a running coroutine at an arbitrary point is the resume-side twin of
   `CancelToken` and would have to reach every awaitable.
 - **Filesystem** — an async node tree, not inodes. One interface, split by *when* the work can
@@ -353,9 +354,12 @@ is claimed, so a program that has taken the screen and stopped answering stays k
 
   A mount table maps prefix → `Fs`, longest prefix winning, and an open-file table above it
   holds the descriptors. Implementations in §5.
-- **Programs** — a registry of `Task<int>(Args, Stdio)` functions, populated at static-init
-  time by an inline registrar, so adding a command means adding one file and editing nothing
-  else.
+- **Programs** — one file in `src/cmd/`, built into a binary of its own, so adding a command
+  means adding one file and a line naming it. There was a registry of `Task<int>(Args, Stdio)`
+  functions here until every program became a binary (§4); what still has that shape inside the
+  kernel is the six shell builtins, and their table is written out by hand rather than filled in
+  at static-init time — `braam_user` is an archive, and a registrar nothing references would be
+  dropped by `--gc-sections` without a word.
 
 ### 3.7 Holding JS objects
 
@@ -393,25 +397,49 @@ a socket has event handlers holding it alive on the JS side — which is what `J
 
 ## 4. Process model
 
-Isolation is **tiered by trust**, not chosen once for everything. All three tiers coexist,
-and `exec` picks one from a flag in the binary's metadata — userland does not notice.
+**Every program is a binary in its own instance.** There is no in-kernel program and no way to
+write one; what a program gets is chosen only between the two isolated tiers, and `exec` picks
+between them from a flag in the binary's metadata — userland does not notice.
 
 | Tier | Isolation | Spawn cost | Kill | Used for |
 |---|---|---|---|---|
-| **Kernel applet** | none | ~0 | cooperative | `ls`, `cd`, shell builtins — trusted code |
-| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | normal programs |
+| *(builtin)* | none — it *is* the shell | ~0 | cooperative | `cd`, `fg`, `jobs`, `kill`, `help`, `exit` |
+| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | every program |
 | **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | untrusted or long-running |
 
-**M0–M7 built only the first tier; M8 built the second and M9 the third.** `exec` reads the tier
-out of a binary's `braam` custom section (§4.3): a name that is in the program registry is an
-applet, a name in `/usr/bin` is a binary, and the binary says which of the other two it wants.
-A binary asking for tier 3 still runs at tier 2 where the host has no worker to put it in —
-which is now a *fallback* rather than a milestone, and covers a browser without nested workers
+`exec` reads the tier out of a binary's `braam` custom section (§4.3): a name in `/bin` is a
+binary, and the binary says which tier it wants. One asking for tier 3 still runs at tier 2 where
+the host has no worker to put it in — a *fallback*, covering a browser without nested workers
 and a `procworker.js` that will not load.
 
-One thing the tier does decide, and it is not userland's business either: the in-wasm unit tests
-can drive an applet and cannot drive a binary, because stepping an instance means returning to
-the host and `run_tests()` never does. Whatever `test/unit/` runs has to stay an applet.
+**There was a third tier, and it is gone.** The **kernel applet** — a program as an in-kernel
+coroutine, sharing the kernel's heap and its whole authority — was how every program was written
+before M8 gave them an alternative, and for a while all three tiers coexisted. They no longer do.
+Two program models meant two `Args` types, two `io.h`s and two copies of every filter's logic
+waiting to diverge, and the weaker model was the one with no memory cap, no descriptor table and
+nothing between a bug and the kernel's heap. So the applets became binaries, the ABI grew to
+meet them (§4.3), and `Tier::Retired` keeps the number 1 reserved so a binary stamped by an older
+build is refused rather than misread.
+
+What is left in the kernel is not a weaker tier but a different kind of thing: a **shell
+builtin**, which is not a program at all and has no file in `/bin`. The six are the ones no
+syscall could serve — `cd` moves the one global working directory (§5.1), `jobs`, `fg` and `kill`
+read and signal the shell's own job table, `fg` claims the keyboard route of the very pipeline it
+is a stage of (§3.5), `exit` ends the shell's loop, and `help` lists the rest. A builtin is an
+ordinary pipeline stage — a `Task<i32>(Args, Stdio)` handed to the job runtime like any other —
+so it pipes, redirects and takes `^C` with nothing added for it.
+
+The cost is paid twice over and is worth naming. Retiring the applet took `kernel.wasm` from
+236,965 bytes to under 170,000, because a quarter of it was userland; the same code now ships as
+~29 binaries, each carrying its own copy of the allocator, the string types and the coroutine
+runtime, and the boot archive grew from 47 KB to some 370 KB for it. That is §4.4's duplication
+arriving in full. It buys a memory cap, a descriptor table and a kill switch for every command
+the system has, which is the trade this section has always described.
+
+One consequence lands on the tests. The in-wasm unit tests cannot drive a binary — stepping an
+instance means returning to the host, and `run_tests()` does that once — so with no applets left
+they can drive only the builtins. Everything that needs a real program is asserted in
+`test/run.mjs`, against the real one.
 
 ### 4.1 What separate instances buy
 
@@ -429,7 +457,7 @@ the host and `run_tests()` never does. Whatever `test/unit/` runs has to stay an
   `new WebAssembly.Memory({initial: 2, maximum: 256})` is a hard 16 MB ceiling;
   `memory.grow` simply fails past it. That is an rlimit without cgroups. When a process
   exits we drop the instance and *all* its memory returns at once, sidestepping the
-  fragmentation and leak problems of applets sharing the kernel heap.
+  fragmentation and leak problems an in-kernel program had, sharing the kernel heap.
 
 ### 4.2 What they do not buy: CPU time
 
@@ -458,8 +486,9 @@ back to the pool. One that was terminated is gone, which is the point.
 
 ### 4.3 The kernel↔process ABI
 
-As built in M8. The shape is the one this section fixed in M0; four details are amended below,
-and each is marked.
+The shape is the one this section fixed in M0; the details amended since are marked below, and
+the `abi` word in the custom section is what makes an amendment safe — `exec` refuses a binary
+whose number is not the kernel's, so a stale binary is a diagnostic rather than a wrong answer.
 
 ```
 process imports:  env.memory                        // the kernel's, so the cap is the kernel's
@@ -489,6 +518,31 @@ put it. The blob is `u32 argc`, then a length and bytes per word.
 **A reply payload begins with an `i32` status.** `_resume`'s signature has room for a buffer and
 not for an errno, and every asynchronous syscall needs both.
 
+**The op word's upper bits are the operation's argument** — a descriptor at `write`, `read` and
+`close`, the open flags at `open`, one small immediate elsewhere. One convention rather than two,
+so a payload is only ever the operation's *data*: a write hands over its bytes and an open hands
+over its path, neither with a header glued on the front.
+
+**The operation table grew with the programs.** M8 fixed it at eight — `exit`, `getpid`, `now`
+and `stage` synchronously, `write`, `read`, `open` and `close` asynchronously — because those
+were what a binary needed when only two were binaries. Retiring the applet tier meant every
+program needed what it had reached for directly, and the table grew to match: `stat`, `list`,
+`mkdir` and `remove` beside the descriptor operations, `sleep` for the timer queue, and `clock`
+and `storage` for the two host services no file can stand in for. Every one has a caller in
+`src/cmd/`, which is the rule that keeps the table from growing on speculation.
+
+**What the kernel already publishes as text needs no operation.** `/proc` is a filesystem, so a
+process reads it with `open` and `read` like anything else: `pwd` is `/proc/cwd`, `mount` is
+`/proc/mounts`, and `df` needs `storage` only for the three numbers behind a host round trip,
+because ProcFs generates its files synchronously and asking the host is not. Adding a line to
+`/proc` is cheaper than adding a syscall and leaves `cat` and `grep` able to read it.
+
+**The synchronous half is closed.** Tier 3 answers `exit`, `getpid`, `now` and `stage` inside the
+process's own worker, with no kernel to ask — that is the whole reason the same binary runs at
+either tier. A fifth synchronous operation would have nothing to answer with there and would fail
+at tier 3 alone, which is the worst way for an ABI to break. So an operation that needs the kernel
+is asynchronous whatever it costs, and the four above are the complete set for good.
+
 **The kernel does not call a process; the host does, and never with the kernel on the stack.**
 Only JS can call another instance's exports, and re-entering the kernel from inside one of its
 own imports would run it on a heap it is halfway through changing. So one `_start` or `_resume`
@@ -515,7 +569,7 @@ operations can be answered *without the kernel*:
   at tier 2, one thread further out, so a process still holds no function that names another.
 - `Now` is a clock reading the step message carried, plus the worker's own elapsed time. It is
   monotonic and relative rather than bit-identical to the kernel's tick clock, which nothing in
-  `src/proc/` or `src/bin/` depends on.
+  `src/proc/` or `src/cmd/` depends on.
 - `Exit` is buffered and rides back on the step's reply. A process only ever issues it
   immediately before returning, so nothing observes the delay.
 - `Stage` is refused with 0, the "no room" answer the runtime already handles. It is the
@@ -571,8 +625,7 @@ the full comparison and the durability caveats.
 ### 5.1 The mount layering
 
 ```
-BundleFs   → one packed archive  (read-only /usr — immutable, cheap)
-BinFs      → the program registry (read-only /bin)
+BundleFs   → one packed archive  (read-only /bin and /share — immutable, cheap)
 OpfsFs     → OPFS                (read-write /home, /var — the real store)
 MemFs      → linear memory       (/, /tmp, and the fallback when OPFS is absent)
 HostFs     → File System Access  (/mnt/host, Chromium only, opt-in)
@@ -592,11 +645,18 @@ they were to hold does not exist yet:
   a filesystem; `import` writes them into the root `MemFs` and everything above works as it
   would for any other file. A read-through `Fs` over `File` objects would be the richer design
   and buys nothing §5.4 asks for.
-- **`/bin` is `BinFs`, a filesystem over the program registry.** Programs are in-kernel
-  coroutines until M8 gives them binaries, so `/bin` would otherwise be an empty directory that
-  `ls` could not account for. A file there reads as the program's usage line.
-- **`/proc` is `ProcFs`, the same trick over the scheduler** (M7): `meminfo`, `uptime`,
-  `version`, `mounts`, `jobs`, and one file per live pid. `cat` and `grep` are then the
+- **`/bin` and `/share` are two views of the one archive.** M5's `/bin` was `BinFs`, a
+  filesystem over the program registry, because programs were in-kernel coroutines and `/bin`
+  would otherwise have been an empty directory `ls` could not account for. Now that every
+  program is a binary the directory holds the binaries themselves, and `BinFs` is gone —
+  which is the promise M5 made when it wrote that the mount would change and nothing above it
+  would. `bundlefs_at` re-roots a bundle onto one of its subtrees, so the programs and the
+  files that ship beside them stay one download and become two mounts. There is no `/usr`: one
+  archive with two entry points does not need a third directory level to explain it.
+- **`/proc` is `ProcFs`, the same trick over the scheduler** (M7): `cwd`, `meminfo`, `uptime`,
+  `version`, `mounts`, `jobs`, and one file per live pid. It is also the reason the process ABI
+  is as small as it is (§4.3): a process reads its answers here rather than asking for an
+  operation of its own. `cat` and `grep` are then the
   introspection tools and there is no second interface to keep in step. The tree is flat —
   `/proc/42` is a file, not a directory — because a process here has one line of state, and a
   generated directory level would hold exactly one file. Content is produced at `open` and read
@@ -699,8 +759,8 @@ numbering here is cited from source comments.
 
 ## 7. Repository layout
 
-As created in M0; `src/prog` and `src/user` arrived with M3, `src/fs` with M5, `src/svc`
-with M6, `src/ui` with M7, and `src/proc` and `src/bin` with M8. `braam_ui` is a sibling of
+As created in M0; `src/user` arrived with M3, `src/fs` with M5, `src/svc`
+with M6, `src/ui` with M7, and `src/proc` and `src/cmd` with M8. `braam_ui` is a sibling of
 `braam_fs` and `braam_svc`: above the kernel, below userland, and depending on neither of the
 other two. `src/proc` is in none of that hierarchy — it is a *different binary's* runtime, and
 the only thing it shares with the kernel is a handful of headers and the allocator.
@@ -718,13 +778,13 @@ src/kernel/hostcall.h   the asynchronous host request, shared by both interfaces
 src/kernel/jsref.h      the externref table and JsRef (§3.7)
 src/kernel/sysabi.h     the kernel↔process wire, included by both sides (§4.3)
 src/proc/               a process binary's whole runtime: _start, syscalls, stdio
-src/bin/                one file per program that is a binary of its own
+src/cmd/                one file per program; every program is a binary of its own
 src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
 src/svc/                fetch, WebSocket, clipboard, file transfer, wall clock
 src/ui/                 the layout layer: Pane, FullScreen, TextBuf, TextView (§3.5)
-src/prog/               one file per program; self-registering
-src/user/               LineEditor, grammar, job runtime, shell, exec, BinFs, ProcFs, boot
-bundle/                 the tree tools/pack.py packs into /usr
+src/user/               LineEditor, grammar, job runtime, shell, exec, ProcFs, boot
+src/user/builtin/       one file per shell builtin, plus the table (§4)
+bundle/                 the tree tools/pack.py packs into /bin and /share
 test/                   in-wasm unit tests, the Node driver, the storage and service fakes
 web/                    braam.js (the embedding API), worker.js, host shim, shims, renderer
 tools/                  build scripts, bundle packer, size-budget check, chat server

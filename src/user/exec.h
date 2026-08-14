@@ -3,18 +3,19 @@
 // metadata, so userland asks for a name and never asks for a tier.
 #pragma once
 
+#include "builtin.h"
 #include "kernel/string.h"
 #include "kernel/sysabi.h"
 #include "kernel/task.h"
 #include "prog.h"
 
-// A resolved command: a registry entry at tier 1, a binary and its bytes at
-// tier 2. The pid is filled in by whoever spawns the task, and read by the
-// task itself a tick later — a Task is lazy, so nothing has looked yet.
+// A resolved command: a shell builtin, or a binary and its bytes. The pid is
+// filled in by whoever spawns the task, and read by the task itself a tick
+// later — a Task is lazy, so nothing has looked yet.
 struct Executable {
-    Tier tier             = Tier::Applet;
-    const Program *applet = nullptr;
-    u32 pid               = 0;
+    Tier tier              = Tier::Instance;
+    const Builtin *builtin = nullptr;
+    u32 pid                = 0;
     String path;
     String image;
     ProcMeta meta{};
@@ -24,7 +25,7 @@ struct Executable {
 // none to read and the file is therefore not a program.
 Result<ProcMeta> exec_meta(Str image);
 
-// The registry first, then /usr/bin, then the name itself once it looks like a
+// The builtins first, then /bin, then the name itself once it looks like a
 // path. Err(NotFound) is "no such command"; Err(Invalid) is "not executable".
 Task<Result<void>> exec_resolve(Str name, Executable &out);
 

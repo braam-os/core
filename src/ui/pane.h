@@ -3,22 +3,26 @@
 // a program composes its screen out of panes, and every write is clipped to the
 // one it goes through, so a status line cannot scribble on the text above it.
 //
-// A pane writes cells directly and marks them with screen_touch. It never
-// scrolls: the grid's scroll moves the whole screen, which is exactly what a
+// A pane writes cells directly into a Grid and marks them damaged there. It
+// never scrolls: scrolling moves the whole screen, which is exactly what a
 // full-screen program must not do. A view that scrolls repaints instead.
+//
+// The Grid is a parameter rather than the kernel's screen, which is what lets
+// this file link into a process binary as well as into the kernel: a program
+// paints its own buffer and blits the damage across (Concept.md §4.3).
 #pragma once
 
-#include "kernel/screen.h"
+#include "grid.h"
 #include "kernel/str.h"
 #include "kernel/types.h"
 
 struct Pane {
     Pane() = default;
 
-    Pane(u32 x, u32 y, u32 w, u32 h) : x_(x), y_(y), w_(w), h_(h) {}
+    Pane(Grid &g, u32 x, u32 y, u32 w, u32 h) : g_(&g), x_(x), y_(y), w_(w), h_(h) {}
 
-    // The whole grid. Empty before the first resize.
-    static Pane root();
+    // The whole of a grid. Empty before it has been sized.
+    static Pane of(Grid &g) { return Pane{ g, 0, 0, g.cols, g.rows }; }
 
     u32 width() const { return w_; }
 
@@ -62,6 +66,7 @@ struct Pane {
 private:
     Cell *cell(u32 x, u32 y) const;
 
+    Grid *g_ = nullptr;
     u32 x_ = 0, y_ = 0, w_ = 0, h_ = 0;
     u32 cx_ = 0, cy_ = 0;
     u8 fg_    = COLOR_WHITE;

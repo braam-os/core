@@ -1,0 +1,32 @@
+# What `help` prints for each program in /bin: one `name  usage` line, the
+# name first and the rest of the line its one-line usage. A binary the file
+# does not mention still lists, without a usage — the listing comes from the
+# directory, and this only decorates it.
+#
+# It lives here rather than in the kernel because a program is a file now, and
+# the kernel has no usage string for one it has never run.
+cat      [<file>...] — copy files, or the input, to the output
+curl     [-i] [-X <method>] [-H <header>] [-d <data>] <url> — fetch a URL
+date     [-u] — print the date and time
+df       report storage quota, usage and durability
+echo     [-n] [word...] — write the arguments
+export   <file> [<name>] — download a file out of the browser
+false    fail
+grep     [-i] [-v] <text> [<file>...] — pass matching lines
+head     [-n <count>] [<file>...] — the first lines, ten by default
+hog      take memory until the cap refuses more
+import   [<dir>] — copy files from the browser into /mnt/import
+ls       [-l] [<path>...] — list directories
+mkdir    <dir>... — create directories
+mount    list the mounted filesystems
+pbcopy   [<file>...] — put the input on the clipboard
+pbpaste  write the clipboard to the output
+pwd      print the working directory
+rm       [-r] <path>... — remove files, or directories with -r
+sleep    <ms> — wait, in milliseconds
+spin     [<millions>] — loop without yielding, to be killed
+tail     [-n <count>] [<file>...] — the last lines, ten by default
+touch    <file>... — create empty files
+true     succeed
+version  print the kernel version
+wc       [<file>...] — count lines, words and bytes

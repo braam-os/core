@@ -23,7 +23,7 @@ void test_channel();
 void test_io();
 void test_screen();
 void test_text();
-void test_prog();
+void test_builtin();
 void test_procfs();
 void test_pane();
 void test_textbuf();
@@ -91,7 +91,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_memfs();
     test_bundlefs();
     test_vfs();
-    test_prog();
+    test_builtin();
     test_edit();
     test_tokenize();
     test_parse();

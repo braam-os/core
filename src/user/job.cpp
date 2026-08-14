@@ -246,6 +246,7 @@ Task<i32> tty_pump(Job *j)
 {
     i32 status = 0;
     PumpEnd end{ j, &status };
+    String line; // the cooked line, sent whole on Enter
 
     for (;;) {
         Result<Key> r = co_await keys().recv();
@@ -280,26 +281,41 @@ Task<i32> tty_pump(Job *j)
         Pipe &to = tty_cooked() ? *tty_cooked() : j->input;
 
         if (k.mods & MOD_CTRL) {
-            if (k.code == 'd')
-                to.close(); // end of input, not end of the pipeline
+            if (k.code != 'd')
+                continue;
+
+            // End of input, not end of the pipeline. A partial line goes
+            // first: ^D after typing is "send what I have", as it is anywhere.
+            if (!line.empty()) {
+                String chunk;
+                if (chunk.assign(line.str()))
+                    to.try_send(move(chunk));
+                line.clear();
+            }
+            to.close();
             continue;
         }
 
-        char utf8[4];
-        usize n = 0;
+        // A line at a time, which is what "cooked" means and what the pipe can
+        // hold: one chunk per keystroke filled its eight slots after seven
+        // characters, and the pump drops rather than parks, so the rest of the
+        // line was lost. An applet drained the pipe in the same tick and never
+        // showed it; a process reads one syscall at a time and always would.
+        // Echo stays per keystroke, so typing still appears as it is typed.
         if (k.code == KEY_ENTER) {
-            utf8[n++] = '\n';
             screen_newline();
+            if (line.push('\n')) {
+                String chunk;
+                if (chunk.assign(line.str()))
+                    to.try_send(move(chunk));
+            }
+            line.clear();
         } else if (k.printable()) {
-            n = utf8_encode(k.code, utf8);
+            char utf8[4];
+            usize n = utf8_encode(k.code, utf8);
+            line.append(Str(utf8, n));
             screen_put(k.code);
-        } else {
-            continue;
         }
-
-        String chunk;
-        if (chunk.assign(Str(utf8, n)))
-            to.try_send(move(chunk));
     }
 }
 
@@ -582,12 +598,11 @@ Task<i32> run_line(Str line, Stdio io)
         sio.err = f->err.fd >= 0 ? file_sink(f->err) : io.err;
 
         // The name the scheduler keeps is argv[0], a view into the job's word
-        // store, which outlives every stage — Program::name would not exist
-        // for a binary, and the path is not what /proc should show.
+        // store, which outlives every stage — a binary has no name of its own
+        // in the kernel, and the path is not what /proc should show.
         Executable *e = j->execs[i];
         Args a        = j->pl.args(i);
-        Task<i32> body =
-            e->tier == Tier::Applet ? e->applet->run(a, sio) : exec_process(*e, a, sio);
+        Task<i32> body = e->builtin ? e->builtin->run(a, sio) : exec_process(*e, a, sio);
 
         j->refs++; // the stage's own reference, dropped by StageEnd
         u32 pid = sched_spawn(stage(j, u8(i), move(body), in, out), a[0]);

@@ -14,6 +14,7 @@
 
 #include "io.h"
 #include "kernel/key.h"
+#include "kernel/screen.h"
 #include "prog.h"
 
 // out and err are the same sink, and stdin is empty. A pipeline replaces the
@@ -49,6 +50,36 @@ struct KeyInput {
 private:
     KeyRing *ring_ = nullptr;
     KeyRing *prev_ = nullptr;
+};
+
+// The alternate screen, as RAII: whoever holds this has the grid for as long
+// as it lives, and the shell's screen comes back when it dies. A destructor
+// rather than a call at the end, so that a process killed mid-paint gets its
+// screen restored anyway — ~Proc in exec.cpp is what runs it.
+//
+// There is no second grid: the cells are copied to a heap block and copied
+// back, which is what "alternate screen" means when the terminal is an array
+// rather than a byte stream. It lives here beside the two keyboard claims
+// because all three answer the same question — who owns the terminal while a
+// program has it.
+struct FullScreen {
+    FullScreen();
+
+    FullScreen(const FullScreen &)            = delete;
+    FullScreen &operator=(const FullScreen &) = delete;
+
+    ~FullScreen();
+
+    // False when the snapshot would not allocate. The caller should give up:
+    // taking the screen without being able to give it back is worse than not
+    // running at all.
+    bool ok() const { return saved_ != nullptr; }
+
+private:
+    Cell *saved_ = nullptr;
+    u32 cols_ = 0, rows_ = 0;
+    u32 cursor_x_ = 0, cursor_y_ = 0;
+    bool cursor_on_ = false;
 };
 
 // Cooked bytes to another job's stdin — what `fg` needs, since the pump that is

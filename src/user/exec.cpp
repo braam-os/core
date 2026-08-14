@@ -1,36 +1,103 @@
 #include "exec.h"
 
+#include "fs/hostfs.h"
 #include "fs/vfs.h"
 #include "io.h"
 #include "kernel/alloc.h"
+#include "kernel/key.h"
 #include "kernel/sched.h"
+#include "svc/net.h"
 #include "svc/proc.h"
+#include "svc/svc.h"
+#include "svc/xfer.h"
+#include "tty.h"
 
 namespace {
 
+// A descriptor, whatever is behind it. The kinds beyond File are the host
+// services that hand back a JS object: a fetch body, a socket, a set of picked
+// files. Making them descriptors is what lets `read`, `write` and `close`
+// serve all of them — six operations the ABI does not need — and what makes a
+// killed process drop them, since ~Handle releases the externref slot and the
+// host object with it, with no code of its own to reach.
+struct Handle {
+    enum class Kind : u8 { File, Body, Socket, PickSet, PickFile };
+
+    explicit Handle(Kind k) : kind(k) {}
+
+    Handle(const Handle &)            = delete;
+    Handle &operator=(const Handle &) = delete;
+
+    Kind kind;
+    FileIo file;      // File
+    HttpResponse res; // Body
+    WebSocket sock;   // Socket
+    Picked pick;      // PickSet
+    u32 set  = 0;     // PickFile: the descriptor of the set it came from
+    usize ix = 0;     // PickFile: which of that set's files
+    u64 off  = 0;     // Body and PickFile: how far it has been read
+};
+
+// One syscall a process is parked on: what it asked for, the bytes it staged,
+// and the token it will be resumed with. A record rather than three fields on
+// the process, because a process may have several tasks and therefore several
+// calls outstanding at once — each served by a scheduler job of its own, since
+// one of them may be a socket read that never completes.
+struct Call {
+    ~Call() { heap_free(stage); }
+
+    u32 op     = 0;
+    u32 len    = 0;
+    u32 token  = 0;
+    u8 *stage  = nullptr; // where the host copies the payload
+    usize cap  = 0;
+    u32 server = 0; // the scheduler job performing it
+};
+
+// What a finished call hands back to the stepper: which one it was, and the
+// reply the process is to be resumed with.
+struct Reply {
+    u32 token = 0;
+    String payload;
+};
+
+constexpr usize PROC_REPLIES = 8; // more than PROC_TASKS, so a send never parks
+
 // The kernel's side of one running process. The instance itself is the host's
 // — the kernel holds what only the kernel can hold: the stdio the stage was
-// given, the descriptors the process opened, and the one request it is waiting
-// on. There is at most one, because a process has a single task.
+// given, the descriptors the process opened, and the calls it is waiting on.
 struct Proc {
     Proc(u32 p, Stdio s) : pid(p), io(s) {}
 
     ~Proc()
     {
-        heap_free(stage);
-        for (FileIo *f : fds)
-            heap_delete(f);
+        heap_delete(alt); // restores the screen
+        heap_delete(keys);
+        for (Call *c : calls)
+            heap_delete(c);
+        heap_delete(staging);
+        for (Handle *h : fds)
+            heap_delete(h);
     }
 
     u32 pid;
     Stdio io;
-    u8 *stage       = nullptr; // where the host copies a syscall's payload
-    usize stage_cap = 0;
-    u32 op          = 0;
-    u32 len         = 0;
-    bool pending    = false;
-    i32 exit        = 1;
-    Vec<FileIo *> fds;
+
+    // The terminal, while this process has it. Both are the kernel's rather
+    // than the program's: a killed process runs no destructor, and ~Proc is
+    // reached from exec_process's End on ^C, kill and a destroyed frame alike.
+    KeyInput *keys  = nullptr;
+    FullScreen *alt = nullptr;
+
+    // The call the host is staging bytes for, not yet issued, and the ones
+    // that have been. A process owns them both, so a server task cancelled
+    // mid-await leaks nothing.
+    Call *staging = nullptr;
+    Vec<Call *> calls;
+    Channel<Reply, PROC_REPLIES> done;
+
+    i32 exit = 1;
+    Vec<Handle *> fds;
 };
 
 // Lazily built, like the orphan list: a namespace-scope Vec has a destructor,
@@ -65,26 +132,60 @@ void proc_remove(Proc *p)
         }
 }
 
-// Room for the bytes the host is about to copy in. It never shrinks, because a
-// process that wrote 512 bytes once will do it again.
+// The call the host is about to make, made on demand: Sys::Stage comes first
+// when there is a payload, and sys_async alone when there is not.
+Call *proc_staging(Proc &p)
+{
+    if (!p.staging)
+        p.staging = heap_new<Call>();
+    return p.staging;
+}
+
+// Room for the bytes the host is about to copy in. Per call rather than one
+// buffer per process: with two calls in flight the second would otherwise
+// overwrite the first before its server had read it. It never shrinks, because
+// a process that wrote 512 bytes once will do it again.
 u32 proc_stage(Proc &p, u32 n)
 {
-    if (n > p.stage_cap) {
+    // A hostile binary can call Sys::Stage directly, so the size it asks for
+    // is bounded by the largest payload the ABI has: a blit of the whole grid.
+    if (n > SYS_STAGE_MAX)
+        return 0;
+    Call *c = proc_staging(p);
+    if (!c)
+        return 0;
+    if (n > c->cap) {
         u8 *q = static_cast<u8 *>(heap_alloc(n));
         if (!q)
             return 0;
-        heap_free(p.stage);
-        p.stage     = q;
-        p.stage_cap = heap_block_size(n);
+        heap_free(c->stage);
+        c->stage = q;
+        c->cap   = heap_block_size(n);
     }
-    return host_addr(p.stage);
+    return host_addr(c->stage);
 }
 
-FileIo *proc_file(Proc &p, u32 fd)
+Handle *proc_handle(Proc &p, u32 fd)
 {
     if (fd < SYS_FD_MIN || fd - SYS_FD_MIN >= p.fds.size())
         return nullptr;
     return p.fds[fd - SYS_FD_MIN];
+}
+
+// Files `h` in the process's own table and reports the descriptor, or -1 when
+// there is no room. A slot that was closed is reused before the table grows.
+i32 proc_bind(Proc &p, Handle *h)
+{
+    usize slot = p.fds.size();
+    for (usize i = 0; i < p.fds.size(); i++)
+        if (!p.fds[i]) {
+            slot = i;
+            break;
+        }
+    if (slot == p.fds.size() && !p.fds.push(h))
+        return -1;
+    p.fds[slot] = h;
+    return i32(slot + SYS_FD_MIN);
 }
 
 // A process's flags are its own numbers (sysabi.h), mapped rather than shared:
@@ -171,20 +272,20 @@ Task<void> say(Stream err, Str who, Str what)
 // _resume will hand back: an i32 status, then any data. Every wait in here is
 // the proxy task's own, so ^C reaches a process through exactly the awaitables
 // it reaches an applet through.
-Task<Result<String>> proc_syscall(Proc &p)
+Task<Result<String>> proc_syscall(Proc &p, Call &c)
 {
     String reply;
     if (!reply.append(Str("\0\0\0\0", 4)))
         co_return Err(Error::NoMemory);
 
-    u32 fd      = sys_op_fd(p.op);
-    Str payload = Str(reinterpret_cast<const char *>(p.stage), p.len);
+    u32 fd      = sys_op_fd(c.op);
+    Str payload = Str(reinterpret_cast<const char *>(c.stage), c.len);
     i32 status  = -i32(Error::Unsupported);
 
-    if (p.len > p.stage_cap) {
+    if (c.len > c.cap) {
         status = -i32(Error::NoMemory); // the staging buffer would not grow
     } else
-        switch (sys_op_code(p.op)) {
+        switch (sys_op_code(c.op)) {
         case Sys::Write: {
             if (fd == SYS_STDOUT || fd == SYS_STDERR) {
                 Stream out      = fd == SYS_STDOUT ? p.io.out : p.io.err;
@@ -199,15 +300,32 @@ Task<Result<String>> proc_syscall(Proc &p)
                     status = -i32(r.error());
                 break;
             }
-            FileIo *f = proc_file(p, fd);
-            if (!f) {
+            Handle *h = proc_handle(p, fd);
+            if (!h) {
                 status = -i32(Error::Invalid);
                 break;
             }
-            Result<usize> r = vfs_write(f->fd, f->off, reinterpret_cast<const u8 *>(payload.data()),
-                                        payload.size());
+
+            // Writing to a socket sends a message; there is nothing else a
+            // descriptor of that kind could mean.
+            if (h->kind == Handle::Kind::Socket) {
+                Result<void> r = Err(Error::NoMemory);
+                if (Task<Result<void>> t = ws_send(h->sock, payload))
+                    r = co_await t;
+                if (r.is_err() && r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = r.is_ok() ? i32(payload.size()) : -i32(r.error());
+                break;
+            }
+            if (h->kind != Handle::Kind::File) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            Result<usize> r =
+                vfs_write(h->file.fd, h->file.off, reinterpret_cast<const u8 *>(payload.data()),
+                          payload.size());
             if (r.is_ok()) {
-                f->off += r.value();
+                h->file.off += r.value();
                 status = i32(r.value());
             } else
                 status = -i32(r.error());
@@ -229,19 +347,50 @@ Task<Result<String>> proc_syscall(Proc &p)
                     status = r.error() == Error::Closed ? 0 : -i32(r.error());
                 break;
             }
-            FileIo *f = proc_file(p, fd);
-            if (!f) {
+            Handle *h = proc_handle(p, fd);
+            if (!h) {
                 status = -i32(Error::Invalid);
                 break;
             }
+
+            // Everything that is a stream of bytes reads the same way, so a
+            // fetched body, a socket and a picked file all arrive through the
+            // operation a file already had. An empty chunk is the end of it.
+            if (h->kind != Handle::Kind::File) {
+                Result<String> r = Err(Error::Perm);
+                if (h->kind == Handle::Kind::Body) {
+                    if (Task<Result<String>> t = http_read(h->res))
+                        r = co_await t;
+                } else if (h->kind == Handle::Kind::Socket) {
+                    if (Task<Result<String>> t = ws_recv(h->sock))
+                        r = co_await t;
+                } else if (h->kind == Handle::Kind::PickFile) {
+                    Handle *set = proc_handle(p, h->set);
+                    if (!set || set->kind != Handle::Kind::PickSet)
+                        r = Err(Error::Invalid);
+                    else if (Task<Result<String>> t = pick_read(set->pick, h->ix, h->off))
+                        r = co_await t;
+                }
+                if (r.is_ok()) {
+                    h->off += r.value().size();
+                    if (!reply.append(r.value().str()))
+                        co_return Err(Error::NoMemory);
+                    status = i32(r.value().size());
+                } else if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                else
+                    status = r.error() == Error::Closed ? 0 : -i32(r.error());
+                break;
+            }
+
             u8 *block = static_cast<u8 *>(heap_alloc(SYS_CHUNK));
             if (!block) {
                 status = -i32(Error::NoMemory);
                 break;
             }
-            Result<usize> r = vfs_read(f->fd, f->off, block, SYS_CHUNK);
+            Result<usize> r = vfs_read(h->file.fd, h->file.off, block, SYS_CHUNK);
             if (r.is_ok()) {
-                f->off += r.value();
+                h->file.off += r.value();
                 status = i32(r.value());
                 if (!reply.append(Str(reinterpret_cast<const char *>(block), r.value())))
                     status = -i32(Error::NoMemory);
@@ -252,11 +401,7 @@ Task<Result<String>> proc_syscall(Proc &p)
         }
 
         case Sys::Open: {
-            if (payload.size() < 4) {
-                status = -i32(Error::Invalid);
-                break;
-            }
-            Task<Result<i32>> t = vfs_open(payload.substr(4), vfs_flags(sys_get_u32(p.stage)));
+            Task<Result<i32>> t = vfs_open(payload, vfs_flags(sys_op_arg(c.op)));
             if (!t) {
                 status = -i32(Error::NoMemory);
                 break;
@@ -271,37 +416,461 @@ Task<Result<String>> proc_syscall(Proc &p)
 
             // A descriptor is an index into this process's own table, so the
             // number a process holds means nothing in any other one.
-            FileIo *f  = heap_new<FileIo>(r.value());
-            usize slot = p.fds.size();
-            for (usize i = 0; i < p.fds.size(); i++)
-                if (!p.fds[i]) {
-                    slot = i;
-                    break;
-                }
-            if (!f || (slot == p.fds.size() && !p.fds.push(f))) {
-                if (f)
-                    heap_delete(f); // closes it
-                else
-                    vfs_close(r.value());
+            Handle *h = heap_new<Handle>(Handle::Kind::File);
+            if (!h) {
+                vfs_close(r.value());
                 status = -i32(Error::NoMemory);
                 break;
             }
-            p.fds[slot] = f;
-            status      = i32(slot + SYS_FD_MIN);
+            h->file.fd = r.value();
+            status     = proc_bind(p, h);
+            if (status < 0) {
+                heap_delete(h); // closes it
+                status = -i32(Error::NoMemory);
+            }
             break;
         }
 
         case Sys::Close: {
-            FileIo *f = proc_file(p, fd);
-            if (!f) {
+            Handle *h = proc_handle(p, fd);
+            if (!h) {
                 status = -i32(Error::Invalid);
                 break;
             }
-            heap_delete(f);
+            heap_delete(h);
             p.fds[fd - SYS_FD_MIN] = nullptr;
             status                 = 0;
             break;
         }
+
+        case Sys::Stat: {
+            Result<Stat> r = Err(Error::NoMemory);
+            if (Task<Result<Stat>> t = vfs_stat(payload))
+                r = co_await t;
+            if (r.is_err()) {
+                if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(r.error());
+                break;
+            }
+            u8 head[12];
+            sys_put_u32(head, r.value().kind == NodeKind::Dir ? SYS_KIND_DIR : SYS_KIND_FILE);
+            sys_put_u32(head + 4, u32(r.value().size));
+            sys_put_u32(head + 8, u32(r.value().size >> 32));
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
+        case Sys::List: {
+            Result<Vec<Entry>> r = Err(Error::NoMemory);
+            if (Task<Result<Vec<Entry>>> t = vfs_list(payload))
+                r = co_await t;
+            if (r.is_err()) {
+                if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(r.error());
+                break;
+            }
+
+            u8 count[4];
+            sys_put_u32(count, u32(r.value().size()));
+            if (!reply.append(Str(reinterpret_cast<const char *>(count), sizeof(count))))
+                co_return Err(Error::NoMemory);
+            for (const Entry &e : r.value()) {
+                u8 head[16];
+                sys_put_u32(head, e.kind == NodeKind::Dir ? SYS_KIND_DIR : SYS_KIND_FILE);
+                sys_put_u32(head + 4, u32(e.size));
+                sys_put_u32(head + 8, u32(e.size >> 32));
+                sys_put_u32(head + 12, u32(e.name.size()));
+                if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) ||
+                    !reply.append(e.name.str()))
+                    co_return Err(Error::NoMemory);
+            }
+            status = 0;
+            break;
+        }
+
+        case Sys::MkDir: {
+            Result<void> r = Err(Error::NoMemory);
+            if (Task<Result<void>> t = vfs_mkdir(payload))
+                r = co_await t;
+            if (r.is_err() && r.error() == Error::Cancelled)
+                co_return Err(Error::Cancelled);
+            status = r.is_ok() ? 0 : -i32(r.error());
+            break;
+        }
+
+        case Sys::Remove: {
+            Result<void> r = Err(Error::NoMemory);
+            if (Task<Result<void>> t = vfs_remove(payload, sys_op_arg(c.op) & 1))
+                r = co_await t;
+            if (r.is_err() && r.error() == Error::Cancelled)
+                co_return Err(Error::Cancelled);
+            status = r.is_ok() ? 0 : -i32(r.error());
+            break;
+        }
+
+        case Sys::Sleep: {
+            if (payload.size() < 4) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            Result<void> r = co_await sleep_ms(sys_get_u32(c.stage));
+            if (r.is_err())
+                co_return Err(Error::Cancelled);
+            status = 0;
+            break;
+        }
+
+        case Sys::Clock: {
+            Result<WallClock> r = Err(Error::NoMemory);
+            if (Task<Result<WallClock>> t = svc_clock())
+                r = co_await t;
+            if (r.is_err()) {
+                if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(r.error());
+                break;
+            }
+            u8 head[12];
+            sys_put_u32(head, u32(r.value().epoch_ms));
+            sys_put_u32(head + 4, u32(r.value().epoch_ms >> 32));
+            sys_put_u32(head + 8, u32(r.value().tz_min));
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
+        case Sys::Storage: {
+            StorageBackend b;
+            u32 flags = 0;
+            if (Task<Result<StorageBackend>> t = storage_info()) {
+                Result<StorageBackend> r = co_await t;
+                if (r.is_err() && r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                if (r.is_ok()) {
+                    b     = r.value();
+                    flags = SYS_STORE_KNOWN;
+                }
+            }
+            if (b.opfs)
+                flags |= SYS_STORE_OPFS;
+            if (b.sync)
+                flags |= SYS_STORE_SYNC;
+            if (b.persisted)
+                flags |= SYS_STORE_PERSISTED;
+
+            u8 head[20];
+            sys_put_u32(head, u32(b.quota));
+            sys_put_u32(head + 4, u32(b.quota >> 32));
+            sys_put_u32(head + 8, u32(b.usage));
+            sys_put_u32(head + 12, u32(b.usage >> 32));
+            sys_put_u32(head + 16, flags);
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
+        case Sys::Fetch: {
+            if (payload.size() < 4) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u32 url_len = sys_get_u32(c.stage);
+            if (usize(url_len) + 4 > payload.size()) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            Str url  = payload.substr(4, url_len);
+            Str spec = payload.substr(4 + url_len);
+
+            Result<HttpResponse> r = Err(Error::NoMemory);
+            if (Task<Result<HttpResponse>> t = http_fetch(url, spec))
+                r = co_await t;
+            if (r.is_err()) {
+                if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(r.error());
+                break;
+            }
+
+            Handle *h = heap_new<Handle>(Handle::Kind::Body);
+            if (!h) {
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            u32 http = r.value().status;
+            String headers;
+            bool ok = headers.assign(r.value().headers.str());
+            h->res  = move(r.value());
+
+            status = proc_bind(p, h);
+            if (status < 0 || !ok) {
+                heap_delete(h);
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            u8 head[4];
+            sys_put_u32(head, http);
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) ||
+                !reply.append(headers.str()))
+                co_return Err(Error::NoMemory);
+            break;
+        }
+
+        case Sys::WsOpen: {
+            Result<WebSocket> r = Err(Error::NoMemory);
+            if (Task<Result<WebSocket>> t = ws_open(payload))
+                r = co_await t;
+            if (r.is_err()) {
+                if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(r.error());
+                break;
+            }
+
+            Handle *h = heap_new<Handle>(Handle::Kind::Socket);
+            if (!h) {
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            h->sock = move(r.value());
+            status  = proc_bind(p, h);
+            if (status < 0) {
+                heap_delete(h);
+                status = -i32(Error::NoMemory);
+            }
+            break;
+        }
+
+        case Sys::ClipRead: {
+            Result<String> r = Err(Error::NoMemory);
+            if (sys_op_arg(c.op) & 1) {
+                if (Task<Result<String>> t = clip_wait())
+                    r = co_await t;
+            } else if (Task<Result<String>> t = clip_read()) {
+                r = co_await t;
+            }
+            if (r.is_err()) {
+                if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(r.error());
+                break;
+            }
+            if (!reply.append(r.value().str()))
+                co_return Err(Error::NoMemory);
+            status = i32(r.value().size());
+            break;
+        }
+
+        case Sys::ClipWrite: {
+            Result<void> r = Err(Error::NoMemory);
+            if (Task<Result<void>> t = clip_write(payload))
+                r = co_await t;
+            if (r.is_err() && r.error() == Error::Cancelled)
+                co_return Err(Error::Cancelled);
+            status = r.is_ok() ? 0 : -i32(r.error());
+            break;
+        }
+
+        case Sys::Pick: {
+            Result<Picked> r = Err(Error::NoMemory);
+            if (Task<Result<Picked>> t = pick_files())
+                r = co_await t;
+            if (r.is_err()) {
+                if (r.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(r.error());
+                break;
+            }
+
+            Handle *h = heap_new<Handle>(Handle::Kind::PickSet);
+            if (!h) {
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            usize count = r.value().count;
+            h->pick     = move(r.value());
+            status      = proc_bind(p, h);
+            if (status < 0) {
+                heap_delete(h);
+                status = -i32(Error::NoMemory);
+                break;
+            }
+
+            // The names come back with the set, since a program needs every
+            // one of them before it opens any: one round trip, not N.
+            u8 head[4];
+            sys_put_u32(head, u32(count));
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            for (usize i = 0; i < count; i++) {
+                Result<String> name = Err(Error::NoMemory);
+                if (Task<Result<String>> t = pick_name(h->pick, i))
+                    name = co_await t;
+                if (name.is_err())
+                    co_return Err(name.error());
+                u8 len[4];
+                sys_put_u32(len, u32(name.value().size()));
+                if (!reply.append(Str(reinterpret_cast<const char *>(len), sizeof(len))) ||
+                    !reply.append(name.value().str()))
+                    co_return Err(Error::NoMemory);
+            }
+            break;
+        }
+
+        case Sys::PickOpen: {
+            Handle *set = proc_handle(p, sys_op_arg(c.op));
+            if (!set || set->kind != Handle::Kind::PickSet || payload.size() < 4) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            usize ix = sys_get_u32(c.stage);
+            if (ix >= set->pick.count) {
+                status = -i32(Error::NotFound);
+                break;
+            }
+
+            Handle *h = heap_new<Handle>(Handle::Kind::PickFile);
+            if (!h) {
+                status = -i32(Error::NoMemory);
+                break;
+            }
+
+            // By descriptor rather than by pointer: closing the set first is
+            // then Err(Invalid) at the next read, not a dangling reference.
+            h->set = sys_op_arg(c.op);
+            h->ix  = ix;
+            status = proc_bind(p, h);
+            if (status < 0) {
+                heap_delete(h);
+                status = -i32(Error::NoMemory);
+            }
+            break;
+        }
+
+        case Sys::Save: {
+            if (payload.size() < 4) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u32 name_len = sys_get_u32(c.stage);
+            if (usize(name_len) + 4 > payload.size()) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            Result<void> r = Err(Error::NoMemory);
+            if (Task<Result<void>> t =
+                    save_file(payload.substr(4, name_len), payload.substr(4 + name_len)))
+                r = co_await t;
+            if (r.is_err() && r.error() == Error::Cancelled)
+                co_return Err(Error::Cancelled);
+            status = r.is_ok() ? 0 : -i32(r.error());
+            break;
+        }
+
+        case Sys::KeyClaim:
+        case Sys::ScreenEnter: {
+            bool take = sys_op_arg(c.op) & 1;
+            bool key  = sys_op_code(c.op) == Sys::KeyClaim;
+
+            if (!take) {
+                if (key) {
+                    heap_delete(p.keys);
+                    p.keys = nullptr;
+                } else {
+                    heap_delete(p.alt);
+                    p.alt = nullptr;
+                }
+            } else if (key ? p.keys != nullptr : p.alt != nullptr) {
+                status = -i32(Error::Perm); // one claim of each, per process
+                break;
+            } else if (key) {
+                p.keys = heap_new<KeyInput>();
+                if (!p.keys || !p.keys->ok()) {
+                    heap_delete(p.keys);
+                    p.keys = nullptr;
+                    status = -i32(Error::NoMemory);
+                    break;
+                }
+            } else {
+                p.alt = heap_new<FullScreen>();
+                if (!p.alt || !p.alt->ok()) {
+                    heap_delete(p.alt);
+                    p.alt  = nullptr;
+                    status = -i32(Error::NoMemory);
+                    break;
+                }
+            }
+
+            u8 head[8];
+            sys_put_u32(head, screen().cols);
+            sys_put_u32(head + 4, screen().rows);
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
+        case Sys::KeyRead: {
+            if (!p.keys) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            Result<Key> r = Err(Error::Again);
+            while (r.is_err() && r.error() == Error::Again)
+                r = co_await p.keys->next();
+            if (r.is_err())
+                co_return Err(Error::Cancelled);
+
+            // The geometry rides on every key, so a program that repaints per
+            // keystroke handles a resize without an event to subscribe to.
+            u8 head[16];
+            sys_put_u32(head, r.value().code);
+            sys_put_u32(head + 4, r.value().mods);
+            sys_put_u32(head + 8, screen().cols);
+            sys_put_u32(head + 12, screen().rows);
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
+        case Sys::ScreenBlit: {
+            usize head = SYS_BLIT_HEAD * 4;
+            if (payload.size() < head) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u32 x = sys_get_u32(c.stage), y = sys_get_u32(c.stage + 4);
+            u32 w = sys_get_u32(c.stage + 8), h = sys_get_u32(c.stage + 12);
+            Cell *cells = screen_cells();
+            if (!cells || u64(x) + w > screen().cols || u64(y) + h > screen().rows ||
+                payload.size() != head + usize(w) * h * sizeof(Cell)) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+
+            const Cell *from = reinterpret_cast<const Cell *>(c.stage + head);
+            for (u32 row = 0; row < h; row++)
+                __builtin_memcpy(cells + (y + row) * screen().cols + x, from + row * w,
+                                 usize(w) * sizeof(Cell));
+            if (w && h)
+                screen_touch(x, y, w, h);
+            screen_move(sys_get_u32(c.stage + 16), sys_get_u32(c.stage + 20));
+            screen_cursor(sys_get_u32(c.stage + 24) != 0);
+            status = 0;
+            break;
+        }
+
+        case Sys::ScreenClear:
+            screen_clear();
+            status = 0;
+            break;
 
         default:
             break;
@@ -309,6 +878,41 @@ Task<Result<String>> proc_syscall(Proc &p)
 
     sys_put_u32(reinterpret_cast<u8 *>(reply.data()), u32(status));
     co_return move(reply);
+}
+
+// One syscall, performed in a job of its own, reporting back to the stepper.
+// The Call stays the process's: this frame may be destroyed while suspended,
+// and freeing from here would leave the process holding a dangling pointer.
+Task<i32> serve(Proc *p, Call *c)
+{
+    Task<Result<String>> t = proc_syscall(*p, *c);
+    Result<String> r       = t ? co_await t : Err(Error::NoMemory);
+
+    Reply rep;
+    rep.token = c->token;
+    if (r.is_ok()) {
+        rep.payload = move(r.value());
+    } else {
+        // Cancelled means the process is going anyway, and nobody is left to
+        // hear; any other error is the answer.
+        if (r.error() == Error::Cancelled)
+            co_return 1;
+        u8 head[4];
+        sys_put_u32(head, u32(-i32(r.error())));
+        if (!rep.payload.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+            co_return 1;
+    }
+
+    for (usize i = 0; i < p->calls.size(); i++)
+        if (p->calls[i] == c) {
+            p->calls.erase(i);
+            break;
+        }
+    heap_delete(c);
+
+    // The box has more slots than a process has tasks, so this never parks.
+    p->done.try_send(move(rep));
+    co_return 0;
 }
 
 } // namespace
@@ -346,20 +950,20 @@ Result<ProcMeta> exec_meta(Str image)
 
 Task<Result<void>> exec_resolve(Str name, Executable &out)
 {
-    if (const Program *p = program_find(name)) {
-        out.tier   = Tier::Applet;
-        out.applet = p;
+    // A builtin shadows everything: `cd` is the shell's, whatever a file of
+    // that name in /bin might claim.
+    if (const Builtin *b = builtin_find(name)) {
+        out.builtin = b;
         co_return {};
     }
     if (name.empty())
         co_return Err(Error::NotFound);
 
-    // A name with a slash is a path; a bare name is looked for in /usr/bin,
-    // which is where the bundle puts the binaries. There is no PATH variable
-    // yet, and one directory is not a search path.
+    // A name with a slash is a path; a bare name is looked for in /bin, which
+    // is where the bundle puts the binaries. There is no PATH variable yet, and
+    // one directory is not a search path.
     String path;
-    bool ok =
-        name.contains("/") ? path.assign(name) : path.assign("/usr/bin/") && path.append(name);
+    bool ok = name.contains("/") ? path.assign(name) : path.assign("/bin/") && path.append(name);
     if (!ok)
         co_return Err(Error::NoMemory);
 
@@ -402,6 +1006,12 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io)
     struct End {
         ~End()
         {
+            // Every server goes with the process. A request nobody will answer
+            // would otherwise leak its record for the life of the page, and
+            // there is one per parked task rather than one per process now.
+            for (Call *c : p->calls)
+                if (c->server)
+                    sched_cancel(c->server);
             if (spawned)
                 proc_kill(p->pid);
             proc_remove(p);
@@ -434,8 +1044,14 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io)
         payload.push(0);
     argv_encode(args.v.data(), args.size(), reinterpret_cast<u8 *>(payload.data()));
 
+    // The stepper. It never performs a syscall itself: each one gets a
+    // scheduler job of its own, because a process with two tasks can be parked
+    // on a socket that never answers and on a keystroke at the same time, and
+    // serving them in turn would mean the second waited on the first.
+    u32 token   = 0; // 0 is _start, which answers nothing
+    usize alive = 0; // servers still running
     for (;;) {
-        Task<Result<ProcStep>> step = proc_step(p->pid, payload.str());
+        Task<Result<ProcStep>> step = proc_step(p->pid, token, payload.str());
         if (!step)
             co_return 1;
         Result<ProcStep> s = co_await step;
@@ -449,20 +1065,32 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io)
                 co_await t2;
             co_return 132;
         }
-        if (!p->pending) {
+
+        // One step can park more than one task: resuming the root may start a
+        // second and leave both waiting.
+        for (Call *c : p->calls) {
+            if (c->server)
+                continue;
+            c->server = sched_spawn(serve(p, c), exe.path.str());
+            if (!c->server)
+                co_return 1;
+            alive++;
+        }
+
+        if (!alive) {
             if (Task<void> t2 = say(io.err, exe.path.str(), "suspended with nothing pending"))
                 co_await t2;
             co_return 1;
         }
-        p->pending = false;
 
-        Task<Result<String>> call = proc_syscall(*p);
-        if (!call)
-            co_return 1;
-        Result<String> reply = co_await call;
-        if (reply.is_err())
-            co_return reply.error() == Error::Cancelled ? 130 : 1;
-        payload = move(reply.value());
+        Result<Reply> r = Err(Error::Again);
+        while (r.is_err() && r.error() == Error::Again)
+            r = co_await p->done.recv();
+        if (r.is_err())
+            co_return r.error() == Error::Cancelled ? 130 : 1;
+        alive--;
+        token   = r.value().token;
+        payload = move(r.value().payload);
     }
 }
 
@@ -487,15 +1115,24 @@ i32 exec_sys(u32 pid, u32 op, u32 a0, u32, u32)
     }
 }
 
-// The token is not recorded: it is the process's, the host keeps it for the
-// _resume that answers, and a process has one outstanding call at a time.
-i32 exec_sys_async(u32 pid, u32 op, u32, u32 len)
+// The token *is* recorded, unlike M8: a process may have several calls parked
+// at once, so the kernel names the one it is answering when it steps rather
+// than the host remembering the last.
+i32 exec_sys_async(u32 pid, u32 op, u32 token, u32 len)
 {
     Proc *p = proc_find(pid);
     if (!p)
         return -i32(Error::NotFound);
-    p->op      = op;
-    p->len     = len;
-    p->pending = true;
+
+    Call *c = proc_staging(*p);
+    if (!c || !p->calls.push(c)) {
+        heap_delete(p->staging);
+        p->staging = nullptr;
+        return -i32(Error::NoMemory);
+    }
+    c->op      = op;
+    c->len     = len;
+    c->token   = token;
+    p->staging = nullptr;
     return 0;
 }

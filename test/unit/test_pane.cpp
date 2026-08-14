@@ -1,18 +1,33 @@
 #include "harness.h"
-#include "kernel/screen.h"
-#include "ui/full.h"
+#include "kernel/alloc.h"
 #include "ui/pane.h"
+
+// A Pane writes into a Grid, and the Grid is the test's own: since the layout
+// layer became a library both the kernel and a binary link (Concept.md §4.3),
+// it has no screen to reach for, which is what made it linkable at all.
 
 namespace {
 
+Grid g;
+Cell storage[8 * 4];
+
+void grid(u32 cols, u32 rows)
+{
+    g = Grid{};
+    __builtin_memset(storage, 0, sizeof(storage));
+    g.cells = storage;
+    g.cols  = cols;
+    g.rows  = rows;
+}
+
 char32_t at(u32 x, u32 y)
 {
-    return screen_cells()[y * screen().cols + x].ch;
+    return g.cells[y * g.cols + x].ch;
 }
 
 const Cell &cell(u32 x, u32 y)
 {
-    return screen_cells()[y * screen().cols + x];
+    return g.cells[y * g.cols + x];
 }
 
 } // namespace
@@ -21,19 +36,17 @@ void test_pane()
 {
     test_begin("pane");
 
-    screen_reset();
-    CHECK(screen_resize(8, 4) != 0);
+    grid(8, 4);
 
     // A pane writes in its own coordinates and damages what it wrote.
-    screen_flush();
-    Pane p(2, 1, 4, 2);
+    Pane p(g, 2, 1, 4, 2);
     CHECK_EQ(p.width(), 4);
     CHECK_EQ(p.height(), 2);
     p.write_at(0, 0, "ab");
     CHECK_EQ(at(2, 1), 'a');
     CHECK_EQ(at(3, 1), 'b');
 
-    Rect d = screen_damage();
+    Rect d = g.take_damage();
     CHECK_EQ(d.x, 2);
     CHECK_EQ(d.y, 1);
     CHECK_EQ(d.w, 2);
@@ -70,51 +83,40 @@ void test_pane()
     CHECK_EQ(at(4, 1), 'Q');
     CHECK_EQ(at(5, 1), 'Q');
 
-    // bottom() is what a status line is made of.
-    Pane root = Pane::root();
+    // top() and bottom() are what a body and a status line are made of.
+    Pane root = Pane::of(g);
     CHECK_EQ(root.width(), 8);
+    CHECK_EQ(root.top(3).height(), 3);
     Pane bar = root.bottom(1);
     bar.write_at(0, 0, "s");
     CHECK_EQ(at(0, 3), 's');
 
-    // The cursor lands in pane coordinates, clamped to the pane.
+    // The cursor lands in pane coordinates, clamped to the pane, and on the
+    // grid rather than on a screen: who acts on it is the caller's business.
     p.place_cursor(1, 0);
-    CHECK_EQ(screen().cursor_x, 3);
-    CHECK_EQ(screen().cursor_y, 1);
+    CHECK_EQ(g.cursor_x, 3);
+    CHECK_EQ(g.cursor_y, 1);
     p.place_cursor(99, 99);
-    CHECK_EQ(screen().cursor_x, 5);
-    CHECK_EQ(screen().cursor_y, 2);
+    CHECK_EQ(g.cursor_x, 5);
+    CHECK_EQ(g.cursor_y, 2);
 
-    // A full screen is saved and given back, cell for cell.
-    screen_reset();
-    CHECK(screen_resize(4, 2) != 0);
-    screen_write("hi");
-    screen_move(1, 0);
-    screen_cursor(true);
-    {
-        FullScreen fs;
-        CHECK(fs.ok());
-        CHECK_EQ(at(0, 0), 0); // blanked for the program that took it
-        CHECK_EQ(screen().cursor_on, 0);
-        CHECK_EQ(fs.body().height(), 1);
-        CHECK_EQ(fs.status().height(), 1);
-        fs.body().write_at(0, 0, "XY");
-        CHECK_EQ(at(0, 0), 'X');
-    }
-    CHECK_EQ(at(0, 0), 'h');
-    CHECK_EQ(at(1, 0), 'i');
-    CHECK_EQ(screen().cursor_x, 1);
-    CHECK_EQ(screen().cursor_on, 1);
+    // Damage accumulates as one rectangle over every write since the last
+    // time it was taken, which is what a full repaint sends in one blit.
+    grid(8, 4);
+    Pane q = Pane::of(g);
+    q.write_at(1, 1, "a");
+    q.write_at(6, 3, "b");
+    Rect all = g.take_damage();
+    CHECK_EQ(all.x, 1);
+    CHECK_EQ(all.y, 1);
+    CHECK_EQ(all.w, 6);
+    CHECK_EQ(all.h, 3);
+    CHECK_EQ(g.take_damage().w, 0); // taken once
 
-    // A resize under a full-screen program throws the snapshot away rather
-    // than restoring cells that describe a grid which no longer exists.
-    {
-        FullScreen fs;
-        CHECK(fs.ok());
-        CHECK(screen_resize(6, 3) != 0);
-    }
-    CHECK_EQ(at(0, 0), 0);
-    CHECK_EQ(screen().cols, 6);
-
-    screen_reset();
+    // A pane with no grid behind it is empty rather than a null dereference.
+    Pane none;
+    none.write_at(0, 0, "x");
+    none.place_cursor(0, 0);
+    CHECK_EQ(none.width(), 0);
+    CHECK_EQ(none.sub(0, 0, 1, 1).width(), 0);
 }

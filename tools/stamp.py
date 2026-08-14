@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 MAGIC = 0x6D617262  # "bram"
-ABI = 1
+ABI = 2
 NAME = b"braam"
 
 

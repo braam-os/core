@@ -48,16 +48,14 @@ add_subdirectory(src/fs)
 add_subdirectory(src/svc)
 add_subdirectory(src/ui)
 add_subdirectory(src/user)
-add_subdirectory(src/prog)
 add_subdirectory(src/proc)
-add_subdirectory(src/bin)
+add_subdirectory(src/cmd)
 
 # kernel.wasm — main.cpp holds the exports, so it links into the executable
-# directly; --gc-sections would not pull it out of an archive. The same is true
-# of src/prog, which is why it is an OBJECT library.
+# directly; --gc-sections would not pull it out of an archive.
 add_executable(kernel src/kernel/main.cpp)
 target_link_libraries(kernel PRIVATE
-    braam_prog braam_user braam_fs braam_svc braam_ui braam_core braam_flags)
+    braam_user braam_fs braam_svc braam_core braam_flags)
 
 # bundle/ is packed rather than copied: BundleFs reads one archive, so the
 # worker loads one file instead of fetching a tree file by file. The process
@@ -79,7 +77,7 @@ endforeach()
 set(BRAAM_SIZE_BUDGET_CHECK
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
     --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt
-    $<TARGET_FILE:kernel> ${BRAAM_BINARIES})
+    $<TARGET_FILE:kernel> ${BRAAM_BINARIES} ${CMAKE_BINARY_DIR}/web/bundle.bin)
 
 # Only the kernel here: the binaries are checked by their own POST_BUILD, and
 # BRAAM_SIZE_BUDGET_CHECK covers everything from the `size` test.

@@ -28,24 +28,312 @@ Task<Result<String>> read_chunk(u32 fd)
     co_return move(s);
 }
 
-Task<Result<i32>> open_read(Str path)
+Task<Result<i32>> open_at(Str path, u32 flags)
 {
-    String req;
-    if (!req.reserve(4 + path.size()))
-        co_return Err(Error::NoMemory);
-    req.append(Str("\0\0\0\0", 4));
-    req.append(path);
-    sys_put_u32(reinterpret_cast<u8 *>(req.data()), SYS_O_READ);
-
-    Result<SysReply> r = co_await sys_call(Sys::Open, 0, req.str());
+    Result<SysReply> r = co_await sys_call(Sys::Open, flags, path);
     if (r.is_err())
         co_return Err(r.error());
     co_return r.value().status;
 }
 
+Task<Result<i32>> open_read(Str path)
+{
+    co_return co_await open_at(path, SYS_O_READ);
+}
+
 Task<void> close_fd(u32 fd)
 {
     co_await sys_call(Sys::Close, fd);
+}
+
+Task<Result<String>> read_file(Str path)
+{
+    Task<Result<i32>> o = open_read(path);
+    if (!o)
+        co_return Err(Error::NoMemory);
+    Result<i32> fd = co_await o;
+    if (fd.is_err())
+        co_return Err(fd.error());
+
+    String out;
+    Result<void> bad = {};
+    for (;;) {
+        Task<Result<String>> t = read_chunk(u32(fd.value()));
+        if (!t) {
+            bad = Err(Error::NoMemory);
+            break;
+        }
+        Result<String> r = co_await t;
+        if (r.is_err()) {
+            if (r.error() != Error::Closed)
+                bad = Err(r.error());
+            break;
+        }
+        if (!out.append(r.value().str())) {
+            bad = Err(Error::NoMemory);
+            break;
+        }
+    }
+
+    if (Task<void> c = close_fd(u32(fd.value())))
+        co_await c;
+    if (bad.is_err())
+        co_return Err(bad.error());
+    co_return move(out);
+}
+
+bool next_line(Str &rest, Str &line)
+{
+    if (rest.empty())
+        return false;
+    usize end = rest.find('\n');
+    if (end == Str::npos) {
+        line = rest;
+        rest = Str();
+        return true;
+    }
+    line = rest.substr(0, end);
+    rest = rest.substr(end + 1);
+    return true;
+}
+
+Str next_field(Str &line)
+{
+    usize at = 0;
+    while (at < line.size() && line[at] == ' ')
+        at++;
+    usize end = at;
+    while (end < line.size() && line[end] != ' ')
+        end++;
+    Str out = line.substr(at, end - at);
+    line    = line.substr(end);
+    return out;
+}
+
+namespace {
+
+u64 wide(const u8 *p)
+{
+    return u64(sys_get_u32(p)) | (u64(sys_get_u32(p + 4)) << 32);
+}
+
+} // namespace
+
+Task<Result<FileInfo>> stat_of(Str path)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Stat, 0, path);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 12)
+        co_return Err(Error::Io);
+
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return FileInfo{ sys_get_u32(p), wide(p + 4) };
+}
+
+Task<Result<Vec<DirEntry>>> list_dir(Str path)
+{
+    Result<SysReply> r = co_await sys_call(Sys::List, 0, path);
+    if (r.is_err())
+        co_return Err(r.error());
+
+    Str data = r.value().data;
+    if (data.size() < 4)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(data.data());
+    usize n     = sys_get_u32(p);
+    usize at    = 4;
+
+    Vec<DirEntry> out;
+    for (usize i = 0; i < n; i++) {
+        if (at + 16 > data.size())
+            co_return Err(Error::Io);
+        DirEntry e;
+        e.kind      = sys_get_u32(p + at);
+        e.size      = wide(p + at + 4);
+        usize len   = sys_get_u32(p + at + 12);
+        at += 16;
+        if (at + len > data.size())
+            co_return Err(Error::Io);
+        if (!e.name.assign(Str(data.data() + at, len)) || !out.push(move(e)))
+            co_return Err(Error::NoMemory);
+        at += len;
+    }
+    co_return move(out);
+}
+
+Task<Result<void>> make_dir(Str path)
+{
+    Result<SysReply> r = co_await sys_call(Sys::MkDir, 0, path);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+Task<Result<void>> remove_path(Str path, bool all)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Remove, all ? 1 : 0, path);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+Task<Result<void>> sleep_for(u32 ms)
+{
+    u8 head[4];
+    sys_put_u32(head, ms);
+    Result<SysReply> r =
+        co_await sys_call(Sys::Sleep, 0, Str(reinterpret_cast<const char *>(head), sizeof(head)));
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+Task<Result<Clock>> clock_now()
+{
+    Result<SysReply> r = co_await sys_call(Sys::Clock, 0);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 12)
+        co_return Err(Error::Io);
+
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return Clock{ wide(p), i32(sys_get_u32(p + 8)) };
+}
+
+Task<Result<StorageInfo>> storage_of()
+{
+    Result<SysReply> r = co_await sys_call(Sys::Storage, 0);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 20)
+        co_return Err(Error::Io);
+
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    u32 flags   = sys_get_u32(p + 16);
+    StorageInfo out;
+    out.quota     = wide(p);
+    out.usage     = wide(p + 8);
+    out.opfs      = flags & SYS_STORE_OPFS;
+    out.sync      = flags & SYS_STORE_SYNC;
+    out.persisted = flags & SYS_STORE_PERSISTED;
+    out.known     = flags & SYS_STORE_KNOWN;
+    co_return out;
+}
+
+namespace {
+
+// A payload of `u32 length, the first string, the second` — what Fetch and
+// Save both take, since neither can be told where one ends otherwise.
+bool pack_pair(String &out, Str first, Str second)
+{
+    u8 head[4];
+    sys_put_u32(head, u32(first.size()));
+    return out.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) &&
+           out.append(first) && out.append(second);
+}
+
+} // namespace
+
+Task<Result<Fetched>> fetch_url(Str url, Str spec)
+{
+    String req;
+    if (!pack_pair(req, url, spec))
+        co_return Err(Error::NoMemory);
+
+    Result<SysReply> r = co_await sys_call(Sys::Fetch, 0, req.str());
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 4)
+        co_return Err(Error::Io);
+
+    Fetched out;
+    out.body   = r.value().status;
+    out.status = sys_get_u32(reinterpret_cast<const u8 *>(r.value().data.data()));
+    if (!out.headers.assign(r.value().data.substr(4)))
+        co_return Err(Error::NoMemory);
+    co_return move(out);
+}
+
+Task<Result<i32>> ws_connect(Str url)
+{
+    Result<SysReply> r = co_await sys_call(Sys::WsOpen, 0, url);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return r.value().status;
+}
+
+Task<Result<String>> clip_get(bool wait)
+{
+    Result<SysReply> r = co_await sys_call(Sys::ClipRead, wait ? 1 : 0);
+    if (r.is_err())
+        co_return Err(r.error());
+
+    String s;
+    if (!s.assign(r.value().data))
+        co_return Err(Error::NoMemory);
+    co_return move(s);
+}
+
+Task<Result<void>> clip_put(Str text)
+{
+    Result<SysReply> r = co_await sys_call(Sys::ClipWrite, 0, text);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+Task<Result<Chosen>> pick()
+{
+    Result<SysReply> r = co_await sys_call(Sys::Pick, 0);
+    if (r.is_err())
+        co_return Err(r.error());
+
+    Str data = r.value().data;
+    if (data.size() < 4)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(data.data());
+
+    Chosen out;
+    out.set  = r.value().status;
+    usize n  = sys_get_u32(p);
+    usize at = 4;
+    for (usize i = 0; i < n; i++) {
+        if (at + 4 > data.size())
+            co_return Err(Error::Io);
+        usize len = sys_get_u32(p + at);
+        at += 4;
+        if (at + len > data.size())
+            co_return Err(Error::Io);
+        String name;
+        if (!name.assign(Str(data.data() + at, len)) || !out.names.push(move(name)))
+            co_return Err(Error::NoMemory);
+        at += len;
+    }
+    co_return move(out);
+}
+
+Task<Result<i32>> pick_open(const Chosen &c, usize index)
+{
+    u8 head[4];
+    sys_put_u32(head, u32(index));
+    Result<SysReply> r = co_await sys_call(Sys::PickOpen, u32(c.set),
+                                           Str(reinterpret_cast<const char *>(head), sizeof(head)));
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return r.value().status;
+}
+
+Task<Result<void>> save(Str name, Str bytes)
+{
+    String req;
+    if (!pack_pair(req, name, bytes))
+        co_return Err(Error::NoMemory);
+
+    Result<SysReply> r = co_await sys_call(Sys::Save, 0, req.str());
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
 }
 
 Task<void> errln(Str who, Str what, Error why)

@@ -11,11 +11,12 @@
 #include "str.h"
 #include "types.h"
 
-// Isolation tiers (Concept.md §4). Tier 1 is an in-kernel coroutine and never
-// appears in a binary; tier 3 is a worker of its own, and a binary asking for
-// it runs at tier 2 where the host cannot make one.
+// Isolation tiers (Concept.md §4). Tier 1 was the in-kernel applet and is
+// retired: every program is a binary now, and `exec` refuses one that claims
+// it. The number is kept rather than reused, so a binary stamped by an older
+// build is a diagnostic rather than a wrong answer.
 enum class Tier : u8 {
-    Applet = 1,
+    Retired = 1,
     Instance,
     Worker,
 };
@@ -34,7 +35,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 1;
+constexpr u32 PROC_ABI       = 2;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -67,6 +68,10 @@ inline Tier proc_tier(u32 flags)
 // Syscalls. The synchronous half answers inside the export and never parks;
 // the asynchronous half records a request the process's proxy task performs,
 // and its reply reaches the process through _resume.
+//
+// The synchronous half is closed: tier 3 answers all four inside the process's
+// own worker, with no kernel to ask (Concept.md §4.3), so an operation that
+// needs the kernel has to be asynchronous whatever it costs.
 enum class Sys : u32 {
     // sys(op, a0, a1, a2) -> i32
     Exit = 1, // a0 = exit status
@@ -76,17 +81,81 @@ enum class Sys : u32 {
 
     // sys_async(op, token, ptr, len). The reply payload is an i32 status
     // followed by any data: _resume's signature has no room for both. The op
-    // word carries the descriptor in its upper bits, so a write hands over the
-    // bytes themselves rather than a copy with a header glued on the front.
-    Write = 16, // fd in the op; payload = the bytes;  status = bytes written
-    Read,       // fd in the op;                       data = the chunk, empty at end
-    Open,       // payload = u32 flags, then the path; status = the fd
-    Close,      // fd in the op
+    // word's upper bits are the operation's argument — a descriptor, or one
+    // small immediate — so a write hands over the bytes themselves rather than
+    // a copy with a header glued on the front.
+    //
+    // Descriptors and the names they come from. A number one process holds
+    // means nothing in another: it indexes that process's own table.
+    Write = 16, // arg = fd;             payload = the bytes;  status = bytes written
+    Read,       // arg = fd;                                   data = the chunk, empty at end
+    Open,       // arg = SYS_O_* flags;  payload = the path;   status = the fd
+    Close,      // arg = fd
+    Stat,       // payload = the path;   data = u32 kind, u64 size
+    List,       // payload = the path;   data = u32 count, then that many entries
+    MkDir,      // payload = the path
+    Remove,     // arg bit 0 = recursive; payload = the path
+
+    // Time. The timer queue is the kernel's, and Sys::Now is monotonic and
+    // says nothing about a day, so both of these have to be asked for.
+    Sleep = 32, // payload = u32 milliseconds
+
+    // Host services. Anything the kernel already publishes as text under /proc
+    // is read with Open and Read instead — `mount` and `pwd` need no operation
+    // of their own, and a syscall nothing calls is an ABI nothing tests.
+    // Anything that is a stream of bytes comes back as a descriptor, so Read,
+    // Write and Close serve it and no operation is duplicated: a fetched body
+    // is read like a file, a socket is written like one, and a killed process
+    // drops all of them when its handle table goes.
+    Clock = 48, // data = u64 epoch_ms, i32 tz_min
+    Storage,    // data = u64 quota, u64 usage, u32 flags
+    Fetch,      // payload = u32 url_len, the url, the spec
+                //   status = the body's fd; data = u32 http status, the headers
+    WsOpen,     // payload = the url; status = the socket's fd
+    ClipRead,   // arg bit 0 = wait for a paste instead;  data = the text
+    ClipWrite,  // payload = the text
+    Pick,       // status = the set's fd;  data = u32 count, then a name each
+    PickOpen,   // arg = the set's fd; payload = u32 index; status = the file's fd
+    Save,       // payload = u32 name_len, the name, the bytes
+
+    // The terminal. Cells, never a byte stream (§2.3), so a full-screen
+    // program paints a grid of its own and blits the part of it that changed.
+    // Both claims are held by the *kernel*, on the process's record: a killed
+    // process runs no destructor, and the screen and the keyboard have to come
+    // back anyway.
+    KeyClaim = 64, // arg bit 0 = take, else give back;  data = u32 cols, u32 rows
+    KeyRead,       // data = u32 code, u32 mods, u32 cols, u32 rows
+    ScreenEnter,   // arg bit 0 = the alternate screen, else back; data = cols, rows
+    ScreenBlit,    // payload = u32 x, y, w, h, cursor_x, cursor_y, cursor_on, then w*h Cells
+    ScreenClear,   // blank the shell's screen and home its cursor
 };
 
-inline u32 sys_op(Sys op, u32 fd = 0)
+// The header ScreenBlit's payload begins with, in u32s.
+constexpr usize SYS_BLIT_HEAD = 7;
+
+// The most a blit may carry, which is the largest grid there can be. Sys::Stage
+// is capped at the same number: a process asks the host for room before it
+// sends, and an uncapped ask is an allocation a hostile binary chooses.
+constexpr u32 SYS_STAGE_MAX = 1u << 20;
+
+// One entry of Sys::List's reply: u32 kind, u64 size, u32 name_len, the name.
+// Restated here rather than shared with fs.h, for the reason SYS_O_* is: a
+// process cannot see the VFS, and the numbers a binary compiled today speaks
+// must not move because the filesystem's did.
+constexpr u32 SYS_KIND_FILE = 0;
+constexpr u32 SYS_KIND_DIR  = 1;
+
+// The flags word Sys::Storage answers with (Concept.md §5.3).
+enum : u32 {
+    SYS_STORE_OPFS      = 1,
+    SYS_STORE_SYNC      = 2,
+    SYS_STORE_PERSISTED = 4,
+    SYS_STORE_KNOWN     = 8, // the host answered at all
+};
+
+inline u32 sys_op(Sys op, u32 arg = 0)
 {
-    return u32(op) | (fd << 8);
+    return u32(op) | (arg << 8);
 }
 
 inline Sys sys_op_code(u32 op)
@@ -94,9 +163,15 @@ inline Sys sys_op_code(u32 op)
     return Sys(op & 0xff);
 }
 
-inline u32 sys_op_fd(u32 op)
+inline u32 sys_op_arg(u32 op)
 {
     return op >> 8;
+}
+
+// The same field, named for what it holds at the descriptor operations.
+inline u32 sys_op_fd(u32 op)
+{
+    return sys_op_arg(op);
 }
 
 // The three stdio descriptors are the stage's Stdio; anything above indexes

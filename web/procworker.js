@@ -30,9 +30,9 @@ self.onmessage = ({ data }) => {
     }
 
     ops.begin(data.now);
-    const out = server.step(new Uint8Array(data.payload));
-    const { exit, call } = ops.end();
-    self.postMessage({ k: "step", ...out, exit, call }, call ? [call.payload] : []);
+    const out = server.step(data.token, new Uint8Array(data.payload));
+    const { exit, calls } = ops.end();
+    self.postMessage({ k: "step", ...out, exit, calls }, calls.map((c) => c.payload));
 };
 
 self.postMessage({ k: "ready" });

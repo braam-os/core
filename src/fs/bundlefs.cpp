@@ -37,7 +37,10 @@ Result<BundleFs *> bundlefs_create(String archive)
     BundleFs *fs = heap_new<BundleFs>();
     if (!fs)
         return Err(Error::NoMemory);
-    if (!fs->files_.reserve(count)) {
+    fs->blob_ = heap_new<BundleFs::Blob>();
+    if (fs->blob_)
+        fs->blob_->refs = 1; // before anything can fail and destroy fs
+    if (!fs->blob_ || !fs->files_.reserve(count)) {
         heap_delete(fs);
         return Err(Error::NoMemory);
     }
@@ -54,12 +57,42 @@ Result<BundleFs *> bundlefs_create(String archive)
             return Err(Error::Invalid);
         }
         fs->files_.push(BundleFs::File{ Str(p + name_off, name_len), data_off, size });
+        fs->bytes_ += size;
     }
 
     // The names view the archive, so it has to move in after they are built
     // and never be touched again.
-    fs->archive_ = move(archive);
+    fs->blob_->bytes = move(archive);
     return fs;
+}
+
+Result<BundleFs *> bundlefs_at(BundleFs &owner, Str root)
+{
+    BundleFs *fs = heap_new<BundleFs>();
+    if (!fs)
+        return Err(Error::NoMemory);
+
+    for (const BundleFs::File &f : owner.files_) {
+        if (!f.name.starts_with(root) || f.name.size() <= root.size() ||
+            f.name[root.size()] != '/')
+            continue;
+        BundleFs::File sub{ f.name.substr(root.size() + 1), f.off, f.len };
+        if (!fs->files_.push(sub)) {
+            heap_delete(fs);
+            return Err(Error::NoMemory);
+        }
+        fs->bytes_ += f.len;
+    }
+
+    fs->blob_ = owner.blob_;
+    fs->blob_->refs++;
+    return fs;
+}
+
+BundleFs::~BundleFs()
+{
+    if (blob_ && --blob_->refs == 0)
+        heap_delete(blob_);
 }
 
 usize BundleFs::find(Str path) const
@@ -164,7 +197,7 @@ Result<usize> BundleFs::read(u32 h, u64 off, u8 *buf, usize n)
 
     usize at = usize(off);
     usize k  = min(n, usize(f.len) - at);
-    __builtin_memcpy(buf, archive_.data() + f.off + at, k);
+    __builtin_memcpy(buf, blob_->bytes.data() + f.off + at, k);
     return k;
 }
 
@@ -191,7 +224,9 @@ void BundleFs::close(u32 h)
         open_[h] = -1;
 }
 
+// What this view holds, not what the archive weighs: two views of one bundle
+// each report their own files, so `df` adds up rather than double-counting.
 u64 BundleFs::bytes() const
 {
-    return archive_.size();
+    return bytes_;
 }

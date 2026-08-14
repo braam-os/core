@@ -161,7 +161,7 @@ if (mode === "--kernel") {
     // the whole of "a process cannot issue a syscall on behalf of another".
     // A tier is the binary's claim and nothing more: the surface is the same
     // one at either, which is what lets `exec` pick without userland noticing.
-    const want_tier = { "spin.wasm": 3 };
+    const want_tier = { "spin.wasm": 3, "tail.wasm": 3 };
 
     for (const binary of binaries) {
         const bin = new WebAssembly.Module(readFileSync(binary));
@@ -170,9 +170,15 @@ if (mode === "--kernel") {
         const got_bin_imports = names(WebAssembly.Module.imports(bin));
         const got_bin_exports = names(WebAssembly.Module.exports(bin));
 
-        if (got_bin_imports.join() !== want_bin_imports.join())
-            fail(`${basename(binary)} imports [${got_bin_imports}], expected ` +
-                 `[${want_bin_imports}]`);
+        // A subset, not the whole list: `true` never makes an asynchronous
+        // syscall, so it does not import sys_async at all. What is asserted is
+        // that nothing *else* is imported — a host import in a binary would
+        // mean the process ABI had been gone around.
+        for (const name of got_bin_imports)
+            if (!want_bin_imports.includes(name))
+                fail(`${basename(binary)} imports ${name}, which is not the process ABI`);
+        if (!got_bin_imports.includes("env.memory"))
+            fail(`${basename(binary)} does not import env.memory`);
         if (got_bin_exports.join() !== want_bin_exports.join())
             fail(`${basename(binary)} exports [${got_bin_exports}], expected ` +
                  `[${want_bin_exports}]`);
@@ -183,7 +189,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 1)
+        if (m[0] !== 0x6d617262 || m[1] !== 2)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         const tier = want_tier[basename(binary)] || 2;
         if (m[2] !== tier)
@@ -338,18 +344,18 @@ if (mode === "--kernel") {
         fail(`an oversized resize gave ${s.cols}x${s.rows}`);
 
     // M4, first criterion: a pipeline, in the shipping kernel. /bin is the
-    // program registry as a filesystem, and grep filters the listing, both
-    // running at once over a bounded pipe. `clear` first, so the rows below
-    // are the pipeline's and nothing else's.
+    // bundle's binaries, and grep filters the listing, both running at once
+    // over a bounded pipe. `clear` first, so the rows below are the
+    // pipeline's and nothing else's.
     addr = instance.exports.resize(60, 16);
     if (addr === 0)
         fail("the resize before the pipeline failed");
     press("c".codePointAt(0), CTRL); // the "hi" typed above is still pending
     s = submit("clear", 1130);
-    s = submit("ls /bin | grep hel", 1140);
+    s = submit("ls /bin | grep ta", 1140);
     const listed = rows(s).filter((line) => line && !line.includes("$"));
-    if (listed.join() !== "help")
-        fail(`ls /bin | grep hel printed ${JSON.stringify(listed)}, expected ["help"]`);
+    if (listed.join() !== "tail")
+        fail(`ls /bin | grep ta printed ${JSON.stringify(listed)}, expected ["tail"]`);
     if (row(s, s.cursor_y) !== "$")
         fail(`a pipeline that matched left ${row(s, s.cursor_y)}, expected $`);
 
@@ -379,11 +385,54 @@ if (mode === "--kernel") {
         fail(`cat notes printed ${JSON.stringify(notes)}, expected one,two`);
 
     // A redirection that cannot be opened stops the command before it runs.
-    s = submit("echo hi > /bin/echo", 1174);
-    if (!rows(s).some((line) => line.startsWith("braam: /bin/echo: ")))
+    s = submit("echo hi > /bin/wc", 1174);
+    if (!rows(s).some((line) => line.startsWith("braam: /bin/wc: ")))
         fail(`a read-only redirection said nothing: ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes("[1] $"))
         fail(`a refused redirection left ${row(s, s.cursor_y)}, expected [1] $`);
+
+    // Coverage that used to live in test_shell, moved here when its programs
+    // became binaries: a filter stopping early, a three-stage pipeline, and
+    // typing into a running job's stdin with ^D as end of input.
+    s = submit("clear", 1174.1);
+    submit("mkdir /home/d", 1174.2);
+    submit("touch /home/d/a /home/d/b /home/d/c", 1174.3);
+    s = submit("clear", 1174.4);
+    s = submit("ls /home/d | head -n 2", 1174.5);
+    const cut = rows(s).filter((line) => line && !line.includes("$"));
+    if (cut.join(",") !== "a,b")
+        fail(`head did not stop the producer: ${JSON.stringify(cut)}`);
+
+    s = submit("clear", 1174.6);
+    s = submit("ls /home/d | grep b | head -n 1", 1174.7);
+    const three = rows(s).filter((line) => line && !line.includes("$"));
+    if (three.join(",") !== "b")
+        fail(`a three-stage pipeline printed ${JSON.stringify(three)}`);
+
+    // stdin is the pump's other job: what is typed reaches a running program,
+    // echoed once by the pump and printed again by cat, and ^D ends the input.
+    s = submit("clear", 1174.8);
+    type("cat");
+    press(KEY.ENTER);
+    run(1174.9);
+    // Longer than the input pipe has slots, which is the point: the pump sends
+    // a cooked line as one chunk, and used to send one per keystroke and drop
+    // the rest of the line once the eight slots were full. An applet drained
+    // the pipe in the same tick and never showed it; a process reads one
+    // syscall at a time and always would.
+    type("a longer line than eight");
+    press(KEY.ENTER);
+    run(1175.0);
+    s = descriptor(addr);
+    if (rows(s).filter((line) => line === "a longer line than eight").length !== 2)
+        fail(`typing into cat printed ${JSON.stringify(rows(s))}, expected it twice`);
+    press("d".codePointAt(0), CTRL);
+    run(1175.1);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`^D did not end cat's input: ${JSON.stringify(rows(s))}`);
+
+    submit("rm -r /home/d", 1175.2);
 
     // `<` and `2>` both reach the filesystem too.
     s = submit("clear", 1175);
@@ -396,17 +445,17 @@ if (mode === "--kernel") {
     if (!rows(s).some((line) => line.startsWith("cat: nosuchfile: not found")))
         fail(`2> did not capture a diagnostic: ${JSON.stringify(rows(s))}`);
 
-    // The boot archive is mounted read-only on /usr, unpacked from the file
-    // tools/pack.py wrote at the end of the build.
+    // The boot archive is mounted read-only as /bin and /share, unpacked from
+    // the file tools/pack.py wrote at the end of the build.
     if (bundle) {
         s = submit("clear", 1183);
-        s = submit("cat /usr/share/motd", 1184);
+        s = submit("cat /share/motd", 1184);
         if (!rows(s).some((line) => line.startsWith("braam —")))
-            fail(`/usr/share/motd did not read back: ${JSON.stringify(rows(s))}`);
+            fail(`/share/motd did not read back: ${JSON.stringify(rows(s))}`);
         s = submit("clear", 1185);
-        s = submit("ls /usr", 1186);
-        if (!rows(s).includes("share/"))
-            fail(`/usr did not list its directories: ${JSON.stringify(rows(s))}`);
+        s = submit("ls /share", 1186);
+        if (!rows(s).includes("doc/"))
+            fail(`/share did not list its directories: ${JSON.stringify(rows(s))}`);
     }
 
     // M5, second criterion: df reports quota, usage and durability.
@@ -530,25 +579,44 @@ if (mode === "--kernel") {
     // receiver is a job of its own, which is what makes the reply arrive while
     // the program is parked on the keyboard.
     s = submit("clear", 3030);
+    // What arrives is written to stdout by the receiver task, so it redirects
+    // like anything else — which it could not when the receiver was a job
+    // outside the program, writing to the screen because the pipe it would
+    // have used might already have been freed. First, while this is the only
+    // socket: the fake loops a message back to a sender with no peer.
+    type("chat ws://loop me > /home/chat.log");
+    press(KEY.ENTER);
+    run(3030.1);
+    s = submit("hi there", 3030.2);
+    press("c".codePointAt(0), CTRL);
+    run(3030.3);
+    s = submit("clear", 3030.4);
+    s = submit("cat /home/chat.log", 3030.5);
+    if (!rows(s).includes("me: hi there"))
+        fail(`chat > log captured ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3030.6);
     type("chat ws://loop me");
     press(KEY.ENTER);
     run(3031);
-    if (net.sockets.length !== 1)
-        fail(`chat opened ${net.sockets.length} sockets, expected 1`);
+    if (net.sockets.length !== 2)
+        fail(`chat opened ${net.sockets.length} sockets, expected 2`);
     s = submit("hello", 3032);
     if (!rows(s).includes("me: hello"))
         fail(`the chat message did not come back: ${JSON.stringify(rows(s))}`);
 
-    // ^C leaves the socket dropped and the prompt back, with the receiver job
-    // taken down by the destructor in its parent's frame.
+    // ^C leaves the socket dropped and the prompt back. The receiver is a
+    // second task inside the process now, so it goes when the instance does.
     press("c".codePointAt(0), CTRL);
     if (run(3033) !== -1)
         fail("^C left the chat receiver scheduled");
     s = descriptor(addr);
     if (!rows(s).includes("[130] $"))
         fail(`^C on chat left ${row(s, s.cursor_y)}, expected [130] $`);
-    if (!net.sockets[0].closed)
+    if (!net.sockets[1].closed)
         fail("chat did not drop its socket on the way out");
+
+
 
     // M6, third criterion: /mnt/import takes what the picker hands over, and
     // export sends a file back out through the browser.
@@ -663,16 +731,18 @@ if (mode === "--kernel") {
         fail(`the editor saved ${JSON.stringify(saved)}`);
 
     // A pager over a pipe: it reads its input to the end, then takes the keys.
+    // The bundled README is the input because it is longer than the pane, which
+    // is what makes PgDn mean anything.
     s = submit("clear", 3077);
-    s = submit("ls /bin | less", 3078);
+    s = submit("cat /share/doc/README | less", 3078);
     if (!rows(s).some((line) => line.startsWith(" stdin ")))
         fail(`less drew no status line: ${JSON.stringify(rows(s))}`);
-    if (row(s, 0) !== "cat")
+    if (row(s, 0) !== "This tree is /share, and it is read-only.")
         fail(`less painted ${JSON.stringify(rows(s))}`);
     press(KEY.PAGE_DOWN);
     run(3079);
     s = descriptor(addr);
-    if (row(s, 0) === "cat")
+    if (row(s, 0) === "This tree is /share, and it is read-only.")
         fail("PgDn did not scroll the pager");
     press("q".codePointAt(0));
     run(3080);
@@ -704,18 +774,54 @@ if (mode === "--kernel") {
     if (!rows(s).some((line) => line.startsWith("reserved ")))
         fail(`/proc/meminfo said nothing: ${JSON.stringify(rows(s))}`);
 
+    // fg brings it back to the foreground and waits: the shell does not reach a
+    // prompt until the job is done, and ^C reaches what fg adopted through fg's
+    // own destructor. This was test_jobs's, until backgrounding a job that
+    // stays running came to need a program the in-wasm tests cannot step.
+    s = submit("clear", 3088);
+    type("fg");
+    press(KEY.ENTER);
+    run(3089);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) === "$")
+        fail(`fg came straight back to a prompt: ${JSON.stringify(rows(s))}`);
+    press("c".codePointAt(0), CTRL);
+    run(3090);
+    s = descriptor(addr);
+    if (!rows(s).includes("[130] $"))
+        fail(`^C during fg left ${row(s, s.cursor_y)}, expected [130] $`);
+    s = submit("jobs", 3091);
+    if (rows(s).some((line) => line.includes("running")))
+        fail(`^C during fg left the job running: ${JSON.stringify(rows(s))}`);
+    s = submit("clear", 3091.4);
+    s = submit("jobs", 3091.5);
+    if (rows(s).some((line) => line.startsWith("[1]")))
+        fail(`the killed job was never dropped: ${JSON.stringify(rows(s))}`);
+
+    // And a job cancelled outright, which is the other half: kill %n reaches
+    // every stage, and the shell stays where it was.
+    s = submit("clear", 3092);
+    s = submit("sleep 5000 &", 3093);
+    s = submit("kill %2", 3094);
+    s = submit("jobs", 3095);
+    if (rows(s).some((line) => line.includes("running")))
+        fail(`kill %2 left the job running: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3096);
+    s = submit("sleep 5000 &", 3097);
+
     // The timer finally fires, and the job is reported and dropped.
     run(9000);
     s = submit("", 9001);
-    if (!rows(s).some((line) => line.startsWith("[1] done")))
+    if (!rows(s).some((line) => /^\[\d+\] done/.test(line)))
         fail(`the finished job was never announced: ${JSON.stringify(rows(s))}`);
     s = submit("clear", 9002);
     s = submit("jobs", 9003);
-    if (rows(s).some((line) => line.startsWith("[1]")))
+    if (rows(s).some((line) => /^\[\d+\]/.test(line)))
         fail(`the finished job is still listed: ${JSON.stringify(rows(s))}`);
 
     // M8. Everything above this line already ran a tier-2 program without
-    // saying so: `wc` is a binary in /usr/bin now, and `echo 'a b' | wc`,
+    // saying so: `wc` is a binary in /bin now, and `echo 'a b' | wc`,
     // `wc < notes` and `curl /hello.txt | wc` are the assertions M4, M5 and M6
     // wrote against the applet, unchanged. That is the third criterion.
 
@@ -748,7 +854,7 @@ if (mode === "--kernel") {
     // nobody else's, feeding one another through a kernel pipe.
     net.peak = 0;
     s = submit("clear", 9014);
-    s = submit("tail -n 1 /usr/share/motd | wc", 9015);
+    s = submit("tail -n 1 /share/motd | wc", 9015);
     if (!rows(s).some((line) => /^1 \d+ \d+$/.test(line)))
         fail(`a tier-2 pipeline printed ${JSON.stringify(rows(s))}`);
     if (net.peak < 2)
@@ -774,8 +880,8 @@ if (mode === "--kernel") {
     // A file that is not a program is refused before anything runs, and says
     // so differently from a name that is not there at all.
     s = submit("clear", 9030);
-    s = submit("/usr/share/motd", 9031);
-    if (!rows(s).some((line) => line.startsWith("braam: /usr/share/motd: not executable")))
+    s = submit("/share/motd", 9031);
+    if (!rows(s).some((line) => line.startsWith("braam: /share/motd: not executable")))
         fail(`a non-binary was not refused: ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes("[126] $"))
         fail(`a non-binary left ${row(s, s.cursor_y)}, expected [126] $`);
@@ -880,6 +986,42 @@ if (mode === "--kernel") {
         fail("the fallback still bound a worker");
     if (row(s, s.cursor_y) !== "$")
         fail(`the fallback exited ${row(s, s.cursor_y)}, expected a bare prompt`);
+
+    // The builtins are the shell's own state, so they are not files: `cd` is
+    // not in /bin and never resolves through it, and `help` prints them ahead
+    // of everything else, with the usage line the table carries.
+    addr = instance.exports.resize(100, 48);
+    s = submit("clear", 9090);
+    s = submit("help", 9091);
+    const helped = rows(s).filter((line) => line.startsWith("  "));
+    for (const [i, name] of ["cd", "exit", "fg", "help", "jobs", "kill"].entries())
+        if (!helped[i] || !helped[i].startsWith(`  ${name} `))
+            fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);
+    if (!helped.some((line) => line.startsWith("  wc ") && line.includes("count lines")))
+        fail(`help did not carry /share/help's usage for wc: ${JSON.stringify(helped)}`);
+    addr = instance.exports.resize(60, 16);
+
+    s = submit("clear", 9092);
+    s = submit("ls /bin", 9093);
+    if (rows(s).includes("cd"))
+        fail("cd is a builtin and must not be a file in /bin");
+
+    // A builtin is an ordinary pipeline stage, which is why `fg` can claim the
+    // pump of the pipeline it is running in — so it pipes and redirects too.
+    s = submit("clear", 9094);
+    s = submit("jobs > /home/j", 9095);
+    s = submit("cat /home/j", 9096);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`a redirected builtin left ${row(s, s.cursor_y)}, expected a bare prompt`);
+
+    // exit ends the shell, and nothing runs after it. Last, for that reason.
+    s = submit("clear", 9097);
+    s = submit("exit 7", 9098);
+    if (!rows(s).some((line) => line.startsWith("braam: the shell exited")))
+        fail(`exit said nothing: ${JSON.stringify(rows(s))}`);
+    s = submit("echo after", 9099);
+    if (rows(s).includes("after"))
+        fail("a command ran after the shell exited");
 
     console.log(`smoke ok: ${got_imports.length} imports, ${got_exports.length} exports`);
 } else {

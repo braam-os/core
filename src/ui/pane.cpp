@@ -3,17 +3,13 @@
 #include "kernel/text.h"
 #include "kernel/traits.h"
 
-Pane Pane::root()
-{
-    const Screen &s = screen();
-    return Pane{ 0, 0, s.cols, s.rows };
-}
-
 Pane Pane::sub(u32 x, u32 y, u32 w, u32 h) const
 {
+    if (!g_)
+        return Pane{};
     if (x >= w_ || y >= h_)
-        return Pane{ x_ + w_, y_ + h_, 0, 0 };
-    return Pane{ x_ + x, y_ + y, min(w, w_ - x), min(h, h_ - y) };
+        return Pane{ *g_, x_ + w_, y_ + h_, 0, 0 };
+    return Pane{ *g_, x_ + x, y_ + y, min(w, w_ - x), min(h, h_ - y) };
 }
 
 Pane Pane::bottom(u32 rows) const
@@ -37,10 +33,9 @@ void Pane::move(u32 x, u32 y)
 
 Cell *Pane::cell(u32 x, u32 y) const
 {
-    Cell *cells = screen_cells();
-    if (!cells || x >= w_ || y >= h_)
+    if (!g_ || x >= w_ || y >= h_)
         return nullptr;
-    return cells + (y_ + y) * screen().cols + (x_ + x);
+    return g_->at(x_ + x, y_ + y);
 }
 
 void Pane::put(char32_t ch)
@@ -49,7 +44,7 @@ void Pane::put(char32_t ch)
         return;
     if (Cell *c = cell(cx_, cy_)) {
         *c = Cell{ ch, fg_, bg_, attrs_, 0 };
-        screen_touch(x_ + cx_, y_ + cy_, 1, 1);
+        g_->touch(x_ + cx_, y_ + cy_, 1, 1);
     }
     cx_++;
 }
@@ -97,7 +92,8 @@ void Pane::clear()
 
 void Pane::place_cursor(u32 x, u32 y) const
 {
-    if (!w_ || !h_)
+    if (!g_ || !w_ || !h_)
         return;
-    screen_move(x_ + min(x, w_ - 1), y_ + min(y, h_ - 1));
+    g_->cursor_x = x_ + min(x, w_ - 1);
+    g_->cursor_y = y_ + min(y, h_ - 1);
 }

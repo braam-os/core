@@ -16,7 +16,7 @@ namespace {
 // describes a different moment from its first.
 constexpr usize PROC_MAX = 64;
 
-constexpr Str FILES[] = { "jobs", "meminfo", "mounts", "uptime", "version" };
+constexpr Str FILES[] = { "cwd", "jobs", "meminfo", "mounts", "uptime", "version" };
 
 bool generate(Str name, String &out)
 {
@@ -31,6 +31,14 @@ bool generate(Str name, String &out)
         return out.append(b.str());
     }
 
+    // The one global working directory (Concept.md §5.1), which is how `pwd`
+    // reads it: a process is not isolated in the namespace it can name, so
+    // there is one answer and it is text.
+    if (name == "cwd") {
+        b.put(vfs_cwd()).put('\n');
+        return out.append(b.str());
+    }
+
     if (name == "uptime") {
         b.put(u64(sched_now())).put(" ms\n");
         return out.append(b.str());
@@ -41,11 +49,15 @@ bool generate(Str name, String &out)
         return out.append(b.str());
     }
 
+    // prefix, kind, rw|ro, and the bytes the mount holds — which is what `df`
+    // needs and only a filesystem holding its own can answer. An OPFS mount
+    // says 0: its bytes are part of the origin's usage, not its own.
     if (name == "mounts") {
         for (const Mount &m : vfs_mounts()) {
             Buf<96> one;
             one.put(m.prefix.str()).put(' ').put(m.fs->kind());
-            one.put(m.fs->writable() ? Str(" rw\n") : Str(" ro\n"));
+            one.put(m.fs->writable() ? Str(" rw ") : Str(" ro "));
+            one.put(m.fs->bytes()).put('\n');
             if (!out.append(one.str()))
                 return false;
         }

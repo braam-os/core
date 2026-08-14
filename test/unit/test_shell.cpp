@@ -1,5 +1,6 @@
 #include "fs/vfs.h"
 #include "harness.h"
+#include "user/io.h"
 #include "kernel/alloc.h"
 #include "kernel/key.h"
 #include "kernel/sched.h"
@@ -72,6 +73,52 @@ bool some_row_starts(Str want)
     return false;
 }
 
+// Whether a file reads back as `want`, straight through the VFS. `cat` is a
+// binary now and nothing in this module can run one, so a redirection is
+// checked against the bytes rather than against a second program's idea of
+// them. The comparison happens inside the coroutine because the buffer must
+// not be a namespace-scope String — a non-trivial destructor there would want
+// __cxa_atexit, which nothing provides (Concept.md §C.3).
+bool matched;
+
+Task<i32> compare(Str path, Str want, bool whole)
+{
+    matched = false;
+    FileIo f;
+    Task<Result<void>> o = file_open_read(path, f);
+    if (!o)
+        co_return 1;
+    if (Result<void> r = co_await o; r.is_err())
+        co_return 1;
+
+    String text;
+    for (;;) {
+        u8 block[FS_BLOCK];
+        Result<usize> r = vfs_read(f.fd, f.off, block, sizeof(block));
+        if (r.is_err() || !r.value())
+            break;
+        f.off += r.value();
+        if (!text.append(Str(reinterpret_cast<const char *>(block), r.value())))
+            co_return 1;
+    }
+    matched = whole ? text.str() == want : text.str().starts_with(want);
+    co_return 0;
+}
+
+bool file_is(Str path, Str want)
+{
+    sched_spawn(compare(path, want, true));
+    sched_tick(0);
+    return matched;
+}
+
+bool file_starts(Str path, Str want)
+{
+    sched_spawn(compare(path, want, false));
+    sched_tick(0);
+    return matched;
+}
+
 usize boot_cost; // heap taken by the shell itself, grid excluded
 
 void boot(u32 cols, u32 rows)
@@ -111,37 +158,38 @@ void test_shell()
     CHECK(row(0) == "$");
     CHECK_EQ(sched_tick(0), -1);
 
-    // echo prints its arguments, and success leaves a bare prompt.
-    run("echo hello");
-    CHECK(has_row("hello"));
+    // A builtin runs, prints, and success leaves a bare prompt. Builtins are
+    // all this module can run: every program is a binary now, and stepping one
+    // means returning to the host, which run_tests() does once.
+    run("jobs");
     CHECK(has_row("$"));
 
     // A nonzero exit code is observable: it shows up in the next prompt.
-    run("false");
+    run("kill %9");
+    CHECK(has_row("kill: no such job"));
     CHECK(has_row("[1] $"));
     run("nosuch");
     CHECK(some_row_starts("braam: nosuch: not found"));
     CHECK(has_row("[127] $"));
-    run("true");
+    run("jobs");
     CHECK(row(screen().cursor_y) == "$"); // back to a bare prompt
 
-    // help lists the registered programs, and there are more of them than an
-    // ordinary grid has rows.
+    // help lists the builtins, in table order.
     boot(80, 40);
     run("help");
-    CHECK(some_row_starts("  echo"));
+    CHECK(some_row_starts("  cd"));
     CHECK(some_row_starts("  help"));
-    CHECK(some_row_starts("  version"));
+    CHECK(some_row_starts("  kill"));
 
     // Up recalls the previous command, and Enter runs it again.
     boot(40, 10);
-    run("echo recalled");
-    CHECK(has_row("recalled"));
+    run("kill %9");
+    CHECK(has_row("kill: no such job"));
     screen_clear();
     press(KEY_UP);
     press(KEY_ENTER);
     sched_tick(0);
-    CHECK(has_row("recalled"));
+    CHECK(has_row("kill: no such job"));
 
     // ^C abandons the line and reports 130, without running anything.
     boot(40, 10);
@@ -150,169 +198,76 @@ void test_shell()
     sched_tick(0);
     CHECK(has_row("[130] $"));
 
-    // M4's first criterion. The registry is mounted on /bin, so listing it is
-    // an ordinary directory walk, and grep filters it — two programs running
-    // at once over a pipe.
-    boot(40, 16);
-    run("ls /bin | grep hel");
-    CHECK(has_row("help"));
-    CHECK(!has_row("echo"));
+    // A pipeline: two stages running at once over a bounded pipe, each an
+    // independent scheduler job, and every one of them collected. What a
+    // filter does with the bytes is asserted in run.mjs, where the stages can
+    // be the real programs; what is asserted here is the runtime around them.
+    boot(80, 40);
+    run("jobs | help");
+    CHECK(some_row_starts("  cd")); // the last stage's output reaches the screen
     CHECK(row(screen().cursor_y) == "$");
-
-    // Quote removal reaches argv, and a pipeline's status is its last
-    // command's: grep reports 1 when nothing matched.
-    boot(40, 10);
-    run("echo 'a b' | grep 'a b'");
-    CHECK(has_row("a b"));
-    run("ls /bin | grep zzz");
-    CHECK(has_row("[1] $"));
-
-    // head stopping early is what closes the pipe under its producer: `ls`
-    // gets Err(Closed) from its next write and stops, and the shell still
-    // collects every stage.
-    boot(40, 10);
-    run("ls /bin | head -n 2");
-    CHECK(has_row("cat"));
-    CHECK(has_row("cd"));
-    CHECK(!has_row("echo"));
     CHECK_EQ(sched_pending(), 1); // only the shell is left
 
-    // Three stages at once. `wc` would have been the third stage before M8;
-    // it is a binary now, and nothing in this module can step one.
+    // A pipeline's status is its last command's, and a stage that fails does
+    // not take the pipeline's status with it.
+    boot(40, 10);
+    run("kill nonsense | jobs");
+    CHECK(row(screen().cursor_y) == "$");
+    run("jobs | kill nonsense");
+    CHECK(has_row("[1] $"));
+
+    // A parse error is the shell's own, and costs 2 before anything runs.
     boot(60, 16);
-    run("ls /bin | grep e | head -n 2");
-    CHECK(has_row("clear"));
-    CHECK(has_row("date"));
-    CHECK(!has_row("version"));
-    run("echo 'a");
+    run("help 'a");
     CHECK(some_row_starts("braam: unterminated quote"));
     CHECK(has_row("[2] $"));
 
-    // A running program keeps the timer queue busy, and cancelling the shell
-    // unwinds through it (Concept.md §8.1).
-    boot(40, 10);
-    for (char c : Str("sleep 5000"))
-        press(u32(u8(c)));
-    press(KEY_ENTER);
-    CHECK(sched_tick(0) == 5000);
-    CHECK(sched_alive(pid));
-    sched_cancel(pid);
-    sched_tick(0);
-    CHECK(!sched_alive(pid));
-    CHECK_EQ(sched_pending(), 0);
+    // A pipeline that stays running needs a program that parks, and every
+    // program is a binary now: stepping one means returning to the host, which
+    // run_tests() does once. So ^C reaching a running pipeline, the timer queue
+    // it keeps busy, and cancelling the shell out from under one are all
+    // asserted in run.mjs, against the real programs.
+    //
+    // ^C with nothing running is still this module's, and it is above.
 
-    // M4's second criterion: ^C reaches a running pipeline. The stages and
-    // the pump are separate scheduler jobs, so this also proves none of them
-    // is left behind.
-    boot(40, 10);
-    for (char c : Str("sleep 5000"))
-        press(u32(u8(c)));
-    press(KEY_ENTER);
-    CHECK(sched_tick(0) == 5000);
-    CHECK_EQ(sched_pending(), 3); // the shell, the stage and the pump
-    press('c', MOD_CTRL);
-    sched_tick(0);
-    CHECK(has_row("^C"));
-    CHECK(has_row("[130] $"));
-    CHECK_EQ(sched_tick(0), -1); // the timer went with the stage
-    CHECK_EQ(sched_pending(), 1);
+    // M5. The shell starts in /home, and a redirection reaches a real file —
+    // checked against the bytes, since reading it back would need a binary.
+    // Surviving a reload needs a host and lives in run.mjs.
+    boot(80, 40);
+    CHECK(vfs_cwd() == "/home");
+    run("help > notes");
+    CHECK(file_starts("/home/notes", "  cd "));
 
-    // The keyboard is handed back intact: the pump was its only receiver
-    // while the job ran, and the shell must be able to edit again.
-    run("echo after");
-    CHECK(has_row("after"));
-
-    // stdin is the pump's other job. A program with no pipe in front of it
-    // reads what is typed — echoed once by the pump, printed again by cat —
-    // and ^D is end of input rather than end of the pipeline.
-    boot(40, 10);
-    for (char c : Str("cat"))
-        press(u32(u8(c)));
-    press(KEY_ENTER);
-    CHECK_EQ(sched_tick(0), -1); // cat is parked on its stdin, nothing pending
-    CHECK_EQ(sched_pending(), 3);
-    for (char c : Str("hi"))
-        queue(u32(u8(c)));
-    queue(KEY_ENTER);
-    sched_tick(0);
-    CHECK_EQ(rows_equal("hi"), 2); // the pump's echo, and cat's copy of it
-    press('d', MOD_CTRL);
-    sched_tick(0);
-    CHECK(row(screen().cursor_y) == "$");
-    CHECK_EQ(sched_pending(), 1);
-
-    // Cancelling the shell mid-pipeline leaves nothing running. The children
-    // are independent jobs, so this is the destructor in run_line's frame
-    // doing the work a parent-child await would have done.
-    boot(40, 10);
-    for (char c : Str("sleep 5000"))
-        press(u32(u8(c)));
-    press(KEY_ENTER);
-    CHECK(sched_tick(0) == 5000);
-    CHECK_EQ(sched_pending(), 3);
-    sched_cancel(pid);
-    sched_tick(0);
-    CHECK_EQ(sched_pending(), 0);
-    CHECK_EQ(sched_tick(0), -1);
-
-    // M5. The shell starts in /home, redirection reaches a real file, and a
-    // file argument reads it back. This is the acceptance criterion the unit
-    // tests can reach; surviving a reload needs a host, and lives in run.mjs.
+    // `cd` is a builtin because the working directory is one global
+    // (Concept.md §5.1), so the VFS is where its effect is visible.
     boot(40, 12);
-    run("pwd");
-    CHECK(has_row("/home"));
-    run("echo one > notes");
-    run("echo two >> notes");
-    boot(40, 12);
-    run("cat notes");
-    CHECK(has_row("one"));
-    CHECK(has_row("two"));
-    boot(40, 12);
-    run("head -n 1 < notes");
-    CHECK(has_row("one"));
-    CHECK(!has_row("two"));
-
-    // Directories, and a listing that shows the mount points under it.
-    boot(40, 12);
-    run("mkdir /home/work");
-    run("cd /home/work");
-    run("pwd");
-    CHECK(has_row("/home/work"));
+    run("cd /tmp");
+    CHECK(vfs_cwd() == "/tmp");
     run("cd ..");
-    run("ls");
-    CHECK(has_row("notes"));
-    CHECK(has_row("work/"));
-    boot(40, 12);
-    run("ls /");
-    CHECK(has_row("bin/"));
-    CHECK(has_row("home/"));
-    CHECK(has_row("tmp/"));
-
-    // A refused redirection stops the command before it can run: /bin is a
-    // read-only filesystem, so nothing is written and nothing is printed.
-    boot(40, 12);
-    run("echo hi > /bin/echo");
-    CHECK(some_row_starts("braam: /bin/echo: "));
-    CHECK(!has_row("hi"));
+    CHECK(vfs_cwd() == "/");
+    run("cd");
+    CHECK(vfs_cwd() == "/home"); // no argument means /home
+    run("cd /nosuch");
+    CHECK(some_row_starts("cd: /nosuch: not found"));
     CHECK(has_row("[1] $"));
 
-    // A stage's stderr goes to its own file, and the diagnostic naming the
-    // missing input is the stage's, not the shell's.
+    // A refused redirection stops the command before it can run: /proc is a
+    // read-only filesystem, so nothing is written and nothing is printed.
     boot(40, 12);
-    run("cat /home/nosuch 2> /home/err");
-    boot(40, 12);
-    run("cat /home/err");
-    CHECK(some_row_starts("cat: /home/nosuch: not found"));
+    run("help > /proc/uptime");
+    CHECK(some_row_starts("braam: /proc/uptime: "));
+    CHECK(!some_row_starts("  cd"));
+    CHECK(has_row("[1] $"));
 
-    // rm refuses a directory that still has something in it, and takes it
-    // with -r. The cleanup matters: the leak check below starts from here.
+    // A stage's stderr goes to its own file, the diagnostic is the stage's
+    // rather than the shell's, and `>>` appends where `>` truncates.
     boot(40, 12);
-    run("rm /home/work");
-    CHECK(some_row_starts("rm: /home/work: directory not empty") ||
-          has_row("$")); // empty, so it goes
-    run("rm -r /home/work /home/notes /home/err");
-    run("ls /home");
-    CHECK(!has_row("notes"));
+    run("kill %9 2> /home/err");
+    CHECK(file_is("/home/err", "kill: no such job\n"));
+    run("kill %9 2>> /home/err");
+    CHECK(file_is("/home/err", "kill: no such job\nkill: no such job\n"));
+    run("kill %9 2> /home/err");
+    CHECK(file_is("/home/err", "kill: no such job\n"));
 
     // And the whole thing leaks nothing: booting, running a pipeline and
     // tearing down returns every byte. The mount table goes too, since the
@@ -323,7 +278,7 @@ void test_shell()
     {
         usize in_use = heap_stats().bytes_in_use;
         boot(40, 10);
-        run("ls /bin | grep e | head -n 1");
+        run("jobs | help");
         sched_reset();
         vfs_reset();
         screen_reset(); // the grid is not the scheduler's to free

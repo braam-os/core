@@ -113,9 +113,9 @@ export function makeFakeLinks(net) {
                 return;
             }
             ops.begin(m.now);
-            const out = server.step(new Uint8Array(m.payload));
-            const { exit, call } = ops.end();
-            link.up.push({ k: "step", ...out, exit, call });
+            const out = server.step(m.token, new Uint8Array(m.payload));
+            const { exit, calls } = ops.end();
+            link.up.push({ k: "step", ...out, exit, calls });
         };
 
         links.push(link);

@@ -125,69 +125,6 @@ Task<Result<void>> file_open_read(Str path, FileIo &out)
     co_return {};
 }
 
-Inputs::~Inputs()
-{
-    for (FileIo *f : files_)
-        heap_delete(f);
-}
-
-Task<Result<void>> Inputs::open(Args paths, Str &failed)
-{
-    for (usize i = 0; i < paths.size(); i++) {
-        failed    = paths[i];
-        FileIo *f = heap_new<FileIo>();
-        if (!f || !files_.push(f)) {
-            heap_delete(f);
-            co_return Err(Error::NoMemory);
-        }
-        Task<Result<void>> t = file_open_read(paths[i], *f);
-        if (!t)
-            co_return Err(Error::NoMemory);
-        CO_TRY_VOID(co_await t);
-    }
-    failed = Str();
-    co_return {};
-}
-
-// End of one file is not end of input: it is the start of the next.
-Result<String> Inputs::read_next(void *ctx)
-{
-    Inputs &in = *static_cast<Inputs *>(ctx);
-    while (in.at_ < in.files_.size()) {
-        Result<String> r = file_read(in.files_[in.at_]);
-        if (r.is_ok() || r.error() != Error::Closed)
-            return r;
-        in.at_++;
-    }
-    return Err(Error::Closed);
-}
-
-Source Inputs::source()
-{
-    return Source{ read_next, nullptr, this };
-}
-
-Task<i32> open_inputs(Inputs &in, Args paths, Str who, Stdio io)
-{
-    if (paths.size() == 0)
-        co_return 0;
-
-    Str failed;
-    Result<void> r = Err(Error::NoMemory);
-    if (Task<Result<void>> t = in.open(paths, failed))
-        r = co_await t;
-    if (r.is_ok())
-        co_return 0;
-
-    co_await io.err.write(who);
-    co_await io.err.write(": ");
-    co_await io.err.write(failed);
-    co_await io.err.write(": ");
-    co_await io.err.write(error_name(r.error()));
-    co_await io.err.write("\n");
-    co_return r.error() == Error::Cancelled ? 130 : 1;
-}
-
 Task<Result<void>> write_all(Stream out, Str s)
 {
     for (;;) {

@@ -81,13 +81,18 @@ void test_textbuf()
     CHECK_EQ(b.erase(0, 1), 2);   // the whole codepoint goes
     CHECK(b.line(0) == "a b");
 
-    // A view over the buffer, painted into a pane.
+    // A view over the buffer, painted into a pane over the test's own grid.
     screen_reset();
     CHECK(screen_resize(4, 3) != 0);
     CHECK(b.load("one\ntwo\nthree\nfour\nfive").is_ok());
 
+    Grid g;
+    g.cells = screen_cells();
+    g.cols  = screen().cols;
+    g.rows  = screen().rows;
+
     TextView v;
-    Pane p = Pane::root();
+    Pane p = Pane::of(g);
     char buf[16];
 
     v.paint(p, b);

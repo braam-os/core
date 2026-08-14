@@ -1,15 +1,19 @@
-This tree is /usr, and it is read-only.
+This tree is /share, and it is read-only.
 
 It comes from one archive that the worker loads beside kernel.wasm at boot and
 hands to the kernel whole; the packer is tools/pack.py and the reader is
 src/fs/bundlefs.cpp. Nothing here is fetched file by file, so adding a file
 means repacking rather than uploading.
 
+/bin is the other half of that same archive, mounted separately: the programs
+and the files that ship beside them are one download and two directories.
+
 The mounts:
 
     /       memfs    the root, and /tmp with it — gone on reload
-    /bin    binfs    the program registry, read-only
-    /usr    bundle   this tree, read-only
+    /bin    bundle   the programs, read-only
+    /share  bundle   this tree, read-only
+    /proc   procfs   the scheduler, the heap and the job table, as text
     /home   opfs     the Origin Private File System, and the only durable one
 
 `df` reports which of those /home really is, how much room there is, and

@@ -17,9 +17,9 @@ Task<Result<void>> proc_spawn(u32 pid, Str path, String &&image, const ProcMeta 
     co_return {};
 }
 
-Task<Result<ProcStep>> proc_step(u32 pid, Str payload)
+Task<Result<ProcStep>> proc_step(u32 pid, u32 token, Str payload)
 {
-    SvcCall c(SvcOp::ProcStep, "", 0);
+    SvcCall c(SvcOp::ProcStep, "", token);
     if (!c.ok())
         co_return Err(Error::NoMemory);
     c.set_aux(pid);

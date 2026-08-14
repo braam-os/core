@@ -3,19 +3,20 @@
 An operating system that runs in a browser tab.
 
 Braam is a small, self-contained CLI environment — kernel, scheduler, filesystem, terminal,
-shell and thirty-four programs — written from scratch in freestanding C++20 and compiled to
-WebAssembly. It has no server side, needs no special HTTP headers, and deploys as a static
-site. Nothing is linked that was not written for it: no libc, no Emscripten runtime, no
-`xterm.js`. `kernel.wasm` is 231 KiB, and that is the whole system.
+shell, twenty-nine programs and six builtins — written from scratch in freestanding C++20 and
+compiled to WebAssembly. It has no server side, needs no special HTTP headers, and deploys as a
+static site. Nothing is linked that was not written for it: no libc, no Emscripten runtime, no
+`xterm.js`. `kernel.wasm` is 165 KiB and holds no userland at all: every program is a binary of
+its own, in an instance of its own.
 
 Open the page and there is a prompt:
 
 ```
-$ ls /bin                            # the program registry, as a filesystem
+$ ls /bin                            # every program, one wasm binary each
 $ echo hello > notes                 # /home survives a reload
 $ curl https://example.com | less    # a real fetch, into a full-screen pager
 $ edit notes                         # ^S saves, ^Q quits
-$ tail -n 5 /usr/share/doc/README | wc
+$ tail -n 5 /share/doc/README | wc
 $ spin &                             # a loop that yields to nobody
 $ kill %1                            # dead anyway
 ```
@@ -47,10 +48,9 @@ stages run concurrently over pipes with real backpressure, `^C` reaches whatever
 and hands the prompt back, and a nonzero exit status shows up in the next prompt. Background
 jobs are managed with `jobs`, `fg` and `kill`.
 
-**A filesystem.** A mount table over four filesystems: `MemFs` for `/` and `/tmp`, `BinFs`
-presenting the program registry as `/bin`, `BundleFs` serving `/usr` out of one archive
-loaded beside the kernel, and `OpfsFs` on `/home` — the Origin Private File System, and the
-only durable one. `ProcFs` on `/proc` makes the scheduler's tasks readable as files. `df`
+**A filesystem.** A mount table over three filesystems: `MemFs` for `/` and `/tmp`, `BundleFs`
+serving `/bin` and `/share` as two views of one archive loaded beside the kernel, and `OpfsFs`
+on `/home` — the Origin Private File System, and the only durable one. `ProcFs` on `/proc` makes the scheduler's tasks readable as files. `df`
 reports the quota, the usage, and whether the browser promised to keep the files or merely
 intends to; with OPFS unavailable the system boots on memory and says so.
 
@@ -61,23 +61,30 @@ files in and out of the browser, and `pbcopy`/`pbpaste` reach the system clipboa
 `make serve` also starts [tools/wsd.mjs](tools/wsd.mjs), a dependency-free broadcast server,
 so those two tabs have something real to talk through.
 
-**A layout layer.** `Pane`, `TextBuf` and `TextView` over the cell grid, which is what `less`
-and `edit` are built out of. A full-screen program claims a keyboard route through the tty
-pump rather than taking the keyboard, so `^C` always gets through.
+**A layout layer.** `Pane`, `TextBuf` and `TextView` over a grid of cells, which is what `less`
+and `edit` are built out of. They run outside the kernel, so they paint a grid of their own and
+send the part that changed; a full-screen program claims a keyboard route through the tty pump
+rather than taking the keyboard, so `^C` always gets through.
 
-**Isolated processes.** Three tiers, chosen by `exec` from metadata in the binary, with
-userland unable to tell the difference:
+**Isolated processes — every program is one.** There is no in-kernel program and no way to write
+one: each of the twenty-nine commands in [src/cmd/](src/cmd/) is a wasm binary in an instance of
+its own, and `exec` chooses between two tiers from metadata in the binary, with userland unable
+to tell the difference:
 
 | Tier | What it is | What it buys |
 | --- | --- | --- |
-| 1 | in-kernel coroutine | nothing to isolate, nothing to pay |
 | 2 | its own `WebAssembly.Instance` | address space, capabilities, descriptors, a 16 MB cap |
 | 3 | its own instance in its own worker | a real kill switch — `worker.terminate()` |
 
-The kernel↔process ABI is the same at every tier: two imports plus the memory the kernel caps,
-four exports, eight syscalls, and no argument anywhere for a pid — which is the whole of "a process cannot issue a syscall
-on behalf of another". `wc`, `tail`, `spin` and `hog` are ordinary binaries in `/usr/bin`;
-`spin` runs at tier 3 and exists to be un-killable by cooperation.
+The kernel↔process ABI is the same at either tier: two imports plus the memory the kernel caps,
+four exports, and no argument anywhere for a pid — which is the whole of "a process cannot issue
+a syscall on behalf of another". `spin` runs at tier 3 and exists to be un-killable by
+cooperation.
+
+Six commands are *not* programs, because no syscall could serve them: `cd` moves the one global
+working directory, `jobs`, `fg` and `kill` are the shell's own job table, `exit` ends its loop,
+and `help` lists the rest. They are shell builtins with no file behind them — and they are
+ordinary pipeline stages all the same, so `help | grep ls` works.
 
 **An embedding API.** `web/braam.js` puts a terminal on a host page with
 `mount({ canvas })` — one instance per worker, so mounting twice gives two kernels that share
@@ -125,10 +132,9 @@ back to a buffered instantiate where the host does not serve `.wasm` as `applica
 | [src/fs/](src/fs/) | paths, the VFS, `MemFs`/`BundleFs`/`OpfsFs`, the storage ABI |
 | [src/svc/](src/svc/) | fetch, WebSocket, clipboard, file transfer, clock, process control |
 | [src/ui/](src/ui/) | the layout layer: `Pane`, `FullScreen`, `TextBuf`, `TextView` |
-| [src/user/](src/user/) | line editor, grammar, job runtime, shell, `exec`, `BinFs`, `ProcFs`, boot |
-| [src/prog/](src/prog/) | one self-registering file per applet |
+| [src/user/](src/user/) | line editor, grammar, job runtime, shell, `exec`, `ProcFs`, boot, builtins |
 | [src/proc/](src/proc/) | a process binary's runtime |
-| [src/bin/](src/bin/) | one file per binary |
+| [src/cmd/](src/cmd/) | one file per program; every program is a binary |
 | [web/](web/) | the page, the worker, the renderer, the host side of every ABI |
 
 ## Documentation

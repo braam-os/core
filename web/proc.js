@@ -44,7 +44,6 @@ export function serveProc(ops) {
     const mem = new Memory();
     let instance = null;
     let started = false;
-    let token = 0;
 
     return {
         mem,
@@ -65,20 +64,21 @@ export function serveProc(ops) {
 
                     // The payload lives in the process's memory and the kernel
                     // cannot reach it, so the copy happens on the way out
-                    // (Appendix B). The token stays here: it is the process's,
-                    // and _resume is the only thing that needs it.
+                    // (Appendix B). The token goes with it: a process may have
+                    // several calls outstanding, and the kernel says which one
+                    // it is answering when it steps.
                     sys_async(op, tok, ptr, len) {
-                        token = tok >>> 0;
-                        ops.sysAsync(op >>> 0, token, ptr >>> 0, len >>> 0, mem);
+                        ops.sysAsync(op >>> 0, tok >>> 0, ptr >>> 0, len >>> 0, mem);
                     },
                 },
             });
         },
 
         // One _start or _resume. `payload` is argv the first time and a syscall
-        // reply afterwards; it goes into the process's own heap through its own
-        // allocator, and _resume frees it.
-        step(payload) {
+        // reply afterwards, and `token` names the call it answers; it goes into
+        // the process's own heap through its own allocator, and _resume frees
+        // it.
+        step(token, payload) {
             if (!instance)
                 return { result: STEP.TRAPPED };
 
@@ -92,7 +92,7 @@ export function serveProc(ops) {
 
             try {
                 const out = started
-                    ? instance.exports._resume(token, ptr, payload.length)
+                    ? instance.exports._resume(token >>> 0, ptr, payload.length)
                     : instance.exports._start(ptr, payload.length);
                 started = true;
                 return { result: out === 0 ? STEP.EXITED : STEP.SUSPENDED };
@@ -115,7 +115,7 @@ export function workerOps(pid, clock) {
     let base = 0;
     let at = 0;
     let exit;
-    let call;
+    let calls = [];
 
     return {
         sys(op, a0) {
@@ -138,18 +138,21 @@ export function workerOps(pid, clock) {
             // slice, not subarray: the buffer is transferred, and a later
             // memory.grow would detach a view onto the instance's own memory
             // (Concept.md §8.4).
-            call = { op, len, payload: mem.view().slice(ptr, ptr + len).buffer };
+            //
+            // A list, because one step can park more than one task: resuming
+            // the root may start a second and leave both waiting.
+            calls.push({ op, token, len, payload: mem.view().slice(ptr, ptr + len).buffer });
         },
 
         begin(now) {
             base = now;
             at = clock();
             exit = undefined;
-            call = undefined;
+            calls = [];
         },
 
         end() {
-            return { exit, call };
+            return { exit, calls };
         },
     };
 }
@@ -280,8 +283,9 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         if (p && p.link && !p.done) {
             p.pending = { r, done };
             const payload = r.bytes();
-            p.link.postMessage({ k: "step", now: clock(), payload: payload.buffer },
-                               [payload.buffer]);
+            p.link.postMessage(
+                { k: "step", now: clock(), token: r.get("flags"), payload: payload.buffer },
+                [payload.buffer]);
             return;
         }
 
@@ -316,11 +320,14 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         if (m.exit !== undefined)
             kernel().sys(p.pid, SYS.EXIT, m.exit, 0, 0);
 
-        if (m.call) {
-            const dst = kernel().sys(p.pid, SYS.STAGE, m.call.len, 0, 0) >>> 0;
-            if (dst && m.call.len)
-                mem.view().set(new Uint8Array(m.call.payload), dst);
-            kernel().sys_async(p.pid, m.call.op, 0, m.call.len);
+        // One step can park more than one task, so the calls come back as a
+        // list. The token is the process's own and rides with each: the kernel
+        // will name it again when it answers.
+        for (const call of m.calls || []) {
+            const dst = kernel().sys(p.pid, SYS.STAGE, call.len, 0, 0) >>> 0;
+            if (dst && call.len)
+                mem.view().set(new Uint8Array(call.payload), dst);
+            kernel().sys_async(p.pid, call.op, call.token, call.len);
         }
 
         if (m.result !== STEP.SUSPENDED)
@@ -346,7 +353,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             if (!p || !p.server || p.done) {
                 r.fail(E.NOTFOUND); // killed while this step was in flight
             } else {
-                const out = p.server.step(r.bytes());
+                const out = p.server.step(r.get("flags"), r.bytes());
                 if (out.fail !== undefined) {
                     retire(p);
                     r.fail(out.fail);
