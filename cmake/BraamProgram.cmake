@@ -1,7 +1,7 @@
 # How a Braam program is built. Used by src/cmd/ and installed with the SDK, so
 # an out-of-tree program is built the way the system's own are.
 #
-#   braam_add_program(NAME hello SOURCES hello.cpp [TIER 2|3] [LIBS ...])
+#   braam_add_program(NAME hello SOURCES hello.cpp [TIER 3|2] [LIBS ...])
 #
 # BRAAM_STAMP names tools/stamp.py, BRAAM_SYSABI the kernel/sysabi.h it reads
 # PROC_ABI from; the includer sets both.
@@ -17,8 +17,9 @@ function(braam_add_program)
     if("${P_NAME}" STREQUAL "" OR "${P_SOURCES}" STREQUAL "")
         message(FATAL_ERROR "braam_add_program: NAME and SOURCES are required")
     endif()
+    # A worker of its own is what a program gets unless it asks for less.
     if("${P_TIER}" STREQUAL "")
-        set(P_TIER 2)
+        set(P_TIER 3)
     endif()
 
     # The target carries a prefix the file does not: /bin/echo is a plain name.

@@ -96,7 +96,7 @@ get `sizeof(usize) == 4, "wasm32"` and `unknown type name '__externref_t'` from 
 or, since `find_package(braam)` refuses a non-wasm32 compiler, a message saying so. Delete
 the build directory and configure again.
 
-`braam_add_program(NAME <n> SOURCES <...> [TIER 2|3] [LIBS <...>])` is the same function
+`braam_add_program(NAME <n> SOURCES <...> [TIER 3|2] [LIBS <...>])` is the same function
 `src/cmd/` builds the system's own thirty-two programs with. It links `braam::proc` and
 `braam::flags`, links with `--import-memory` so the memory cap is the kernel's, and runs
 `stamp.py` over the result. `LIBS` names anything else the program is made of; `TIER` is
@@ -279,21 +279,25 @@ a trap rather than a warning:
 
 ---
 
-## 7. Tier 3
+## 7. The tiers
 
-A program runs in an instance of its own by default — address space, capabilities and
-descriptors are already isolated. Tier 3 puts it in a *worker* of its own, which buys one
-thing: `worker.terminate()`, a kill that does not need the program's cooperation.
+A program runs in an instance of its own either way — address space, capabilities and
+descriptors are isolated at both tiers. Tier 3 puts it in a *worker* of its own, which buys one
+thing: `worker.terminate()`, a kill that does not need the program's cooperation. **It is what
+`braam_add_program` gives a program**, and what every program in `/bin` but the shell runs at.
+
+The cost is that every syscall becomes two `postMessage` hops rather than a call — 34–44 µs
+measured, paid per `SYS_CHUNK` — so a program that reads a large file pays it per 512 bytes,
+and one being typed into pays it several times a keystroke. A program in that position asks
+for tier 2:
 
 ```cmake
-braam_add_program(NAME crunch SOURCES crunch.cpp TIER 3)
+braam_add_program(NAME repl SOURCES repl.cpp TIER 2)
 ```
 
-What a program has to be to earn one is that it may not come back. The cost is that every
-syscall becomes two `postMessage` hops rather than a call — order 0.1 ms, paid per chunk —
-so an interactive or syscall-bound program is slower at tier 3, and the tier is a claim a
-binary makes rather than a default. A tier-3 binary still runs at tier 2 where the host
-cannot make a worker, with no change to the program.
+What it gives up is the kill: a tier-2 program that stops answering hangs the kernel's worker,
+so ask for it only where a runaway is not a possibility a user has to live with. A tier-3
+binary still runs at tier 2 where the host cannot make a worker, with no change to the program.
 
 ---
 

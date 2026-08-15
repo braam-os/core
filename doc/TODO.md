@@ -133,6 +133,18 @@ on it.
 
 **Done when** `make run` is green, or fails only in the places T4 is about.
 
+**Done**, with T4 in the same change, and the list did end up being all of them — so the default
+moved to `cmake/BraamProgram.cmake` now rather than in T8. `braam_add_program` stamps tier 3
+unless a program asks for less, `src/cmd/CMakeLists.txt` holds one exception
+(`set(BRAAM_BIN_TIER_sh 2)`) and passes an undefined `TIER` through the way it already passed an
+undefined `LIBS`, and `want_tier` in `test/run.mjs` inverted to `{ "sh.wasm": 2 }`. Since the SDK
+shares the recipe, `examples/hello` and an out-of-tree program follow the system's own answer —
+which is what T8 said to consider and what §4 now states.
+
+No C++ changed — not `sysabi.h`, not `src/proc/`, not `src/sh/`, not `exec.cpp`, not one file in
+`src/cmd/` — and `bundle.bin` is the same size it was: the tier is a `u32` in a fixed-width custom
+section, so a re-stamp moves no bytes.
+
 ## T4. Rework the tests that assume only `spin` and `tail` take a worker
 
 The driver already pumps both tiers uniformly (`test/fakesvc.mjs`'s `net.drain`), so most of the
@@ -149,10 +161,41 @@ suite should hold. Three places will not:
 **Done when** `make run` is green with no assertion weakened — a count that is now
 "at least one" rather than "exactly one" has stopped testing the pool.
 
+**Done.** Green, and every count is still an exact literal. Four things had to move, and only the
+first was foreseen here:
+
+- **The pool literals.** `pooled()` is 1 after the first `spin 1` (8 hired by then, 7 terminated)
+  and 2 before `timeout 20 spin` (13 and 11). The rule behind both is worth more than the numbers:
+  the pool grows only for a pipeline wider than what is idle and shrinks only when a process is
+  *killed*, so the count is a running record of what the session has killed.
+- **`net.hold()` had to learn to count.** It held "the next process bound", which was unambiguous
+  when two programs took workers. It is not now: a `clear` between the hold and the command takes
+  it, and in `timeout 20 spin` the parent binds its own worker before the child that loops. It is
+  `net.hold(n)` — the *n*-th bind from here — and the two `timeout` cases hold 2. The alternative
+  was putting the path into the bind message so a test could hold by name, which is a protocol
+  change for a test's convenience.
+- **The broken-worker case cleared the screen with the broken worker.** `clear` is a program, so
+  it was the first `exec` after `dropWorkers()` and crashed in `spin`'s place. The clear now
+  happens before the tier is broken.
+- **The two cases that give the tier up run last.** They did not before, and everything after them
+  — the whole `/bin/sh`-as-a-program section, `less` claiming the screen, a shell process spawning
+  pipelines — would have run at tier 2 while shipping at tier 3. Moving them to just before
+  `exit 7` is what puts that coverage at the tier it ships at.
+
+`net.bound.length` was left alone: it means "anything ran" now rather than "something ran at
+tier 3", which is the same latch on a system where those are the same sentence. Tick counts did
+not need touching — `run()` loops until nothing moves — and the suite is about the same speed.
+
 ## T5. Re-measure, and decide whether to go on
 
 T1's figures with the whole system at tier 3. If bulk I/O is acceptable and the prompt is
 under a frame, skip T6.
+
+Note what T3 did to the harness: `bundle.bin` is now the archive with everything but the shell at
+tier 3, so `bundle3nosh.bin` is a copy of it and the three arms are two. What the re-measurement
+wants is the *other* twin — every program back at tier 2 — which the cmake `bench` target does
+not pack, since when it was written that archive was the one being shipped. One more `--tier 2` pass
+over a third staged copy is the whole of it.
 
 ## T6. Only if T5 says so: cut the number of round trips
 

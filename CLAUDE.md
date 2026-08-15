@@ -96,6 +96,16 @@ points into a `String` the loop body owns — `Prompt`'s `Str`s are non-owning a
 is not a literal. `test/run.mjs` composes the expected prompt from the directory it is in rather
 than spelling it.
 
+**And every program took a worker.** doc/TODO.md T3: tier 3 is now the default
+`cmake/BraamProgram.cmake` gives a program, and `/bin/sh` is the one binary that asks for tier 2
+— so thirty-one of the thirty-two run in a worker of their own and can be killed rather than
+waited on. Nothing in C++ moved: the tier is a `u32` in the `braam` custom section and the same
+binary runs at either (§4.3), so this is `stamp.py`'s argument, `test/run.mjs`'s `want_tier`, and
+the documents the change made false. What did move is the test driver's model of a worker:
+`net.hold(n)` in `test/fakeworker.mjs` counts binds now, because `clear` is a program too and a
+spawning program binds its own worker before its child's, and the two cases that give the tier up
+run last so that everything before them runs at the tier it ships at.
+
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
 stable: amend it only when a design decision changes, and then in the same commit that changes
@@ -252,7 +262,9 @@ nothing is recompiled and `bundle.bin` is byte-identical — `web/bench.html` dr
 against all three, and `tools/bench.mjs` serves them and collects what the page posts into
 `build/bench-<engine>.json`. It answers what a fake cannot: what a syscall costs on a real
 `postMessage`. The counters behind it are unconditional and live in `makeProc`'s `stats()` and in
-`web/worker.js`; the figures are in doc/TODO.md T1.
+`web/worker.js`; the figures are in doc/TODO.md T1. Since T3 the twin without the shell in it is
+`bundle.bin` again, so the harness has three arms and two distinct ones: whatever T5 re-measures
+against wants a *tier-2* twin, which the target does not pack.
 
 ## Architecture invariants
 
@@ -375,13 +387,16 @@ between the two isolated tiers from binary metadata, so userland does not notice
   `braam_sh` is an archive, and `--gc-sections` would drop an unreferenced registrar silently.
 - **Separate instance, shared worker** (M8) — address-space, capability, descriptor and
   memory-cap isolation. A binary in `/bin` carrying a `braam` custom section; `exec` reads
-  the tier out of it.
+  the tier out of it. `/bin/sh` is the only binary that asks for it: `set(BRAAM_BIN_TIER_sh 2)`
+  in `src/cmd/CMakeLists.txt`, because a prompt pays the tier several times a keystroke and
+  nothing kills the shell.
 - **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
-  preempted: `worker.terminate()`. A binary asks for it with `--tier 3` in `src/cmd/CMakeLists.txt`,
-  and runs at tier 2 where the host cannot make a worker. The protocol is one message each way
-  per step, the tier rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and
-  a tier-3 syscall costs two `postMessage` hops rather than a call — which is why the tier is a
-  claim a binary makes rather than a default.
+  preempted: `worker.terminate()`. **This is the default** — `braam_add_program` stamps tier 3
+  unless a program asks for 2, so every program but the shell has one — and it runs at tier 2
+  where the host cannot make a worker. The protocol is one message each way per step, the tier
+  rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and a tier-3 syscall
+  costs two `postMessage` hops rather than a call: 34–44 µs measured, which doc/TODO.md T1 is
+  the argument for paying everywhere.
 
 The kernel↔process ABI is Concept.md §4.3 and `src/kernel/sysabi.h`, and both ends include the
 header so neither can drift alone. Three rules about it are load bearing:
@@ -471,9 +486,15 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   routing and a window manager in the shell. One process at a time holds the screen — a second
   `ScreenEnter` is `Err(Perm)` rather than nesting politely — and giving it back to a parent when
   a child is done is the window manager's problem, not the claim's.
-- **Every command costs an instantiation** — roughly a millisecond, plus reading the image out of
-  `BundleFs`, where an applet cost nothing. The host caches the compiled `Module` by path, so the
-  bytes still cross the VFS on every `exec` and only the compile is saved.
+- **Every command costs an instantiation and a worker** — roughly a millisecond, plus reading
+  the image out of `BundleFs`, where an applet cost nothing. The host caches the compiled
+  `Module` by path, so the bytes still cross the VFS on every `exec` and only the compile is
+  saved; the worker comes from the pool, and only a pipeline wider than `MAX_IDLE` or a killed
+  process makes the host start one.
+- **Every syscall a program makes is two `postMessage` hops**, 34–44 µs, since T3 put every
+  program in its own worker. `sh` is the exception and stays at tier 2 for it. Bulk I/O pays it
+  per `SYS_CHUNK`, which is 512 bytes — doc/TODO.md T5 is where that is re-measured and T6 is
+  what would be done about it.
 - **The boot archive is ~491 KB**, against 47 KB when four programs were binaries. That is §4.4's
   duplication: every binary carries the allocator, the string types and the coroutine runtime,
   and `sh.wasm` is 86 KB of it. `bundle.bin` carries a size budget and the binaries under it do
@@ -488,8 +509,10 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   Nothing about it is wrong; it is what §4.4's cost model looks like on the interactive path.
 - **The shell has no variables, no `-c`, no globbing and no scripts beyond `sh -s`.** None of it
   was blocked by the shell being kernel code, and none of it is blocked now.
-- **Two tier-3 fidelity losses (§4.3):** a binary that will not instantiate reads as a crash
-  rather than as a refusal, and `Sys::Now` is relative.
+- **Two tier-3 fidelity losses (§4.3),** true of every program since T3 rather than of two: a
+  binary that will not instantiate reads as a crash rather than as a refusal, and `Sys::Now` is
+  relative. Nothing calls `proc_now()`, so the second is a constraint on what may be written
+  next rather than a regression.
 
 ## Conventions
 

@@ -7,6 +7,86 @@ of the two needs amending.
 
 ---
 
+## Every program in a worker of its own
+
+[doc/TODO.md](TODO.md) T3 and T4. Thirty-one of the thirty-two binaries in `/bin` now ask for
+tier 3, and `/bin/sh` is the one that asks for tier 2. So every command a user can start is a
+process the system can *kill* rather than one it can only ask to stop — which is what tier 3 buys
+and the only thing it buys (§4.2).
+
+Nothing in C++ moved for it. The tier is a `u32` in a binary's `braam` custom section and §4.3's
+promise is that the same binary runs at either, so this change is an argument to `stamp.py`, a map
+in `test/run.mjs`, and the documents it made false. `bundle.bin` is the same size to the byte: the
+section is fixed-width, and re-stamping rewrites a field rather than adding one.
+
+### Why now, and why by default
+
+§4.4 estimated a tier-3 syscall at "order 0.1 ms" and concluded that the tier had to be *"a claim
+a binary makes rather than a default"*. T1 measured it at **34–44 µs** in three engines. That is
+the whole argument: at a tenth of the estimate, a command that reads a file or filters a stream
+pays a few hundred microseconds for isolation it cannot be talked out of, and the only program in
+the system that cannot afford it is the one being typed into — a keystroke costs six syscalls, and
+T1 measured sustained typing at 2.7 ms a key in Gecko and 5.1 in WebKit with the shell at tier 3.
+So the default inverted and the shell is the exception, rather than the other way about.
+
+The default lives in `cmake/BraamProgram.cmake`, which is the recipe the SDK installs, so an
+out-of-tree program gets what the system's own programs get. T3 had said to leave that until T8 on
+the grounds that the SDK's default is a claim about what a *stranger's* program should ask for —
+and it is, which is why it should be the same claim. A program that wants tier 2 says `TIER 2` and
+gives up the kill; `src/cmd/CMakeLists.txt` has exactly one such line, for `sh`.
+
+`src/cmd/CMakeLists.txt` lost its per-program tier loop with it. An undefined `BRAAM_BIN_TIER_<p>`
+now expands to nothing and the recipe's default applies, which is how `BRAAM_BIN_LIB_<p>` had
+always worked.
+
+### What the tests had to learn
+
+The driver pumps both tiers uniformly, so most of `test/run.mjs` held unedited — including the
+cases that matter most: a tier-3 `timeout` supervising a tier-3 `spin`, `watch` piping to a child,
+and `^C` down a chain of two workers. Four things did not.
+
+**The pool counts changed, and what they mean is worth more than the numbers.** `pooled()` is 1
+after the first `spin 1` and 2 before `timeout 20 spin`, where before it was the two hired at boot,
+untouched. The rule they now assert is that the pool grows only for a pipeline wider than what is
+idle and shrinks only when a process is *killed*, so each number is hires less terminations — 8
+less 7, and 13 less 11 — and is a running record of what the session has killed. They stay exact
+literals; an "at least one" would have stopped testing the pool.
+
+**`net.hold()` had to learn to count.** It held "the next process to bind a worker", which was
+unambiguous while two programs took one. It is not now: a `submit("clear", …)` between the hold and
+the command takes it instead — `clear` is a program, not a builtin — and in `timeout 20 spin` the
+parent binds its own worker before the child that never returns. `net.hold(n)` holds the *n*-th
+bind from there. The alternative was putting the binary's path into the `bind` message so a test
+could hold by name, which is a change to the host protocol for a test's convenience.
+
+**The broken-worker case was clearing the screen with the broken worker.** `clear` was the first
+`exec` after `dropWorkers()`, so it crashed in `spin`'s place and gave the tier up before the case
+under test ran. The clear happens before the tier is broken now.
+
+**The two cases that give the tier up moved to the end of the run.** Neither can be undone —
+`workers` stays false for the session, by design — so everything after them ran at tier 2 while
+shipping at tier 3, and after this change that "everything" was the whole `/bin/sh`-as-a-program
+section: a shell process spawning pipelines, `less` claiming the screen and losing it to `^C`. They
+now sit just before the final `exit 7`, and that section runs at the tier it ships at.
+
+### What this does not fix, and what it costs
+
+The two §4.3 fidelity losses stop being true of two programs and become true of all of them. A
+binary that will not instantiate reads as a crash (132) rather than as a refusal (126), because a
+tier-3 instance is created inside its worker — so a spawn that runs out of memory on a loaded page
+reports a crash. And `Sys::Now` is relative: nothing calls `proc_now()` today, so that is a
+constraint on what may be written next rather than a regression.
+
+Bulk I/O is where the cost lands: a syscall per `SYS_CHUNK`, which is 512 bytes, at 34–44 µs each.
+T5 is the re-measurement that decides whether T6 — a bigger chunk, or batched replies — is worth
+starting. `make bench` needs one thing first: its `bundle3nosh.bin` twin is now a copy of
+`bundle.bin`, and what a re-measurement wants is a tier-2 twin the target does not pack.
+
+The shell is untouched and stays at tier 2. T7 is the design question that has to be answered
+before it moves — a tier-3 shell dies with the workers, and nothing re-execs init.
+
+---
+
 ## A pool for a system where every command needs a worker
 
 [doc/TODO.md](TODO.md) T2. The pool in `web/proc.js` was sized for the two tier-3 binaries that

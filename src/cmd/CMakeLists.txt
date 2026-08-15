@@ -6,24 +6,20 @@ set(BRAAM_BIN_LIST cat chat clear curl date df echo edit export false grep head 
                    timeout touch true version watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 
-# Tier 3 is a worker of its own, and what a program has to be to earn one is
-# that it may not come back. Everything else runs at tier 2, where a syscall is
-# a call rather than two messages.
-set(BRAAM_BIN_TIER_spin 3)
-set(BRAAM_BIN_TIER_tail 3)
+# A worker of its own is what the recipe gives a program, so a command that
+# will not come back can be killed. The shell asks for tier 2 instead: it is
+# never killed, and a tier-3 prompt would pay two postMessage hops per
+# keystroke (doc/TODO.md T1).
+set(BRAAM_BIN_TIER_sh 2)
 
 # A program that is more than one translation unit names the library that holds
-# the rest of it. Only the shell is, and it stays at tier 2: a tier-3 prompt
-# would pay two postMessage hops for every keystroke.
+# the rest of it. Only the shell is.
 set(BRAAM_BIN_LIB_sh braam_sh)
 
+# An undefined TIER or LIBS expands to nothing, which is the recipe's default.
 foreach(prog IN LISTS BRAAM_BIN_LIST)
-    set(tier 2)
-    if(DEFINED BRAAM_BIN_TIER_${prog})
-        set(tier ${BRAAM_BIN_TIER_${prog}})
-    endif()
     braam_add_program(NAME ${prog}
                       SOURCES ${prog}.cpp
-                      TIER ${tier}
+                      TIER ${BRAAM_BIN_TIER_${prog}}
                       LIBS ${BRAAM_BIN_LIB_${prog}})
 endforeach()

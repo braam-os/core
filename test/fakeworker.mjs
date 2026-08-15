@@ -25,17 +25,19 @@ export function makeFakeLinks(net) {
     net.workers = true;    // false makes a link refuse to be made
     net.broken = false;    // true makes one that never loads: onerror, no ready
     net.held = new Set();  // pids whose steps sit undelivered, as a loop does
-    net.holdNext = false;  // hold the next process to be bound, whatever pid
+    net.holdIn = 0;        // binds to let by before holding one; 0 is off
 
     // A pid is not known until the kernel has one, and by then the command has
-    // been submitted — so a test says "the next one" and the bind fills it in.
-    net.hold = () => {
-        net.holdNext = true;
+    // been submitted — so a test counts binds and the bind fills the pid in.
+    // Every program takes a worker now, so a pipeline binds one per stage and a
+    // spawning program binds before its child: `n` is which of them to hold.
+    net.hold = (n = 1) => {
+        net.holdIn = n;
     };
 
     net.release = () => {
         net.held.clear();
-        net.holdNext = false;
+        net.holdIn = 0;
     };
 
     // One round of message passing, in both directions. Returns true when
@@ -99,10 +101,8 @@ export function makeFakeLinks(net) {
         link.serve = (m) => {
             if (m.k === "bind") {
                 net.bound.push(m.pid);
-                if (net.holdNext) {
+                if (net.holdIn && --net.holdIn === 0)
                     net.held.add(m.pid);
-                    net.holdNext = false;
-                }
                 ops = workerOps(m.pid, CLOCK);
                 server = serveProc(ops);
                 try {

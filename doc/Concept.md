@@ -124,7 +124,7 @@ sequence to mis-parse. Rendering is under 200 lines of JavaScript.
 └───────────────────────────┬────────────────────────────────┘
                             │  postMessage: bind, step
 ┌───────────────────────────┴────────────────────────────────┐
-│       (M9+) Web Worker, one untrusted process              │
+│       (M9+) Web Worker, one process — every program        │
 │  the same instance, one thread further out, where          │
 │  terminate() does not need its cooperation                 │
 └────────────────────────────────────────────────────────────┘
@@ -503,8 +503,8 @@ between them from a flag in the binary's metadata — userland does not notice.
 
 | Tier | Isolation | Spawn cost | Kill | Used for |
 |---|---|---|---|---|
-| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | every program, the shell included |
-| **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | untrusted or long-running |
+| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | the shell, and anything typed into |
+| **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | every other program |
 
 **There is no third row, and the shell is not an exception to the two.** `/bin/sh` is a binary
 in `/bin` that init runs, and everything a prompt needs — a pipeline, a redirection, a job, a
@@ -516,6 +516,14 @@ at.
 binary, and the binary says which tier it wants. One asking for tier 3 still runs at tier 2 where
 the host has no worker to put it in — a *fallback*, covering a browser without nested workers
 and a `procworker.js` that will not load.
+
+**Tier 3 is what a program gets unless it asks for less**, which is a decision taken once the
+tier had been measured: 34–44 µs a syscall round trip against §4.4's estimated 0.1 ms, so a
+command that is not interactive pays a few hundred microseconds for a kill switch it cannot be
+denied. `/bin/sh` is the one binary in the system that asks for tier 2, because a prompt pays the
+tier six times a keystroke and there is nobody to kill it for. The recipe that builds a program
+carries that default (`cmake/BraamProgram.cmake`), so an out-of-tree program follows the system's
+own answer.
 
 **There was a third tier, and it is gone.** The **kernel applet** — a program as an in-kernel
 coroutine, sharing the kernel's heap and its whole authority — was how every program was written
@@ -767,7 +775,8 @@ the tier-2 closure does. One message down, one up, per step — the protocol bet
 workers is the *host's*, not an ABI a binary can see, and it is written once in `web/proc.js`
 with both halves in the same file.
 
-Two things do lose fidelity, and neither is worth an ABI change. A tier-3 instance is created
+Two things do lose fidelity, and neither is worth an ABI change — though both are now true of
+every program rather than of the two that used to ask for the tier. A tier-3 instance is created
 inside its worker, so a binary that will not instantiate reads as a crash (132) rather than as
 "will not instantiate" (126) — the module is still compiled in the kernel worker, so a malformed
 one is still refused before anything runs. And `Now`, as above, is relative.
@@ -792,13 +801,14 @@ is where a worker is made and never loads its script, which is a worker that rep
 before it has announced itself.
 
 A tier-3 **syscall** is the cost that does not go away: two `postMessage` hops and two copies,
-against a direct call and one copy at tier 2. That is the reason the tier is a claim a binary makes
-rather than a default — a syscall-bound program pays it per `SYS_CHUNK`.
+against a direct call and one copy at tier 2. A syscall-bound program pays it per `SYS_CHUNK`.
 
 *Measured* since, at 0.2.44, in three engines: **34–44 µs** a round trip, not the 0.1 ms this
 section estimated. The tier-2 figure is 2–17 µs of work, plus whatever the every-64th
 `setTimeout(drain, 0)` waits — which is the larger half of it, and is a property of the host's
-scheduling rather than of the tier. doc/TODO.md T1 has the numbers and the method.
+scheduling rather than of the tier. doc/TODO.md T1 has the numbers and the method. That
+measurement is what turned the tier from a claim a binary makes into the default it gets: at those
+figures the only program that cannot afford it is the one being typed into.
 
 The real cost is **duplication**: with no dynamic linking, every binary embeds its own copy
 of the allocator, the string types, and the coroutine runtime. Keep the process-side runtime
