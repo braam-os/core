@@ -13,7 +13,7 @@
 // keyboard, and the three services a worker cannot perform for itself.
 
 import { E } from "./abi.js";
-import { consumes, normalise } from "./keys.js";
+import { consumes, normalise, pasted } from "./keys.js";
 
 // Persistence is granted to the origin, not to a terminal, so the request is
 // made once for the page however many are mounted. Asking twice is not merely
@@ -288,13 +288,29 @@ export function mount(options = {}) {
     // one.
     let pasteWaiter = null;
 
+    // Cmd+V, or Ctrl+V where that is the chord: the browser hands the text over
+    // and the terminal types it. A `pbpaste` that is waiting takes it instead —
+    // it asked for exactly this gesture, and a program reading the clipboard
+    // wants the text rather than the keystrokes.
+    //
+    // The paste event is the document's, not the canvas's, so an embedded
+    // terminal only claims one when it holds the focus; otherwise the paste
+    // belongs to whatever field the page focused.
     function onPaste(event) {
-        if (!pasteWaiter)
+        if (document.activeElement !== canvas)
             return;
-        const resolve = pasteWaiter;
-        pasteWaiter = null;
+        const text = event.clipboardData ? event.clipboardData.getData("text") : "";
+        if (pasteWaiter) {
+            const resolve = pasteWaiter;
+            pasteWaiter = null;
+            event.preventDefault();
+            resolve(text);
+            return;
+        }
+        if (!text)
+            return;
         event.preventDefault();
-        resolve(event.clipboardData ? event.clipboardData.getData("text") : "");
+        worker.postMessage({ kind: "paste", codes: pasted(text) });
     }
     addEventListener("paste", onPaste);
 

@@ -172,6 +172,35 @@ function pump() {
         timer = setTimeout(pump, delay);
 }
 
+// A paste is a run of keystrokes (web/keys.js), and a run is longer than the
+// key ring — so it is fed at the rate the console drains it rather than all at
+// once, which would drop everything past the ring's last slot. key() says
+// whether it took the keystroke; a refusal means the ring is full, and the rest
+// of the run waits for the tick that empties it. A second paste joins the queue
+// instead of displacing it; a key typed while one is being fed goes straight in
+// ahead of the rest, since ^C must not wait behind a paste.
+let pasting = null; // { codes, at }, the run being fed
+
+function feed() {
+    while (pasting.at < pasting.codes.length && self.kernel.key(pasting.codes[pasting.at] >>> 0, 0))
+        pasting.at++;
+    pump();
+    if (pasting.at < pasting.codes.length)
+        setTimeout(feed, 0);
+    else
+        pasting = null;
+}
+
+function type(codes) {
+    if (pasting) {
+        pasting.codes = pasting.codes.slice(pasting.at).concat(codes);
+        pasting.at = 0;
+        return; // the feed already waiting on a turn will take it
+    }
+    pasting = { codes, at: 0 };
+    feed();
+}
+
 // Events reach a suspended task as a wake token, never as a return value
 // (Concept.md §2.2). Every one of them pumps: when nothing is sleeping there is
 // no timer armed, so queued work would otherwise sit there forever.
@@ -250,6 +279,10 @@ self.onmessage = ({ data }) => {
             renderer.all();
             self.postMessage({ kind: "selection", text: renderer.text() });
         }
+        break;
+    case "paste":
+        deselect();
+        type(data.codes || []);
         break;
     case "deselect":
         deselect();

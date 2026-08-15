@@ -7,6 +7,72 @@ of the two needs amending.
 
 ---
 
+## Paste, as typing
+
+`Cmd+V` — `Ctrl+V` where that is the chord — puts the clipboard into the terminal. It cost one
+function in `web/keys.js`, a feeder in `web/worker.js`, four lines in `web/braam.js` and a return
+value on `key()`. Nothing else moved: no import, no export added, no syscall, and no operation in
+the §4.3 table.
+
+**A paste is keystrokes.** §2.3 leaves no alternative — the terminal is a cell grid and the
+keyboard is a `Channel<Key>`, so there is no stream for pasted text to be written into and no
+second way in for it to take. `pasted(text)` turns the text into the run of key codes that would
+have typed it: `Enter` for a newline however the platform spells it (`\r\n` and `\r` are one
+`Enter`, not two), `Tab` for a tab, and nothing for any other control character, because there is
+no key that produces one. The reward for that translation is that everything downstream already
+works — the line editor, a cooked reader like `cat`, and a raw claimant like `edit` each get a
+paste on the terms they already read keys on, and none of them can tell it from fast typing.
+
+**Why `key()` now returns something.** The keyboard ring holds 64 keystrokes and drops what it
+cannot hold — the right policy for a keyboard, and the wrong one for a paste, which is routinely
+longer than the ring and would arrive with its tail cut off. The host has to feed the run at the
+rate the console drains it, and to do that it has to know when the ring is full. Nothing else
+tells it: occupancy is not in the `Screen` descriptor, `tick`'s delay says nothing about it, and
+a fixed chunk size per turn is a guess that is silently wrong when a raw claimant is slow to
+read.
+
+So `key()` reports whether it queued the keystroke, and `web/worker.js` pushes until it is
+refused, ticks, and comes back on a later turn for the rest. This is the smallest change that
+makes the loss impossible rather than unlikely, and it does not weaken §2.2: the return value is
+a fact about the call the host just made, not a result arriving from the kernel — no data crosses
+and nothing is scheduled. The alternatives were worse in kind, not degree. A `paste(ptr, len)`
+export would be a seventh entry on the boundary and a byte stream into the keyboard, which is the
+invariant inverted. Growing the ring to fit the largest plausible paste is a number that is
+always too small or always too large, and it would still drop the paste after it.
+
+A second paste while one is being fed joins the queue rather than displacing it, for the reason
+`pbpaste`'s superseded waiter answers empty: a run that is silently truncated in the middle is
+worse than one that arrives late. A key *typed* during a paste goes straight in ahead of the rest
+of the run — `^C` must not wait behind a hundred queued keystrokes.
+
+**Who gets the gesture.** Neither `Ctrl+V` nor `Cmd+V` is prevented, which is deliberate and was
+already true: the `paste` event the browser makes from them is the only way a page may read the
+clipboard with no permission, which is what `pbpaste` is built on (§5.4). The event is the
+document's rather than the canvas's, so the focus decides first — an embedded terminal must not
+swallow a paste meant for a field beside it. That gate is new for `pbpaste` too, and it is a
+fix rather than a side effect: its waiter was global, so once a paste could be typed, an
+unfocused terminal with `pbpaste` running would have taken one meant for the terminal next to it.
+Within the focused terminal a waiting `pbpaste` wins and nothing is typed — it asked for exactly
+this gesture, and a program reading the clipboard wants the text rather than the keystrokes.
+
+**What it does not fix.** A multi-line paste at the prompt loses everything after the first
+command's newline, and that is type-ahead across a command boundary rather than anything about
+pasting. The shell claims the raw route to edit a line and gives it back around anything it runs
+(§3.5), so keystrokes arriving while a command runs are *cooked* — echoed, and put in the console
+channel as that command's stdin, which is what makes `cat` read what is typed. The shell's line
+editor never reads that channel, and `console_fg_set` clears it when the next command is armed.
+Handing the leftover cooked input to the editor when it retakes the keys is the fix, and it is a
+change to the console discipline rather than to the paste: a non-blocking read of the console
+channel, and a rule for what a partial line means when the claim moves. Pasting one line — a
+command, a path, a URL — is the case that motivated this and it is exact.
+
+`test/run.mjs` feeds a pasted line longer than the ring with the same loop `web/worker.js` uses
+and asserts both that the whole run arrives and that it took more than one turn, so a ring that
+silently grew or a `key()` that stopped reporting would show up as a test that no longer proves
+anything.
+
+---
+
 ## A prompt with a colour
 
 The prompt is bright white, and the `[N]` in front of it — the status of the command that just

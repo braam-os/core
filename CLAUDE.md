@@ -80,6 +80,13 @@ grid state, the colour a cell grid cannot carry in the bytes (§2.3) — so the 
 and `PROC_ABI` is 5. `/bin/sh` is the only caller: red `[N]`, bright white `$`, and the default
 back before what is typed.
 
+**And the clipboard goes both ways.** `Cmd+V` — `Ctrl+V` where that is the chord — types the
+clipboard into the terminal: `pasted()` in `web/keys.js` turns the text into the run of
+keystrokes that would have typed it, and `web/worker.js` feeds it at the rate the console drains
+it. That pacing is why `key()` now returns 1 or 0 rather than nothing — the ring holds 64 and a
+paste is longer — which is the one signature change on the boundary; the export list, the import
+list and the §4.3 table are all untouched. A waiting `pbpaste` still takes the gesture instead.
+
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
 stable: amend it only when a design decision changes, and then in the same commit that changes
@@ -397,6 +404,10 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   resume-side twin of `CancelToken` and would have to reach every awaitable.
 - **Resize drops rows from the top rather than re-wrapping logical lines**, which §3.5 had
   promised to M7.
+- **A multi-line paste loses everything after the first command.** That is type-ahead across a
+  command boundary, not the paste: the shell gives the raw route back around anything it runs, so
+  what is typed while a command runs is cooked into the console channel as *its* stdin, which the
+  shell's editor never reads and `console_fg_set` clears. Pasting one line is exact.
 - **A mouse selection does not survive output.** It is dropped by the next keystroke and by a
   resize, and output scrolling under it leaves the highlight on cells that have since changed.
   Holding one needs the per-row continuation bit the re-wrap above is waiting for.

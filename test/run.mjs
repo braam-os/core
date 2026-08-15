@@ -7,6 +7,7 @@ import { basename } from "node:path";
 
 import { FakeStore, makeFakeImports } from "./fakefs.mjs";
 import { FakeNet, makeFakeSvc } from "./fakesvc.mjs";
+import { pasted } from "../web/keys.js";
 import { Renderer } from "../web/render.js";
 
 function usage() {
@@ -356,6 +357,13 @@ if (mode === "--kernel") {
             fail("a click left a selection behind");
     }
 
+    // The other half of the page's clipboard: a paste is a run of keystrokes
+    // and nothing else (Concept.md §3.5). web/keys.js turns the text into them
+    // — one Enter for a newline however it is spelled, and no key at all for a
+    // control character that no key produces.
+    if (pasted("a\r\nb\tc").join() !== [97, KEY.ENTER, 98, KEY.TAB, 99].join())
+        fail(`pasted() gave [${pasted("a\r\nb\tc")}]`);
+
     submit("clear", 1045); // the programs need more than the whole grid
     addr = instance.exports.resize(100, 48);
     if (addr === 0)
@@ -367,6 +375,30 @@ if (mode === "--kernel") {
                         "tail", "timeout", "touch", "true", "version", "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
+
+    // A pasted line is longer than the 64-slot key ring, so it is fed at the
+    // rate the console drains it: key() says whether it took the keystroke, and
+    // the rest of the run waits for the tick that empties the ring. This is the
+    // loop in web/worker.js, and pushing the run in one go would drop its tail.
+    // The screen is wide here, so the echoed line does not wrap.
+    {
+        const codes = pasted(`echo ${"z".repeat(80)}\r\n`);
+        let at = 0, turns = 0;
+        while (at < codes.length && turns++ < 40) {
+            while (at < codes.length && instance.exports.key(codes[at], 0))
+                at++;
+            run(1055);
+        }
+        if (at !== codes.length)
+            fail(`the paste stalled after ${at} of ${codes.length} keystrokes`);
+        if (turns < 2)
+            fail(`the ring took ${codes.length} keystrokes at once, so nothing was paced`);
+        s = descriptor(addr);
+        if (!rows(s).includes("z".repeat(80)))
+            fail(`the pasted line did not run: ${JSON.stringify(rows(s))}`);
+        if (row(s, s.cursor_y) !== "$")
+            fail(`the paste left ${row(s, s.cursor_y)}, expected a fresh prompt`);
+    }
 
     addr = instance.exports.resize(60, 16);
     if (addr === 0)

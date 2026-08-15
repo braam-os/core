@@ -208,7 +208,7 @@ Deliberately tiny, one-directional per call.
 init(heap_base)
 wake(token, payload_ptr, payload_len)   // host signals an event
 tick(now_ms)                            // drains ready queue; returns ms-until-next-timer, or -1
-key(code, mods)                         // fast path, avoids allocation
+key(code, mods) -> u32                  // fast path, avoids allocation; 0 if the ring was full
 resize(cols, rows)                      // returns the screen descriptor's address, or 0
 ref(slot, obj)                          // host deposits a JS object in the table (§3.7)
 sys(pid, op, a0, a1, a2) -> i32         // a process's synchronous syscall (§4.3)
@@ -365,6 +365,29 @@ The clipboard write happens inside the keydown handler because that keystroke is
 activation permitting it (§A.2), which is why the page holds the text rather than asking the
 worker for it once the chord has arrived. Any other keystroke, and any resize, drops the
 selection: the cells it named mean something else the moment the grid moves under it.
+
+**A paste is a run of keystrokes, and nothing downstream can tell it from fast typing.** There
+is no byte stream to write into (§2.3), so `web/keys.js` turns the pasted text into key codes —
+one `Enter` per newline however the platform spells it, `Tab` for a tab, and nothing at all for
+a control character no key produces — and the worker feeds them through `key()` like any other
+keystroke. That is also why the paste needs no import, no export and no syscall of its own: the
+route it takes is the one the keyboard already has, so it reaches a cooked reader, a claimant of
+the raw route, and the line editor alike, each on its own terms.
+
+What a run does need is **back-pressure**, and that is the whole reason `key()` returns
+something: the ring holds 64 keystrokes and a paste is routinely longer, so the host feeds it at
+the rate the console drains it rather than pushing it in one go and losing the tail. A refusal
+means the ring is full and the rest of the run waits for the tick that empties it. This is the
+only return value on the input path, and it reports a fact the host cannot otherwise observe —
+it is not an answer arriving from the kernel, so §2.2 is untouched.
+
+`Cmd+V`, or `Ctrl+V` where that is the chord, is the browser's own gesture: the page never reads
+the clipboard for it, and neither key is prevented, precisely so the `paste` event is produced.
+That event is the document's rather than the canvas's, so a terminal claims one only while it
+holds the focus — an embedded one must not swallow a paste meant for a field beside it, nor let a
+`pbpaste` waiting in the terminal next to it steal one. Within the terminal that has the focus, a
+`pbpaste` waiting for the same gesture (§5.4) takes the text and nothing is typed: it asked for
+exactly this gesture, and a program reading the clipboard wants the text and not the keystrokes.
 
 **Select all is `Cmd+A`, or `Ctrl+Shift+A` where there is no `Cmd`, and is deliberately not
 `Ctrl+A`** — which is the line editor's beginning-of-line and has no "is there a selection?" to

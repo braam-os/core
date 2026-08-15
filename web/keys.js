@@ -45,6 +45,25 @@ export function normalise(event) {
     return { code: points[0].codePointAt(0), mods };
 }
 
+// Pasted text as the keystrokes that would have typed it: the terminal has no
+// byte stream to write into (§2.3), so a paste is a run of keys and nothing
+// downstream can tell it from fast typing. A newline is Enter and a tab is Tab,
+// however the platform spells them; every other control character is dropped,
+// since there is no key that produces one.
+export function pasted(text) {
+    const codes = [];
+    for (const ch of text.replace(/\r\n?/g, "\n")) {
+        const code = ch.codePointAt(0);
+        if (ch === "\n")
+            codes.push(CODES.get("Enter"));
+        else if (ch === "\t")
+            codes.push(CODES.get("Tab"));
+        else if (code >= 0x20 && code !== 0x7f)
+            codes.push(code);
+    }
+    return codes;
+}
+
 // Whether to preventDefault. Meta is the system's, and a few Ctrl shortcuts
 // are the browser's; a page that swallows Ctrl+R is a page you cannot leave.
 export function consumes(event, key) {

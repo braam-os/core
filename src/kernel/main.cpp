@@ -95,10 +95,12 @@ BRAAM_EXPORT("ref") void ref(u32 slot, __externref_t obj)
 }
 
 // The fast path: it only queues, so it can never re-enter the scheduler, and a
-// full queue drops the event rather than blocking the host.
-BRAAM_EXPORT("key") void key(u32 code, u32 mods)
+// full queue drops the event rather than blocking the host. Returns 1 if the
+// keystroke was queued and 0 if it was not, which is what lets the host feed a
+// paste at the rate the console drains it (Concept.md §3.5).
+BRAAM_EXPORT("key") u32 key(u32 code, u32 mods)
 {
-    keys().try_send(Key{ code, mods });
+    return keys().try_send(Key{ code, mods }) ? 1 : 0;
 }
 
 // Reflows the screen and returns the address of its descriptor, or 0 if the
