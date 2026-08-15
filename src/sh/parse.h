@@ -10,12 +10,12 @@
 // store moves under them until it stops growing.
 #pragma once
 
+#include "kernel/args.h"
 #include "kernel/result.h"
 #include "kernel/span.h"
 #include "kernel/str.h"
 #include "kernel/string.h"
 #include "kernel/vec.h"
-#include "prog.h"
 
 enum class Redir : u8 {
     In,        // < f

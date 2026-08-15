@@ -1,5 +1,6 @@
 #include "boot.h"
 
+#include "exec.h"
 #include "fs/bundlefs.h"
 #include "fs/hostfs.h"
 #include "fs/memfs.h"
@@ -9,6 +10,7 @@
 #include "kernel/screen.h"
 #include "kernel/traits.h"
 #include "procfs.h"
+#include "tty.h"
 
 namespace {
 
@@ -22,7 +24,7 @@ void say(Str s)
 // two views of the one bundle, since the programs and the files that ship
 // beside them are one download and two directories.
 //
-// Without it there is no /bin at all, and the shell has only its builtins. That
+// Without it there is no /bin at all, and therefore no shell to run. That
 // was ordinary when programs were in-kernel; now it is worth saying out loud.
 Task<void> mount_bundle()
 {
@@ -31,7 +33,7 @@ Task<void> mount_bundle()
         co_return;
     Result<String> r = co_await t;
     if (r.is_err()) {
-        say("braam: no boot bundle — /bin is empty and only builtins will run");
+        say("braam: no boot bundle — /bin is empty and there is no shell to run");
         co_return;
     }
 
@@ -89,9 +91,8 @@ Task<void> mount_home()
 
 Task<void> boot_filesystem()
 {
-    // Idempotent. A second shell — or a second boot in a test — finds the
-    // mounts already there and leaves them, rather than reporting every one of
-    // them as an error.
+    // Idempotent. A second boot in a test finds the mounts already there and
+    // leaves them, rather than reporting every one of them as an error.
     if (!vfs_mounts().empty())
         co_return;
 
@@ -112,7 +113,9 @@ Task<void> boot_filesystem()
     if (Task<Result<void>> t = vfs_mkdir("/mnt/import"))
         co_await t;
 
-    // The scheduler, the heap and the job table, readable with cat and grep.
+    // The scheduler and the heap, readable with cat and grep. The job table is
+    // not here any more: it is the shell's own memory, and the shell is a
+    // process like any other (Concept.md §5.1).
     if (Fs *proc = procfs_create())
         if (vfs_mount("/proc", proc).is_err())
             say("braam: /proc would not mount");
@@ -122,7 +125,41 @@ Task<void> boot_filesystem()
     if (Task<void> t = mount_home())
         co_await t;
 
-    // Landing in /home is what makes `echo hi > notes` persist by default.
+    // Landing in /home is what makes `echo hi > notes` persist by default. It
+    // is the kernel's own directory now, and what /bin/sh inherits at exec.
     if (Task<Result<void>> t = vfs_chdir("/home"))
         co_await t;
+}
+
+Task<i32> init_task()
+{
+    // The mounts come first, and they always did — but the shell used to do
+    // them. It cannot any more: it is a file in /bin, and /bin is one of them.
+    if (Task<void> t = boot_filesystem())
+        co_await t;
+
+    Executable exe;
+    Result<void> found = Err(Error::NoMemory);
+    if (Task<Result<void>> t = exec_resolve(SHELL, exe))
+        found = co_await t;
+    if (found.is_err()) {
+        // Said on the grid rather than through a Stream, because there is
+        // nobody left to print it: a bundle that will not give up /bin/sh is a
+        // system with no prompt, and the reason has to reach the screen.
+        say("braam: /bin/sh: not found — the boot archive is broken");
+        co_return 1;
+    }
+
+    Args args{ Span<const Str>(&SHELL, 1) };
+    Task<i32> t = exec_process(exe, args, stdio_console());
+    if (!t) {
+        say("braam: /bin/sh would not start");
+        co_return 1;
+    }
+    i32 status = co_await t;
+
+    // init spawns the shell and nothing else, so there is no getty to start
+    // another. Say so rather than leave a prompt that never comes back.
+    say("braam: the shell exited — reload to start again");
+    co_return status;
 }

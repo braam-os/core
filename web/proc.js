@@ -401,13 +401,23 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
 
     // Letting go of the whole tier, for a host that is disposing of the kernel.
     function shutdown() {
+        dropWorkers();
+        procs.clear();
+    }
+
+    // Letting go of the workers alone: the pool, and every process one is
+    // holding. A tier-2 process is untouched, because there is no worker
+    // between it and the kernel — which is the whole of §4's fallback, and is
+    // why this is not `shutdown`. The shell is one of those, and permanent.
+    function dropWorkers() {
         for (const link of idle)
             link.terminate();
         idle.length = 0;
-        for (const p of procs.values())
-            if (p.link)
+        for (const [pid, p] of procs)
+            if (p.link) {
                 p.link.terminate();
-        procs.clear();
+                procs.delete(pid);
+            }
     }
 
     function live() {
@@ -430,5 +440,5 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     if (first)
         idle.push(first);
 
-    return { spawn, step, drain, kill, shutdown, live, pooled, pending };
+    return { spawn, step, drain, kill, shutdown, dropWorkers, live, pooled, pending };
 }

@@ -1,7 +1,17 @@
-// Bringing the filesystem up. The shell awaits this before its first prompt,
-// because everything it can be asked to do needs the mounts in place.
+// Bringing the system up: the mounts, and then the shell.
+//
+// init spawns the console pump and one task, and this is that task. The shell
+// used to do the mounting itself and cannot any more — it is a file in /bin,
+// and /bin is one of the mounts.
 #pragma once
 
 #include "kernel/task.h"
+#include "kernel/types.h"
+
+// The one program init runs. There is no getty and no /etc/inittab: when it
+// returns, the terminal is done.
+constexpr Str SHELL = "/bin/sh";
 
 Task<void> boot_filesystem();
+
+Task<i32> init_task();

@@ -1,6 +1,6 @@
 // The kernel's exported surface. M1 added the scheduler's tick() and wake();
 // M2 adds key() and resize(), completing the five exports of Concept.md §3.4.
-// M3 boots the userland shell, which is now the only task init() spawns. M8
+// M3 boots the userland shell; init() spawns it and the console pump. M8
 // adds sys() and sys_async(), which are a process's two imports arriving here
 // with the pid the host bound to them (§4.3).
 
@@ -13,8 +13,9 @@
 #include "sched.h"
 #include "screen.h"
 #include "str.h"
+#include "user/boot.h"
+#include "user/console.h"
 #include "user/exec.h"
-#include "user/shell.h"
 #include "version.h"
 
 // Runs the static constructors. --no-entry leaves it uncalled, so the kernel
@@ -52,8 +53,16 @@ BRAAM_EXPORT("init") void init(u32 heap_base)
     screen_write(line.str());
     screen_newline();
 
-    if (!sched_spawn(shell(), "shell"))
-        panic("braam: the shell would not spawn");
+    // The pump before the shell, and for good: it is the only receiver on the
+    // keyboard channel (console.h), and the prompt claims a route through it
+    // rather than reading keys itself.
+    if (!sched_spawn(console_pump(), "tty"))
+        panic("braam: the console would not start");
+
+    // The mounts, and then /bin/sh — a program like any other, with no shell
+    // left in here to be the exception (Concept.md §4).
+    if (!sched_spawn(init_task(), "init"))
+        panic("braam: init would not spawn");
 }
 
 // Drains the ready queue and reports the delay until the next timer, or -1

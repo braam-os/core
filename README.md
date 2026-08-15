@@ -3,7 +3,7 @@
 An operating system that runs in a browser tab.
 
 Braam is a small, self-contained CLI environment — kernel, scheduler, filesystem, terminal,
-shell, twenty-nine programs and six builtins — written from scratch in freestanding C++20 and
+shell, thirty-two programs and six builtins — written from scratch in freestanding C++20 and
 compiled to WebAssembly. It has no server side, needs no special HTTP headers, and deploys as a
 static site. Nothing is linked that was not written for it: no libc, no Emscripten runtime, no
 `xterm.js`. `kernel.wasm` is 165 KiB and holds no userland at all: every program is a binary of
@@ -81,10 +81,14 @@ four exports, and no argument anywhere for a pid — which is the whole of "a pr
 a syscall on behalf of another". `spin` runs at tier 3 and exists to be un-killable by
 cooperation.
 
-Six commands are *not* programs, because no syscall could serve them: `cd` moves the one global
-working directory, `jobs`, `fg` and `kill` are the shell's own job table, `exit` ends its loop,
-and `help` lists the rest. They are shell builtins with no file behind them — and they are
-ordinary pipeline stages all the same, so `help | grep ls` works.
+**The shell is one of the programs.** `/bin/sh` is a binary init runs, and what a prompt needs —
+a pipeline, a redirection, a job, a working directory, the keyboard, the cursor — it asks for
+through the same syscalls any program can call. There is no in-kernel program of any kind.
+
+Six commands are *not* programs, because each touches the shell process's own state: `cd` moves
+the working directory a typed command inherits, `jobs`, `fg` and `kill` are its job table, `exit`
+ends its loop, and `help` lists the rest. They are shell builtins with no file behind them — and
+they are ordinary pipeline stages all the same, so `help | grep ls` works.
 
 **An embedding API.** `web/braam.js` puts a terminal on a host page with
 `mount({ canvas })` — one instance per worker, so mounting twice gives two kernels that share
@@ -132,9 +136,10 @@ back to a buffered instantiate where the host does not serve `.wasm` as `applica
 | [src/fs/](src/fs/) | paths, the VFS, `MemFs`/`BundleFs`/`OpfsFs`, the storage ABI |
 | [src/svc/](src/svc/) | fetch, WebSocket, clipboard, file transfer, clock, process control |
 | [src/ui/](src/ui/) | the layout layer over a `Grid`: `Pane`, `TextBuf`, `TextView` |
-| [src/user/](src/user/) | line editor, grammar, job runtime, shell, `exec`, `ProcFs`, boot, builtins |
+| [src/user/](src/user/) | `exec` and the syscall dispatcher, the console, pipes, `ProcFs`, boot |
 | [src/proc/](src/proc/) | a process binary's runtime |
-| [src/cmd/](src/cmd/) | one file per program; every program is a binary |
+| [src/sh/](src/sh/) | the shell: grammar, line editor, job runtime, builtins |
+| [src/cmd/](src/cmd/) | one file per program; every program is a binary, `sh` included |
 | [web/](web/) | the page, the worker, the renderer, the host side of every ABI |
 
 ## Documentation

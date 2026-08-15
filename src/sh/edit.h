@@ -1,14 +1,16 @@
-// The line discipline, in userland, as a coroutine (Concept.md §3.5): history,
-// cursor movement and kill, on top of the cell grid. There is no termios state
-// machine and no escape sequence anywhere in it.
+// The line discipline, in userland and now inside a *program* (Concept.md
+// §3.5): history, cursor movement and kill-word, over the two operations a
+// prompt needs — Write, which wraps and scrolls the screen exactly as it always
+// did, and Cursor, which says where that left off.
+//
+// There is no termios state machine and no escape sequence anywhere in it, and
+// there was none when this was kernel code either. What changed is that every
+// line of it is now a round trip.
 #pragma once
 
-#include "kernel/result.h"
-#include "kernel/str.h"
 #include "kernel/string.h"
-#include "kernel/task.h"
-#include "kernel/types.h"
 #include "kernel/vec.h"
+#include "proc/io.h"
 
 enum class LineEnd : u8 {
     Enter,     // committed with Return
@@ -25,15 +27,20 @@ struct LineEditor {
     static constexpr usize HISTORY_MAX = 32;
 
     // Draws the prompt, edits until Return or ^C, and leaves the cursor at the
-    // end of the line; the caller ends the row. An error is a real failure:
-    // Cancelled when the task is killed, NoMemory when the buffer will not grow.
+    // end of the line; the caller ends the row.
+    //
+    // The keyboard must be claimed already. The shell holds it for as long as
+    // it is at a prompt and gives it back around anything it runs, so that a
+    // program that wants raw keys can claim them in its turn — and so that ^C,
+    // with nothing in front, arrives here as an ordinary key.
     Task<Result<Line>> read_line(Str prompt);
 
     usize history() const { return history_.size(); }
 
 private:
-    void redraw();
-    void place_cursor();
+    Task<Result<void>> redraw();
+    Task<Result<void>> place_cursor();
+    Task<Result<void>> anchor(Str prompt);
     bool set_text(Str utf8);
     bool set_text(const Vec<char32_t> &from);
     bool set_pending();
@@ -48,4 +55,6 @@ private:
     usize hist_    = 0;     // history_.size() means "the line being typed"
     usize painted_ = 0;     // cells the last redraw covered, so the tail erases
     u32 x0_ = 0, y0_ = 0;   // where buf_[0] draws
+    u32 cols_ = 80;         // the last geometry the kernel reported
+    u32 rows_ = 24;
 };

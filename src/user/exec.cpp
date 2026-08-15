@@ -1,5 +1,6 @@
 #include "exec.h"
 
+#include "console.h"
 #include "fs/hostfs.h"
 #include "fs/path.h"
 #include "fs/vfs.h"
@@ -183,7 +184,7 @@ struct Reply {
     String payload;
 };
 
-constexpr usize PROC_REPLIES = 8; // more than PROC_TASKS, so a send never parks
+constexpr usize PROC_REPLIES = 16; // more than PROC_TASKS, so a send never parks
 
 // One child a process started. It outlives the child itself, because an
 // uncollected status is the whole point of Sys::Wait; the Wait that reports one
@@ -566,8 +567,6 @@ Task<i32> proc_spawn_child(Proc &p, Str payload)
         co_return -i32(Error::NoMemory);
     if (Result<void> r = co_await t; r.is_err())
         co_return -i32(r.error());
-    if (s->exe.builtin)
-        co_return -i32(Error::Perm); // a builtin is the shell's, not a program
 
     // From here to the end there is no await, which is what makes the take
     // atomic against another task of this process closing a descriptor.
@@ -657,6 +656,13 @@ Task<i32> spawn_run(SpawnRef s)
     struct Report {
         ~Report()
         {
+            // A child put in front by Sys::Fg has gone, so the console goes
+            // back: ^C must not point at a pid nothing answers to. Only when it
+            // is the whole foreground — a pipeline's stages are armed together
+            // and the ones still running keep it.
+            if (console_fg_count() == 1 && console_fg_has(pid))
+                console_fg_clear();
+
             Proc *par = proc_find(parent);
             if (!par || par->dead)
                 return;
@@ -966,7 +972,15 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 break;
             }
             h->file.fd = r.value();
-            status     = proc_bind(p, h);
+
+            // Appending is a starting offset, not a mode: nothing below the VFS
+            // is seekable, so the position is this side's to keep — and this
+            // side is the process's handle, since M8 gave it one.
+            if (sys_op_arg(c.op) & SYS_O_APPEND)
+                if (Result<u64> at = vfs_size(h->file.fd); at.is_ok())
+                    h->file.off = at.value();
+
+            status = proc_bind(p, h);
             if (status < 0) {
                 handle_release(h); // closes it
                 status = -i32(Error::NoMemory);
@@ -1484,6 +1498,41 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             status = 0;
             break;
 
+        // The scrolling screen's cursor, which is where a prompt lives. Writing
+        // moves it — Sys::Write goes through screen_write, which wraps and
+        // scrolls — and nothing counts the scrolls, so a line editor writes and
+        // then asks where that landed. A set is refused while somebody else
+        // holds the screen, for the reason a blit is.
+        case Sys::Cursor: {
+            if (sys_op_arg(c.op) & 1) {
+                u32 owner = tty_screen_owner();
+                if (owner && owner != p.pid) {
+                    status = -i32(Error::Perm);
+                    break;
+                }
+                if (payload.size() < 12) {
+                    status = -i32(Error::Invalid);
+                    break;
+                }
+                // screen_move clamps, so a column past the edge is the edge
+                // rather than a refusal — the deferred wrap column (§3.5) is
+                // not one a caller can name.
+                screen_move(sys_get_u32(c.stage), sys_get_u32(c.stage + 4));
+                screen_cursor(sys_get_u32(c.stage + 8) != 0);
+            }
+
+            u8 head[20];
+            sys_put_u32(head, screen().cursor_x);
+            sys_put_u32(head + 4, screen().cursor_y);
+            sys_put_u32(head + 8, screen().cursor_on);
+            sys_put_u32(head + 12, screen().cols);
+            sys_put_u32(head + 16, screen().rows);
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
         // Both ends in this process's table. Whichever is moved into a child is
         // closed here by the move, and that is what gives the other end an end
         // of input — there is no second copy left open to prevent it.
@@ -1608,6 +1657,39 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             break;
         }
 
+        // Handing the console to a child, which is what a shell does before it
+        // waits: ^C then reaches the child rather than the shell that started
+        // it. The caller must have the terminal already — it holds the raw keys,
+        // or it is itself what is in front — so a background program cannot take
+        // ^C away from the prompt.
+        case Sys::Fg: {
+            // The caller has to have the terminal, or nobody may. A shell lets
+            // go of the keyboard before it spawns — the child would otherwise
+            // lose the race for it — so "holds the keys" cannot be the whole
+            // rule; "and nobody is in front" is what stops a background program
+            // taking ^C away from whatever is.
+            if (tty_keys_owner() != p.pid && !console_fg_has(p.pid) && console_fg_count()) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            u32 want = sys_op_arg(c.op);
+            if (!want) {
+                console_fg_clear();
+                status = 0;
+                break;
+            }
+            usize at = 0;
+            if (!find_child(p, want, at) || !p.children[at].running) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            // Added rather than replacing, because the op word carries one pid
+            // and a pipeline is up to eight of them: a shell puts its stages in
+            // front one call at a time, and ^C reaches all of them.
+            status = console_fg_add(want) ? 0 : -i32(Error::NoMemory);
+            break;
+        }
+
         default:
             break;
         }
@@ -1690,12 +1772,6 @@ Result<ProcMeta> exec_meta(Str image)
 
 Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
 {
-    // A builtin shadows everything: `cd` is the shell's, whatever a file of
-    // that name in /bin might claim.
-    if (const Builtin *b = builtin_find(name)) {
-        out.builtin = b;
-        co_return {};
-    }
     if (name.empty())
         co_return Err(Error::NotFound);
 

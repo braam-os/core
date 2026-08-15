@@ -7,7 +7,7 @@
 # Memory with one. The initial size is stamped into the binary's metadata from
 # the same number the link uses, so the two cannot disagree.
 set(BRAAM_BIN_LIST cat chat clear curl date df echo edit export false grep head hog
-                   import less ls mkdir mount pbcopy pbpaste pwd rm sleep spin tail
+                   import less ls mkdir mount pbcopy pbpaste pwd rm sh sleep spin tail
                    timeout touch true version watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 set(BRAAM_BIN_INITIAL_PAGES 4)
@@ -21,6 +21,11 @@ math(EXPR BRAAM_BIN_INITIAL_BYTES "${BRAAM_BIN_INITIAL_PAGES} * 65536")
 set(BRAAM_BIN_TIER_spin 3)
 set(BRAAM_BIN_TIER_tail 3)
 
+# A program that is more than one translation unit names the library that holds
+# the rest of it. Only the shell is, and it stays at tier 2: a tier-3 prompt
+# would pay two postMessage hops for every keystroke.
+set(BRAAM_BIN_LIB_sh braam_sh)
+
 foreach(prog IN LISTS BRAAM_BIN_LIST)
     set(tier 2)
     if(DEFINED BRAAM_BIN_TIER_${prog})
@@ -28,7 +33,7 @@ foreach(prog IN LISTS BRAAM_BIN_LIST)
     endif()
     add_executable(bin_${prog} ${prog}.cpp)
     set_target_properties(bin_${prog} PROPERTIES OUTPUT_NAME ${prog})
-    target_link_libraries(bin_${prog} PRIVATE braam_proc braam_flags)
+    target_link_libraries(bin_${prog} PRIVATE ${BRAAM_BIN_LIB_${prog}} braam_proc braam_flags)
     target_link_options(bin_${prog} PRIVATE
         -Wl,--import-memory
         -Wl,--initial-memory=${BRAAM_BIN_INITIAL_BYTES})

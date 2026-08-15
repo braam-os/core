@@ -47,8 +47,8 @@ would need fuel injection, which was considered and not built.
 **No per-process namespace.** A process has a working directory of its own, inherited from
 whoever spawned it, but there is no per-process *root*: once a path is absolute, `open` resolves
 it with the kernel's full authority. `cd` is still a shell builtin, because the directory it
-moves is the shell's — the one a command typed at the prompt inherits — and no syscall may reach
-another process's anything.
+moves is the shell process's own — the one a command typed at the prompt inherits at spawn — and
+no syscall may reach another process's anything. A `/bin/cd` would move its own and exit.
 
 ---
 
@@ -239,7 +239,7 @@ Stamped after the link rather than compiled in, because `initial_pages` must agr
 the one place that knows both. `strip()` drops any earlier section of the same name, so stamping
 twice is stamping once.
 
-`exec_meta` (`src/user/exec.cpp:920-949`) walks the section list and refuses a binary whose magic
+`exec_meta` (`src/user/exec.cpp:1742-1771`) walks the section list and refuses a binary whose magic
 or `abi` is not the kernel's. That is what the `abi` word is for: an ABI amendment makes a stale
 binary a diagnostic rather than a wrong answer. `Tier::Retired = 1` is the in-kernel applet, kept
 reserved rather than reused for the same reason.
@@ -269,7 +269,7 @@ Four operations, answered inside the export, never parking:
 | 3 | `Now` | — | milliseconds since boot |
 | 4 | `Stage` | `a0` = bytes about to be copied in | a kernel address, or 0 |
 
-`exec_sys` (`src/user/exec.cpp:1097-1116`) is a plain switch with no scheduling in it at all.
+`exec_sys` (`src/user/exec.cpp:1947-1966`) is a plain switch with no scheduling in it at all.
 Note that `Sys::Exit` only *records* the status on the process record; the process still has to
 return from `_start`/`_resume` before the step reports `Exited`.
 
@@ -520,7 +520,7 @@ Both of those had to be fixed for this to work, and each was a real bug waiting:
 
 - **One staging buffer per process would have lost data.** The second `Sys::Stage` would have
   handed back the same block and overwritten the first call's payload before its server read it.
-  So the staging block lives on the `Call` record (`src/user/exec.cpp:46-55`), allocated on
+  So the staging block lives on the `Call` record (`src/user/exec.cpp:169-183`), allocated on
   demand and promoted out of `p->staging` when `sys_async` arrives.
 - **One proxy performing calls in turn would have starved them.** A socket read that never
   completes would hold up the keystroke behind it. So the stepper spawns a scheduler job per
@@ -532,7 +532,7 @@ sized 8 so a completing server never parks on the send.
 ### 7.5 `^C`, and the kill
 
 A tier-2 stage is a `Task<i32>` like any other, so `^C` reaches it through exactly the awaitables
-it reaches a builtin through. The destructor is the whole kill path:
+it reaches any other awaiting task through. The destructor is the whole kill path:
 
 ```
  ^C → the job's CancelToken is signalled
@@ -581,11 +581,11 @@ status and a message.
 
 | Status | Meaning | Where |
 |---|---|---|
-| `p->exit` | the process returned from `proc_main` | `exec.cpp:1062` |
-| 126 | the binary will not instantiate | `exec.cpp:1033` |
-| 130 | cancelled — `^C`, `kill`, a job going away | `exec.cpp:1030,1059,1090` |
-| 132 | trapped | `exec.cpp:1066` |
-| 1 | a resource failure, or "suspended with nothing pending" | `exec.cpp:1083` |
+| `p->exit` | the process returned from `proc_main` | `exec.cpp:1903` |
+| 126 | the binary will not instantiate | `exec.cpp:1874` |
+| 130 | cancelled — `^C`, `kill`, a job going away | `exec.cpp:1871,1900,1931` |
+| 132 | trapped | `exec.cpp:1907` |
+| 1 | a resource failure, or "suspended with nothing pending" | `exec.cpp:1924` |
 
 "Suspended with nothing pending" is unrepresentable in a correct runtime — a step that reports
 `Suspended` must have parked on something — so it is reported rather than looped on.
@@ -615,7 +615,7 @@ calls is an ABI nothing tests.
 ### Asynchronous — `sys_async(op, token, ptr, len)`
 
 Reply is `i32 status` then data. A negative status is `-Error`. Served in
-`proc_syscall`, `src/user/exec.cpp:761-1618`.
+`proc_syscall`, `src/user/exec.cpp:767-1940`.
 
 | # | Name | Op-word arg | Payload | Status | Data |
 |---|---|---|---|---|---|
@@ -643,16 +643,35 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 66 | `ScreenEnter` | bit 0 = enter, else leave | — | 0 | `u32 cols`, `u32 rows` |
 | 67 | `ScreenBlit` | — | seven `u32`s, then `w*h` `Cell`s | 0 | — |
 | 68 | `ScreenClear` | — | — | 0 | — |
+| 69 | `Cursor` | bit 0 = set, else report | `u32 x, y, on` when setting | 0 | `u32 x`, `y`, `on`, `cols`, `rows` |
 | 80 | `Pipe` | — | — | 0 | `u32 read fd`, `u32 write fd` |
 | 81 | `Spawn` | — | `u32 fd0, fd1, fd2`, then the argv blob | the child's pid | — |
 | 82 | `Wait` | a pid, or `SYS_WAIT_ANY` | — | the child's status, 0–255 | `u32 pid` |
 | 83 | `Kill` | the pid | — | 0 | — |
+| 84 | `Fg` | a child's pid, or 0 to take the console back | — | 0 | — |
 
 Every multi-byte field is little-endian, and a `u64` is a low word then a high word.
 
 `Chdir` sits at 24 rather than with the process family because it is the state `Open`, `Stat`,
 `List`, `MkDir` and `Remove` resolve *against* — it belongs with the operations it governs, and a
 program that never spawns anything still uses it. `pwd` is its caller.
+
+**`Cursor` is the scrolling screen's, not the alternate one's.** `Write` moves the cursor as a
+side effect — it goes through the same `screen_write` that wraps and scrolls — and reports a byte
+count, so a program that draws a prompt has no way to know where it ended up. Nothing counts
+scrolls either: the grid moves under a write and `cursor_y` does not change. So a line editor
+writes, asks, and infers the scroll from the shortfall. A *set* is refused with `Err(Perm)` while
+another process holds the alternate screen, for the reason `ScreenBlit` is; a get is always
+allowed. `/bin/sh` is the caller.
+
+**`Fg` decides where `^C` goes.** The console keeps a set of foreground pids; the pump cancels
+them all on `^C`, and delivers the interrupt as an ordinary key to whoever holds the raw route
+when the set is empty (Concept.md §3.5). Each call *adds* one pid, because the op word carries
+one and a pipeline is up to eight; `Fg(0)` clears the set. The caller must own the terminal —
+holding the raw keys, or being in front itself, or nobody being in front — and the pid must be
+one of its own children, exactly as `Kill` requires. `/bin/sh` is the caller, and the reason the
+operation exists: without it a shell that is a process is cancelled by the interrupt meant for
+the command it just ran.
 
 **`Spawn`'s three descriptor words.** Slot *i* is either below `SYS_FD_MIN` — "share the stream I
 was given" — or a descriptor of the caller's, which is **moved**: unbound from the parent's table
@@ -666,9 +685,9 @@ and never bound into the child's, because 0, 1 and 2 are not table entries on ei
 
 Naming the same descriptor in two slots is `Err(Invalid)` — it would be one handle owned twice.
 A `Body`, `Socket`, `PickSet` or `PickFile` is `Err(Perm)`: those are read by a host round trip
-rather than through a `Source`, so they are not stdio whatever they are pointed at. Spawning a
-**builtin** is `Err(Perm)` too; a builtin is the shell's own frame and there is nothing to
-instantiate.
+rather than through a `Source`, so they are not stdio whatever they are pointed at. A builtin is
+not refused here any more, because the kernel has never heard of one: they live inside `/bin/sh`
+and `exec_resolve` looks only in `/bin`, so `spawn("cd")` is an ordinary `Err(NotFound)`.
 
 **Statuses are clamped to 0–255 when recorded.** `Sys::Exit` takes whatever the program passed
 it, and a negative status on this wire is an error code.
@@ -693,7 +712,7 @@ the page with it.
 | `SYS_SPAWN_HEAD` | 3 | the descriptor words before `Spawn`'s argv blob, in `u32`s |
 | `SYS_WAIT_ANY` | 0 | `Wait`'s "whichever finishes first"; zero is never a pid |
 | `SYS_PID_MAX` | 0xffffff | the largest pid `Wait` and `Kill` can name — the op word's arg is 24 bits |
-| `SYS_CHILD_MAX` | 8 | live children per process |
+| `SYS_CHILD_MAX` | 16 | live children per process |
 | `SYS_PROC_DEPTH` | 8 | how deep a chain of spawns may go |
 
 `SYS_PID_MAX` is not decoration: `Spawn` refuses to hand back a pid above it, because a truncated
@@ -701,7 +720,7 @@ pid would name somebody else's process rather than nothing.
 
 `SYS_O_*` and `SYS_KIND_*` are deliberately *not* the VFS's numbers. A process cannot see the
 filesystem, and the numbers a binary compiled today speaks must not move because the VFS's did;
-`vfs_flags` (`src/user/exec.cpp:193-207`) maps between them one bit at a time.
+`vfs_flags` (`src/user/exec.cpp:391-405`) maps between them one bit at a time.
 
 `SYS_CHUNK` being 512 rather than a rounder number is the allocator: `FS_BLOCK` is the top size
 class on both sides of the wire, and one byte more costs a whole 64 KiB span (§8.2).
@@ -722,7 +741,7 @@ at all.
 
 Descriptors 0, 1 and 2 are not in the table: they are the `Stdio` the pipeline stage was given,
 so a process writing to fd 1 writes into whatever the shell connected — the screen, a pipe, or a
-redirection — through the same `Stream` a builtin uses. Everything from 3 up indexes a
+redirection — through the same `Stream` the console uses. Everything from 3 up indexes a
 `Vec<Handle *>` on the kernel's process record.
 
 A `Handle` is a descriptor whatever is behind it, and there are seven kinds:

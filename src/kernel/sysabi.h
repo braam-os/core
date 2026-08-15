@@ -35,7 +35,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 3;
+constexpr u32 PROC_ABI       = 4;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -136,6 +136,14 @@ enum class Sys : u32 {
     ScreenBlit,    // payload = u32 x, y, w, h, cursor_x, cursor_y, cursor_on, then w*h Cells
     ScreenClear,   // blank the shell's screen and home its cursor
 
+    // The cursor of the *scrolling* screen, which is the one a prompt lives in.
+    // Get and set in one operation, like KeyClaim above and Chdir: a line editor
+    // writes with Write — which wraps and scrolls — and then asks where that
+    // landed, because nothing counts scrolls. A set is refused while another
+    // process holds the alternate screen, for ScreenBlit's reason.
+    Cursor, // arg bit 0 = set;  payload = u32 x, y, on
+            //   data = u32 x, y, on, cols, rows
+
     // Processes. A program that supervises another one cannot be a shell
     // builtin — the builtins are the six things no syscall could serve — so
     // this is what makes `timeout` and `watch` writable at all.
@@ -149,6 +157,16 @@ enum class Sys : u32 {
                //   an fd below SYS_FD_MIN shares the stream this process was given
     Wait,      // arg = a pid, or SYS_WAIT_ANY;  status = the child's status; data = u32 pid
     Kill,      // arg = the pid, which must be a child of the caller
+
+    // Which process is in front of the console, and therefore what ^C reaches.
+    // With nobody in front, ^C is delivered to whoever holds the raw keys as an
+    // ordinary key — which is how a line editor abandons the line being typed
+    // rather than being cancelled by it.
+    //
+    // The caller must have the terminal already: it holds the raw-key claim, or
+    // it is itself what is in front. That is what stops a background program
+    // taking ^C away from the shell.
+    Fg, // arg = a child's pid, or 0 to take the console back
 };
 
 // The header ScreenBlit's payload begins with, in u32s.
@@ -167,8 +185,10 @@ constexpr u32 SYS_PID_MAX = 0xffffff;
 
 // How many children a process may have at once, and how deep a chain of them
 // may go. Every one is an instance with a memory cap of its own, so without a
-// bound the first fork bomb takes the page with it.
-constexpr usize SYS_CHILD_MAX = 8;
+// bound the first fork bomb takes the page with it. Sixteen rather than eight
+// because a shell is a process now: a pipeline is up to eight stages, and a
+// background job it has not reaped yet still holds an entry.
+constexpr usize SYS_CHILD_MAX = 16;
 constexpr u32 SYS_PROC_DEPTH  = 8;
 
 // The most a blit may carry, which is the largest grid there can be. Sys::Stage

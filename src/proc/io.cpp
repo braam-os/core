@@ -257,6 +257,79 @@ Task<Result<void>> kill_child(u32 pid)
     co_return {};
 }
 
+Task<Result<void>> set_fg(u32 pid)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Fg, pid);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+// Both claims answer with the geometry and nothing else, so taking one and
+// giving it back are the same two lines either way.
+namespace {
+Task<Result<Geometry>> claim(Sys op, bool take)
+{
+    Result<SysReply> r = co_await sys_call(op, take ? 1 : 0);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 8)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return Geometry{ sys_get_u32(p), sys_get_u32(p + 4) };
+}
+} // namespace
+
+Task<Result<Geometry>> keys_claim(bool take)
+{
+    co_return co_await claim(Sys::KeyClaim, take);
+}
+
+Task<Result<Geometry>> screen_claim(bool take)
+{
+    co_return co_await claim(Sys::ScreenEnter, take);
+}
+
+Task<Result<KeyPress>> key_read()
+{
+    Result<SysReply> r = co_await sys_call(Sys::KeyRead, 0);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 16)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return KeyPress{ sys_get_u32(p), sys_get_u32(p + 4),
+                        Geometry{ sys_get_u32(p + 8), sys_get_u32(p + 12) } };
+}
+
+namespace {
+Task<Result<CursorAt>> cursor(u32 arg, Str payload)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Cursor, arg, payload);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 20)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return CursorAt{ sys_get_u32(p), sys_get_u32(p + 4), sys_get_u32(p + 8) != 0,
+                        Geometry{ sys_get_u32(p + 12), sys_get_u32(p + 16) } };
+}
+} // namespace
+
+Task<Result<CursorAt>> cursor_get()
+{
+    co_return co_await cursor(0, Str());
+}
+
+Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on)
+{
+    u8 head[12];
+    sys_put_u32(head, x);
+    sys_put_u32(head + 4, y);
+    sys_put_u32(head + 8, on ? 1 : 0);
+    co_return co_await cursor(1, Str(reinterpret_cast<const char *>(head), sizeof(head)));
+}
+
 Task<Result<void>> sleep_for(u32 ms)
 {
     u8 head[4];

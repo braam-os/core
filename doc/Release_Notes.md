@@ -7,6 +7,160 @@ of the two needs amending.
 
 ---
 
+## The shell is a program
+
+`/bin/sh` is a binary in `/bin` that init runs. `src/user/shell.cpp`, `edit.cpp`, `job.cpp` and
+the six builtins are gone from the kernel and live in `src/sh/`, compiled into one 81 KB module.
+`kernel.wasm` fell from 185,205 bytes to 136,699 — a quarter of it was the shell. The §4.3 table
+grew by two, `cursor` and `fg`, and `PROC_ABI` is 4.
+
+There is now **no in-kernel program of any kind**. §4's tier table had one row that was not a
+tier — *"none: it **is** the shell"* — and that row is what this change deletes.
+
+**What made it possible was already there.** An earlier scoping of this put it at M8-sized: a
+whole syscall family, descriptor passing, per-process cwd, three pieces of kernel state §3.6
+refuses. Every one of those had landed in the three changes above by the time this started, and
+`watch` was already building a pipeline, moving a descriptor into a child, draining it and reaping
+it — in 125 lines. What was left was the terminal, and only the terminal.
+
+### The four things a prompt could not do
+
+1. **Find the cursor.** The line editor read `screen().cursor_x/_y` and called `screen_move` on
+   the *scrolling* grid. `ScreenBlit` is the only cursor-setter in the ABI and it is refused
+   without the alternate screen — and taking the alternate screen blanks the grid the prompt lives
+   in. So: `Sys::Cursor`, get and set in one operation, on the primary screen.
+2. **Be given keys at all when nothing is running.** The pump was spawned per foreground pipeline
+   and belonged to the job it watched; at the prompt the shell received on `keys()` itself. A
+   process has no `keys()`. So the pump became permanent, and init spawns it.
+3. **Survive its own `^C`.** The pump cancelled the running pipeline and never routed `^C` to a
+   claimant. A shell process holding the keyboard would have been cancelled by the interrupt meant
+   to abandon a line.
+4. **Name what `^C` should reach instead.** So: `Sys::Fg`.
+
+The last two are one rule: **`^C` cancels the foreground if there is one, and is delivered to the
+raw-key claimant if there is not.** A shell at a prompt has nothing in front, so it gets the key;
+a shell running a command has put that command in front, so the command gets cancelled. Both
+halves fall out of one branch in the pump.
+
+### Handing over the terminal is a race, and the order is the fix
+
+The first version of `run_line` spawned the stages, put them in front, and *then* let go of the
+keyboard. `less` under it printed `less: no keyboard`.
+
+A child is an ordinary scheduler job, so it starts running the moment the shell next parks — and
+the shell parks on the very next syscall. A full-screen program claims the keys in its first step.
+So by the time the shell got round to releasing them, the child had already asked and been
+refused. Ordering cannot avoid it: every step between spawn and release is a park.
+
+The keyboard therefore goes back **before** anything is spawned. That costs one thing and it is
+worth naming: `Sys::Fg` cannot then require the caller to hold the keys, because the caller has
+just given them up. The rule is "the caller must own the terminal — it holds the raw keys, *or* it
+is itself in front, *or* nobody is in front", and the last clause is what a shell uses. A
+background program cannot use it, because by then its shell's foreground is armed.
+
+The window between the release and the first `Sys::Fg` — a few steps — is the one moment a `^C` is
+dropped rather than delivered. Making it airtight needs the spawn and the arming to be one
+operation, which would be a worse ABI for a case a person cannot hit.
+
+### The pump cannot outrun a claimant that is a process
+
+`Channel<Key>` holds 64 and a claimant's ring holds 32, and the pump moves keys from one to the
+other without ever suspending — `co_await recv()` does not suspend while the channel is
+non-empty. A burst of typing arrives in one tick, so a line longer than 32 characters lost its
+tail before the claimant was ever scheduled. The kernel-side editor had never shown this, because
+it read the 64-slot channel directly.
+
+Dropping is the right policy for a claimant that has stopped reading — it is what keeps a wedged
+program from taking `^C` down with it — but it is the wrong answer for one that simply has not run
+yet. So the pump waits for room, through the timer queue at zero delay, and drops only after
+`KEY_WAIT` of those. The host answers a delay of 0 with another pump straight away, so a claimant
+that is reading costs microseconds; one that is not costs 64 near-instant ticks and then a dropped
+key, with `^C` still arriving on time.
+
+64 rather than 2 because the claimant is a *process* now: every key it reads is a syscall and a
+step, so draining three of them is a dozen ticks.
+
+### Type-ahead survives a claim being dropped
+
+`^C` at a prompt abandons the line, drops the editor's claim, and takes a new one for the next
+prompt. Anything typed after the `^C` was sitting in the ring that just went — and used to be
+sitting in `keys()`, where the next `read_line` would find it. `~KeyInput` therefore puts what it
+never read back on the channel. The pump has drained the channel by the time anything can release
+a claim, so this arrives ahead of whatever the host queues next rather than behind it.
+
+### The console is a device, so its end of input is not the channel's
+
+`^D` closes the cooked channel, and the next command has to be able to read. A pipe is closed once
+and dies; the console is not a pipe. `Channel::reopen()` undoes `close()` and leaves queued values
+and parked tokens alone, which matters: the alternative was rebuilding the channel in place, and a
+reader still unwinding from the previous foreground would have been parked on a corpse.
+
+Arming a new foreground is what reopens it, and also what *clears* it: type-ahead meant for what
+has gone is not input for what replaces it.
+
+### What the shell gave up, and what it gained
+
+- **`kill <pid>` is gone**; `kill %n` is not. `Sys::Kill` refuses anything that is not a child of
+  the caller, and a bare pid the shell never started is exactly that. The authority it needed was
+  never the shell's to have once the shell became a process.
+- **`/proc/jobs` is gone.** The table is a process's own memory now, and no syscall shows one
+  process another's. The stages are still scheduler tasks, so `/proc/<pid>` still lists them —
+  which is how the shell notices a background job has finished, since a `wait` would park and the
+  prompt has to come back either way.
+- **A builtin in a pipeline runs in its turn, not alongside.** Nothing inside a process can wait
+  for a sibling task: the only resumption a task has is a syscall reply. So builtins are run to
+  completion in pipeline order, and each must write its output *once* — a pipe holds eight chunks,
+  and a builtin writing a line at a time would fill one and park with nobody left to drain it.
+  `jobs | help` still works, and that is the constraint that keeps it working.
+- **`sh -s`** reads stdin a line at a time instead of drawing a prompt, which is what a script is,
+  and it costs four lines because the loop was already there.
+- **A second shell is now writable at all** — and was, in fact, how this was built. `/bin/sh` ran
+  as a child of the resident one for the whole of its development, exercised from the prompt and
+  in `run.mjs`, and the flip was the last commit rather than the first.
+
+### The cost, measured
+
+A keystroke at the prompt was one channel receive and a few writes into an array. It is now
+`key_read`, then a repaint of four syscalls — cursor off, one write of the whole line, a cursor
+read to find the scroll, and the cursor back on — each of them a park, a step and a resume. Six or
+so ticks per key.
+
+`run.mjs` had asserted exactly one `present` per keystroke; it now asserts one per *tick*, which is
+what M2 actually asked for and what still happens. The rest of the driver needed one other change:
+`net.proc.live()` is never zero any more, because the shell is an instance and a permanent one, so
+sixteen assertions went through a helper that subtracts it.
+
+### Smaller decisions
+
+- **`Args` was defined twice, identically**, in `src/user/prog.h` and `src/proc/rt.h`. The grammar
+  needed it on both sides of the boundary, so it moved to `src/kernel/args.h` and the copies went.
+  `parse.cpp` and `tokenize.cpp` now compile unchanged into the shell binary and into the test
+  suite, from one source, because they touch nothing but `Str`, `String` and `Vec`.
+- **`Sys::Open` did not honour `SYS_O_APPEND`.** Nothing below the VFS is seekable, so appending is
+  a starting offset the descriptor's owner keeps — and the kernel-side shell did that for itself
+  while `Sys::Open` did not. Latent until a *process* opened a file to append to, which is the
+  first thing `sh` does with `>>`.
+- **`proc.shutdown()` cleared every process record**, which was correct while none was permanent
+  and wrong the moment the shell became one: the test that simulates a host with no workers was
+  killing the shell. It split into `shutdown` (dispose: everything) and `dropWorkers` (the pool and
+  the tier it backs, leaving tier 2 alone), which is what §4's fallback actually means.
+- **`SYS_CHILD_MAX` is 16**, from 8: a pipeline is up to eight stages and a background job the
+  shell has not reaped yet still holds an entry. **`PROC_TASKS` is 8**, from 4, because the shell
+  is the first process that wants more than two.
+- **The shell stays at tier 2.** Tier 3 would put two `postMessage` hops under every keystroke, and
+  the kill switch it buys is no use to the one process nobody can be spawned to kill.
+- **`bundle.bin` is ~491 KB**, from ~406 KB: `sh.wasm` is 81 KB of grammar, line editor, job
+  runtime and builtins, and it carries its own copy of the allocator and the coroutine runtime like
+  every other binary. §4.4's duplication, arriving where it always does.
+
+### What this did not do
+
+`/bin/sh` has no variables, no `-c`, no globbing and no scripts beyond `sh -s`. None of that was
+blocked by the shell being kernel code and none of it is blocked now; they were simply never
+written, and the point of this change was to move the shell without changing what it does.
+
+---
+
 ## A descriptor is held for the length of a syscall
 
 The gap the previous change left open — a `Body` or a `Socket` closed by one task while another

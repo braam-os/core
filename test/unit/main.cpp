@@ -23,16 +23,13 @@ void test_channel();
 void test_io();
 void test_screen();
 void test_tty();
+void test_console();
 void test_text();
-void test_builtin();
 void test_procfs();
 void test_pane();
 void test_textbuf();
-void test_jobs();
-void test_edit();
 void test_tokenize();
 void test_parse();
-void test_shell();
 void test_path();
 void test_hostfs();
 void test_jsref();
@@ -82,7 +79,8 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_io();
     test_screen();
     test_text(); // after screen: it round-trips through the grid
-    test_tty();  // after screen: FullScreen snapshots the grid
+    test_tty();     // after screen: FullScreen snapshots the grid
+    test_console(); // after tty: the pump routes through its claims
     test_pane();
     test_textbuf();
     test_path();
@@ -93,12 +91,8 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_memfs();
     test_bundlefs();
     test_vfs();
-    test_builtin();
-    test_edit();
     test_tokenize();
     test_parse();
-    test_shell();
-    test_jobs();
     test_procfs();
 
     u32 failures = test_failures();

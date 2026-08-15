@@ -6,14 +6,14 @@
 // behind something that can drop.
 //
 // The keyboard is the other way round: it is one Channel with one receiver
-// (channel.h), and while a pipeline runs that receiver is the tty pump. A
-// full-screen program therefore does not take the keyboard — it asks the pump
-// to route to it, which is what the two claims below are.
+// (channel.h), and that receiver is the console pump, for good (console.h). A
+// program therefore does not take the keyboard — it asks the pump to route to
+// it, which is what the claims below are, and the prompt is no exception.
 //
-// Each of the three routes — raw keys, the screen, cooked bytes — has one
-// holder at a time, kernel-side. A second claim is refused with Err(Perm)
-// rather than nested, and a claim clears the route only if it is still the
-// holder. The two a process makes are named by its pid.
+// Each of the two routes — raw keys and the screen — has one holder at a time,
+// kernel-side, named by the pid that took it. A second claim is refused with
+// Err(Perm) rather than nested, and a claim clears the route only if it is
+// still the holder, so two claimants may die in either order.
 #pragma once
 
 #include "io.h"
@@ -21,8 +21,9 @@
 #include "kernel/screen.h"
 #include "prog.h"
 
-// out and err are the same sink, and stdin is empty. A pipeline replaces the
-// ends it redirects; the rest stay pointed here.
+// What init enters /bin/sh with: out and err are the grid, and stdin is the
+// console's cooked input (console.h) — which is what makes `cat` with no
+// argument read what is typed, one level below the shell that spawned it.
 Stdio stdio_console();
 
 // Enough to hold a burst of typing between two resumptions of a program that
@@ -93,30 +94,13 @@ private:
     bool cursor_on_ = false;
 };
 
-// Cooked bytes to another job's stdin — what `fg` needs, since the pump that is
-// running belongs to the pipeline `fg` is a stage of, not to the job it adopts.
-struct InputClaim {
-    // Null routes back to the pump's own job — a job whose stages have all
-    // finished has no pipe left to claim.
-    explicit InputClaim(Pipe *to);
-
-    InputClaim(const InputClaim &)            = delete;
-    InputClaim &operator=(const InputClaim &) = delete;
-
-    ~InputClaim();
-
-    // False when the route is already claimed. There is no pid here: the only
-    // claimant is `fg`, a builtin, which is a pipeline stage rather than a
-    // process, so the claim itself is the owner.
-    bool ok() const { return held_; }
-
-private:
-    bool held_ = false;
-};
-
-// What the pump consults, in this order. Both are null when nothing is claimed.
+// What the pump consults before it cooks. Null when nothing is claimed.
+//
+// There were three routes and there are two. The cooked one was `fg`'s, which
+// borrowed the pump of the pipeline it was a stage of to feed the job it
+// adopted; a shell that is a process feeds its own children through a pipe it
+// holds, and `fg` is Sys::Fg and a wait.
 KeyRing *tty_raw();
-Pipe *tty_cooked();
 
 // Who holds each of the two claims a process makes, or 0 when it is free.
 u32 tty_keys_owner();

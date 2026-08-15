@@ -19,8 +19,9 @@ Stream pipe_sink(Pipe &p);
 
 Source pipe_source(Pipe &p);
 
-// A source that is already at end of input, for a program the shell gave
-// nothing to read.
+// A source that is already at end of input. What a stage of a pipeline gets
+// when nothing writes to it — a background job's stdin, and the read end of a
+// pipe whose only writer went into a child.
 Source null_source();
 
 // An open file behind a Stream or a Source. The offset lives here because the

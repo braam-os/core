@@ -2,7 +2,6 @@
 
 #include "exec.h"
 #include "fs/vfs.h"
-#include "job.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/sched.h"
@@ -17,7 +16,7 @@ namespace {
 // describes a different moment from its first.
 constexpr usize PROC_MAX = 64;
 
-constexpr Str FILES[] = { "cwd", "jobs", "meminfo", "mounts", "uptime", "version" };
+constexpr Str FILES[] = { "cwd", "meminfo", "mounts", "uptime", "version" };
 
 bool generate(Str name, String &out)
 {
@@ -32,9 +31,10 @@ bool generate(Str name, String &out)
         return out.append(b.str());
     }
 
-    // The *shell's* working directory (Concept.md §5.1) — what `cd` moves and
-    // what a command typed at the prompt inherits. A process's own is under its
-    // pid below, because this file cannot know who is reading it.
+    // The kernel's own working directory (Concept.md §5.1), which is what init
+    // runs /bin/sh from. Every process has one of its own, under its pid below,
+    // because this file cannot know who is reading it — and the shell's is now
+    // one of those rather than this one.
     if (name == "cwd") {
         b.put(vfs_cwd()).put('\n');
         return out.append(b.str());
@@ -59,19 +59,6 @@ bool generate(Str name, String &out)
             one.put(m.prefix.str()).put(' ').put(m.fs->kind());
             one.put(m.fs->writable() ? Str(" rw ") : Str(" ro "));
             one.put(m.fs->bytes()).put('\n');
-            if (!out.append(one.str()))
-                return false;
-        }
-        return true;
-    }
-
-    if (name == "jobs") {
-        JobInfo j;
-        for (usize i = 0; jobs_at(i, j); i++) {
-            Buf<96> one;
-            one.put(j.id).put(' ').put(j.pid);
-            one.put(j.running ? Str(" running ") : Str(" done "));
-            one.put(j.status).put(' ').put(j.cmd).put('\n');
             if (!out.append(one.str()))
                 return false;
         }

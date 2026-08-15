@@ -98,6 +98,57 @@ Task<Result<Exited>> wait_child(u32 pid = SYS_WAIT_ANY);
 
 Task<Result<void>> kill_child(u32 pid);
 
+// Puts a child of this process in front of the console, so that ^C reaches it
+// rather than this process — which is what a shell does before it waits. Zero
+// takes the console back, and then ^C arrives as an ordinary key instead.
+// Err(Perm) unless this process has the terminal already: it holds the raw
+// keys, or it is itself what is in front.
+Task<Result<void>> set_fg(u32 pid);
+
+// ------------------------------------------------------------- the terminal
+//
+// The half of it that needs no grid. A program that paints cells wants
+// proc/screen.h instead; what is here is what a *prompt* needs — text through
+// stdout, which wraps and scrolls, and a cursor to put back where it was.
+
+// The geometry, which every terminal reply carries so that a resize needs no
+// event to subscribe to.
+struct Geometry {
+    u32 cols = 0;
+    u32 rows = 0;
+};
+
+// Takes the raw keys, or gives them back. A shell gives them back before it
+// runs a foreground child, so the child can claim them in its turn; a second
+// claimant while somebody holds them is Err(Perm).
+Task<Result<Geometry>> keys_claim(bool take);
+
+// The alternate screen, the same way.
+Task<Result<Geometry>> screen_claim(bool take);
+
+// The next key. No control characters exist (Concept.md §3.5): ^C is 'c' with
+// the control modifier, and with nothing in front it arrives here.
+struct KeyPress {
+    u32 code = 0;
+    u32 mods = 0;
+    Geometry at;
+};
+
+Task<Result<KeyPress>> key_read();
+
+// Where the cursor is on the *scrolling* screen. Writing moves it and nothing
+// counts the scrolls, so a line editor writes and then asks where that landed.
+struct CursorAt {
+    u32 x   = 0;
+    u32 y   = 0;
+    bool on = false;
+    Geometry at;
+};
+
+Task<Result<CursorAt>> cursor_get();
+
+Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on);
+
 // What `df` reports (Concept.md §5.3). `known` is false when the host would
 // not say, which is not the same as a quota of zero.
 struct StorageInfo {

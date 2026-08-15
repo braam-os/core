@@ -74,9 +74,22 @@ void test_sysabi()
     CHECK_EQ(sys_op_arg(sys_op(Sys::Kill, SYS_PID_MAX + 1)), 0); // truncated, as advertised
     CHECK_EQ(sys_op_arg(sys_op(Sys::Wait, SYS_WAIT_ANY)), SYS_WAIT_ANY);
 
-    // Chdir's one bit says whether it moves or only reports.
+    // Chdir's one bit says whether it moves or only reports, and Cursor's says
+    // the same about the cursor.
     CHECK_EQ(sys_op_arg(sys_op(Sys::Chdir, 1)) & 1, 1u);
     CHECK_EQ(sys_op_arg(sys_op(Sys::Chdir)) & 1, 0u);
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Cursor, 1)) & 1, 1u);
+    CHECK(sys_op_code(sys_op(Sys::Cursor, 1)) == Sys::Cursor);
+
+    // Fg carries a pid in the same 24-bit field Wait and Kill use, and zero is
+    // "take the console back" rather than a pid.
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Fg, SYS_PID_MAX)), SYS_PID_MAX);
+    CHECK(sys_op_code(sys_op(Sys::Fg, SYS_PID_MAX)) == Sys::Fg);
+
+    // The numbers themselves, since a binary compiled today speaks them: the
+    // terminal block runs to Cursor and the process family to Fg.
+    CHECK_EQ(u32(Sys::Cursor), 69u);
+    CHECK_EQ(u32(Sys::Fg), 84u);
 
     // A spawn request's flags word: two page counts and the tier the host puts
     // the instance at, in one word because `aux` is the pid and nothing else

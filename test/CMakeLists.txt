@@ -2,17 +2,15 @@ add_executable(tests
     unit/main.cpp
     unit/harness.cpp
     unit/test_alloc.cpp
-    unit/test_builtin.cpp
     unit/test_bundlefs.cpp
     unit/test_channel.cpp
+    unit/test_console.cpp
     unit/test_coroutine.cpp
-    unit/test_edit.cpp
     unit/test_fmt.cpp
     unit/test_hash.cpp
     unit/test_hostfs.cpp
     unit/test_jsref.cpp
     unit/test_io.cpp
-    unit/test_jobs.cpp
     unit/test_memfs.cpp
     unit/test_pane.cpp
     unit/test_path.cpp
@@ -21,7 +19,6 @@ add_executable(tests
     unit/test_result.cpp
     unit/test_sched.cpp
     unit/test_screen.cpp
-    unit/test_shell.cpp
     unit/test_str.cpp
     unit/test_tokenize.cpp
     unit/test_string.cpp
@@ -32,7 +29,13 @@ add_executable(tests
     unit/test_textbuf.cpp
     unit/test_tty.cpp
     unit/test_vec.cpp
-    unit/test_vfs.cpp)
+    unit/test_vfs.cpp
+
+    # The grammar is the shell binary's, and pure: it touches nothing but Str,
+    # String and Vec, so it is compiled in here rather than linked from
+    # braam_sh, which would drag the process runtime's imports in with it.
+    ../src/sh/parse.cpp
+    ../src/sh/tokenize.cpp)
 
 target_link_libraries(tests PRIVATE
     braam_user braam_fs braam_svc braam_ui braam_core braam_flags)

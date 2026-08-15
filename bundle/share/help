@@ -23,6 +23,7 @@ pbcopy   [<file>...] — put the input on the clipboard
 pbpaste  write the clipboard to the output
 pwd      print the working directory
 rm       [-r] <path>... — remove files, or directories with -r
+sh       [-s] — the shell; -s reads stdin instead of drawing a prompt
 sleep    <ms> — wait, in milliseconds
 spin     [<millions>] — loop without yielding, to be killed
 tail     [-n <count>] [<file>...] — the last lines, ten by default

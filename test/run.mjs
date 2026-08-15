@@ -139,10 +139,21 @@ const names = (list) => list.map((e) => `${e.module ? e.module + "." : ""}${e.na
 // the same rule: a wake issued while the scheduler sweeps its finished jobs —
 // a process reporting its exit status to its parent, say — lands on the ready
 // queue after the drain that would have run it.
+let ticks = 0;
+
+// The shell is an instance now, and a live one for as long as the system is up,
+// so what every assertion below means by "live" is "besides the shell".
+// Subtracting it here rather than at sixteen call sites keeps them saying what
+// they were written to say.
+const others = () => net.proc.live() - 1;
+
 function run(now) {
     let delay = instance.exports.tick(now);
-    while (net.drain() || delay === 0)
+    ticks++;
+    while (net.drain() || delay === 0) {
         delay = instance.exports.tick(now);
+        ticks++;
+    }
     return delay;
 }
 
@@ -195,7 +206,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 3)
+        if (m[0] !== 0x6d617262 || m[1] !== 4)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         const tier = want_tier[basename(binary)] || 2;
         if (m[2] !== tier)
@@ -317,9 +328,16 @@ if (mode === "--kernel") {
     if (!rows(s).includes("[130] $"))
         fail(`^C left ${row(s, s.cursor_y)}, expected [130] $`);
 
-    // M2's coverage: one present per tick, covering every cell the editor drew
-    // and the cell the cursor left — that one must repaint or it ghosts.
+    // M2's coverage: at most one present per tick, and between them they cover
+    // every cell the editor drew and the cell the cursor left — that one has to
+    // repaint or it ghosts.
+    //
+    // A keystroke is several ticks rather than one now. The editor is a program
+    // (Concept.md §4), so repainting a line is a handful of syscalls and each is
+    // a step of its own; what M2 asked for was one present per *tick*, and that
+    // is still exactly what happens.
     presented.length = 0;
+    ticks = 0;
     const x0 = s.cursor_x;
     const y0 = s.cursor_y;
     type("hi");
@@ -327,11 +345,16 @@ if (mode === "--kernel") {
     s = descriptor(addr);
     if (s.cursor_x !== x0 + 2)
         fail(`the cursor is at column ${s.cursor_x}, expected ${x0 + 2}`);
-    if (presented.length !== 1)
-        fail(`expected one present, got ${presented.length}`);
-    const r = presented[0];
+    if (!presented.length || presented.length > ticks)
+        fail(`${presented.length} presents over ${ticks} ticks`);
+    const r = presented.reduce((a, b) => ({
+        x: Math.min(a.x, b.x),
+        y: Math.min(a.y, b.y),
+        w: Math.max(a.x + a.w, b.x + b.w) - Math.min(a.x, b.x),
+        h: Math.max(a.y + a.h, b.y + b.h) - Math.min(a.y, b.y),
+    }));
     if (r.x > x0 || r.y > y0 || r.x + r.w < s.cursor_x + 1 || r.y + r.h <= y0)
-        fail(`present rect ${r.x},${r.y} ${r.w}x${r.h} misses ${x0}..${s.cursor_x},${y0}`);
+        fail(`presents ${r.x},${r.y} ${r.w}x${r.h} miss ${x0}..${s.cursor_x},${y0}`);
 
     // M2's second criterion: resize reflows, keeping the rows in use.
     addr = instance.exports.resize(20, 2);
@@ -822,11 +845,13 @@ if (mode === "--kernel") {
     if (!rows(s).some((line) => line.startsWith("[1]+ running sleep 5000 &")))
         fail(`jobs listed nothing: ${JSON.stringify(rows(s))}`);
 
-    // The shell is at a prompt while it runs, so /proc can be read from there.
+    // There is no /proc/jobs any more: the table is the shell's own memory now
+    // that the shell is a process, and no syscall shows one process another's.
+    // The job's stages are still scheduler tasks, so /proc has a file each.
     s = submit("clear", 3084);
     s = submit("cat /proc/jobs", 3085);
-    if (!rows(s).some((line) => line.startsWith("1 ") && line.includes("running")))
-        fail(`/proc/jobs said nothing: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.includes("not found")))
+        fail(`/proc/jobs still exists: ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 3086);
     s = submit("cat /proc/meminfo", 3087);
@@ -933,8 +958,8 @@ if (mode === "--kernel") {
     s = descriptor(addr);
     if (!rows(s).includes("[130] $"))
         fail(`^C on a process left ${row(s, s.cursor_y)}, expected [130] $`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived their processes`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived their processes`);
 
     // A file that is not a program is refused before anything runs, and says
     // so differently from a name that is not there at all.
@@ -983,7 +1008,7 @@ if (mode === "--kernel") {
     press(KEY.ENTER);
     if (run(9060) !== -1)
         fail("a spinning process left the kernel with work to do");
-    if (net.proc.live() !== 1)
+    if (others() !== 1)
         fail("spin did not reach an instance");
 
     s = submit("clear", 9061); // the ^C below needs the process still running
@@ -995,8 +1020,8 @@ if (mode === "--kernel") {
         fail(`^C on a spinning process left ${row(s, s.cursor_y)}, expected [130] $`);
     if (net.terminated.length !== 1)
         fail(`${net.terminated.length} workers were terminated, expected 1`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived their processes`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived their processes`);
 
     // The reply the terminated worker will never send, arriving anyway: it is
     // dropped, and the shell is none the wiser.
@@ -1028,8 +1053,8 @@ if (mode === "--kernel") {
     s = submit(`kill %${job}`, 9074);
     if (net.terminated.length !== 1)
         fail(`kill terminated ${net.terminated.length} workers, expected 1`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived kill %1`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived kill %1`);
     net.release();
 
     // ---------------------------------------------------------- processes
@@ -1044,8 +1069,8 @@ if (mode === "--kernel") {
         fail(`a spawned child printed ${JSON.stringify(rows(s))}, expected child`);
     if (row(s, s.cursor_y) !== "$")
         fail(`timeout over a fast child left ${row(s, s.cursor_y)}, expected a bare prompt`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived timeout`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived timeout`);
 
     // The kill path: the child outlasts the delay, so the alarm task kills it
     // and 124 says which of the two ended it. The clock has to be moved past
@@ -1054,14 +1079,14 @@ if (mode === "--kernel") {
     type("timeout 20 sleep 10000");
     press(KEY.ENTER);
     run(9111);
-    if (net.proc.live() !== 2)
-        fail(`timeout over a slow child left ${net.proc.live()} instances, expected 2`);
+    if (others() !== 2)
+        fail(`timeout over a slow child left ${others()} instances, expected 2`);
     run(9200); // past the delay: the alarm fires here
     s = descriptor(addr);
     if (!rows(s).includes("[124] $"))
         fail(`timeout did not fire: ${JSON.stringify(rows(s))}`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived a fired timeout`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived a fired timeout`);
 
     // The ownership chain, under the load it exists for: the child writes into
     // a pipe the *shell's* Job owns, and that block has to outlive both the
@@ -1070,8 +1095,8 @@ if (mode === "--kernel") {
     s = submit("timeout 10000 echo one two | wc", 9116);
     if (!rows(s).some((line) => line.trim() === "1 2 8"))
         fail(`a supervised child in a pipeline printed ${JSON.stringify(rows(s))}`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived a supervised pipeline`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived a supervised pipeline`);
 
     // A child's exit status reaches the parent, and the parent's reaches the
     // shell — two Waits deep, since `false` is a process of its own.
@@ -1110,16 +1135,16 @@ if (mode === "--kernel") {
     run(9146);
     if (!rows(descriptor(addr)).includes("tick"))
         fail(`watch printed ${JSON.stringify(rows(descriptor(addr)))}, expected tick`);
-    if (net.proc.live() !== 1)
-        fail(`${net.proc.live()} instances between rounds, expected watch alone`);
+    if (others() !== 1)
+        fail(`${others()} instances between rounds, expected watch alone`);
     press("c".codePointAt(0), CTRL);
     if (run(9147) !== -1)
         fail("^C on watch left the scheduler with work to do");
     s = descriptor(addr);
     if (!rows(s).includes("[130] $"))
         fail(`^C on watch left ${row(s, s.cursor_y)}, expected [130] $`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived watch`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived watch`);
 
     // A child at tier 3 gets the worker kill through its parent, which is the
     // proof that a spawned process is an ordinary scheduler job.
@@ -1138,15 +1163,15 @@ if (mode === "--kernel") {
     type("timeout 20 spin");
     press(KEY.ENTER);
     run(9161);
-    if (net.proc.live() !== 2)
-        fail(`a supervised tier-3 child left ${net.proc.live()} instances, expected 2`);
+    if (others() !== 2)
+        fail(`a supervised tier-3 child left ${others()} instances, expected 2`);
     run(9200); // past the delay, so the kill is the alarm's and not ^C's
     net.release();
     run(9201);
     if (net.terminated.length !== 1)
         fail(`timeout over a tier-3 child terminated ${net.terminated.length} workers, expected 1`);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived a killed tier-3 child`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived a killed tier-3 child`);
 
     // ^C reaches a whole chain: the shell cancels the stage, the stage's End
     // cancels the child, and neither is left behind.
@@ -1156,15 +1181,15 @@ if (mode === "--kernel") {
     type("timeout 100000 spin");
     press(KEY.ENTER);
     run(9211);
-    if (net.proc.live() !== 2)
-        fail(`a supervised child left ${net.proc.live()} instances, expected 2`);
+    if (others() !== 2)
+        fail(`a supervised child left ${others()} instances, expected 2`);
     press("c".codePointAt(0), CTRL);
     if (run(9212) !== -1)
         fail("^C on a spawned pair left the scheduler with work to do");
     net.release();
     run(9213);
-    if (net.proc.live() !== 0)
-        fail(`${net.proc.live()} instances outlived ^C on a parent and its child`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived ^C on a parent and its child`);
     s = submit("echo after", 9214);
     if (!rows(s).includes("after"))
         fail(`the shell did not survive ^C on a spawned pair: ${JSON.stringify(rows(s))}`);
@@ -1172,7 +1197,7 @@ if (mode === "--kernel") {
     // Where a worker cannot be made, a binary asking for tier 3 runs at tier 2
     // — the same program, the same output, one isolation weaker (§4).
     net.workers = false;
-    net.proc.shutdown();
+    net.proc.dropWorkers();
     net.bound.length = 0;
     s = submit("clear", 9080);
     s = submit("spin 1", 9081);
@@ -1209,6 +1234,131 @@ if (mode === "--kernel") {
     s = submit("cat /home/j", 9096);
     if (row(s, s.cursor_y) !== "$")
         fail(`a redirected builtin left ${row(s, s.cursor_y)}, expected a bare prompt`);
+
+    // /bin/sh: the shell as an ordinary program, running as a child of the
+    // resident one. Everything below happens over the §4.3 syscall table —
+    // Cursor for the prompt, KeyClaim for the keys, Pipe/Spawn/Wait for the
+    // pipeline, Chdir for `cd` — and nothing in it is kernel code.
+    s = submit("clear", 9200);
+    s = submit("sh", 9201);
+    // Two prompts on one screen: the resident shell's, with `sh` typed at it,
+    // and the one the child drew for itself.
+    if (!rows(s).includes("$ sh") || row(s, s.cursor_y) !== "$")
+        fail(`sh drew ${JSON.stringify(rows(s))}, expected its own prompt under "$ sh"`);
+
+    // Its line editor: typing, Home, and a character inserted at the front.
+    type("cho hi");
+    press(KEY.HOME);
+    type("e");
+    press(KEY.ENTER);
+    run(9202);
+    s = descriptor(addr);
+    if (!rows(s).includes("hi"))
+        fail(`sh's editor produced ${JSON.stringify(rows(s))}, expected hi`);
+
+    // A pipeline of two real programs, built by a *process* out of Sys::Pipe
+    // and two spawns, and a redirection it opened itself.
+    s = submit("clear", 9203);
+    s = submit("ls /bin | grep tail", 9204);
+    if (!rows(s).includes("tail"))
+        fail(`sh's pipeline printed ${JSON.stringify(rows(s))}, expected tail`);
+
+    s = submit("echo written > /home/sh.out", 9205);
+    s = submit("cat /home/sh.out", 9206);
+    if (!rows(s).includes("written"))
+        fail(`sh's redirection produced ${JSON.stringify(rows(s))}`);
+
+    // Its own working directory, moved by its own builtin and inherited by
+    // what it spawns — a child of a child of the resident shell.
+    s = submit("clear", 9207);
+    s = submit("cd /share", 9208);
+    s = submit("pwd", 9209);
+    if (!rows(s).includes("/share"))
+        fail(`cd in sh left ${JSON.stringify(rows(s))}, expected /share`);
+
+    // ^C reaches what sh put in front, and sh survives it: the whole point of
+    // Sys::Fg. The prompt that comes back is sh's, reporting 130.
+    s = submit("clear", 9210);
+    type("sleep 60000");
+    press(KEY.ENTER);
+    run(9211);
+    press("c".codePointAt(0), CTRL);
+    run(9212);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.startsWith("[130] $")))
+        fail(`^C in sh left ${JSON.stringify(rows(s))}, expected sh's [130] prompt`);
+
+    // Cooked input reaches a child of sh: the pump cooks into the console, and
+    // sh gave the console to `cat` by letting go of the keyboard.
+    s = submit("clear", 9216.1);
+    type("cat");
+    press(KEY.ENTER);
+    run(9216.2);
+    type("typed");
+    press(KEY.ENTER);
+    run(9216.3);
+    press("d".codePointAt(0), CTRL);
+    run(9216.4);
+    s = descriptor(addr);
+    if (rows(s).filter((line) => line === "typed").length !== 2)
+        fail(`cat under sh echoed ${JSON.stringify(rows(s))}, expected the line twice`);
+
+    // A background job, its table, and `kill %n` — all sh's own memory now,
+    // over Sys::Spawn and Sys::Kill.
+    s = submit("clear", 9216.5);
+    s = submit("sleep 60000 &", 9216.6);
+    if (!rows(s).some((line) => line.startsWith("[1] ")))
+        fail(`sh did not announce the job: ${JSON.stringify(rows(s))}`);
+    s = submit("jobs", 9216.7);
+    if (!rows(s).some((line) => line.startsWith("[1]+ running sleep 60000 &")))
+        fail(`sh's jobs printed ${JSON.stringify(rows(s))}`);
+    s = submit("kill %1", 9216.8);
+    if (!rows(s).some((line) => line.startsWith("[1] interrupt")))
+        fail(`kill %n did not report the job: ${JSON.stringify(rows(s))}`);
+    s = submit("clear", 9216.9);
+    s = submit("jobs", 9216.95);
+    if (rows(s).some((line) => line.includes("sleep")))
+        fail(`kill %n left the job in the table: ${JSON.stringify(rows(s))}`);
+
+    // A full-screen child claims the keyboard sh let go of, paints, and gives
+    // it back — the claim transfer that made Sys::Fg necessary.
+    s = submit("clear", 9217);
+    type("less /share/doc/README");
+    press(KEY.ENTER);
+    run(9218);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.includes("/share/doc/README") && line.includes("q quits")))
+        fail(`less under sh painted ${JSON.stringify(rows(s))}`);
+    press("q".codePointAt(0));
+    run(9219);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== "$")
+        fail(`less did not give sh its screen back: ${JSON.stringify(rows(s))}`);
+
+    // And ^C on one, which is the harder half: the claim is the kernel's, on the
+    // killed process's record, so the shell has to get it back from a program
+    // that never ran a line of its own cleanup.
+    s = submit("clear", 9219.1);
+    type("less /share/doc/README");
+    press(KEY.ENTER);
+    run(9219.2);
+    press("c".codePointAt(0), CTRL);
+    run(9219.3);
+    s = submit("echo alive", 9219.4);
+    if (!rows(s).includes("alive"))
+        fail(`sh lost the keyboard to a killed full-screen child: ${JSON.stringify(rows(s))}`);
+
+    // And it leaves by its own builtin, back to the resident shell's prompt —
+    // which is still where it was, because the `cd` above moved the child's
+    // working directory and nobody else's (Concept.md §5.1).
+    s = submit("exit", 9213);
+    s = submit("clear", 9214);
+    s = submit("pwd", 9215);
+    if (rows(s).includes("/share"))
+        fail("sh's cd moved the resident shell's working directory");
+    s = submit("echo back", 9216);
+    if (!rows(s).includes("back"))
+        fail(`the resident shell did not come back: ${JSON.stringify(rows(s))}`);
 
     // exit ends the shell, and nothing runs after it. Last, for that reason.
     s = submit("clear", 9097);

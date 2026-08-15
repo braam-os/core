@@ -1,5 +1,6 @@
 #include "tty.h"
 
+#include "console.h"
 #include "io.h"
 #include "kernel/alloc.h"
 #include "kernel/screen.h"
@@ -13,23 +14,19 @@ Result<usize> to_screen(void *, Str s)
 }
 
 // Pointers and words, so the globals stay trivially destructible (CLAUDE.md).
-// Each route names its holder: the pid for the two a process claims, and the
-// claim object itself for the cooked one, whose claimant is a builtin.
+// Each route names its holder by the pid that took it.
 KeyRing *g_raw = nullptr;
 u32 g_raw_pid  = 0;
 
 FullScreen *g_alt = nullptr;
 u32 g_alt_pid     = 0;
 
-Pipe *g_cooked          = nullptr;
-InputClaim *g_cooked_by = nullptr;
-
 } // namespace
 
 Stdio stdio_console()
 {
     Stream s{ to_screen, nullptr, nullptr };
-    return Stdio{ null_source(), s, s };
+    return Stdio{ console_input(), s, s };
 }
 
 KeyInput::KeyInput(u32 pid)
@@ -56,35 +53,24 @@ KeyInput::~KeyInput()
         g_raw     = nullptr;
         g_raw_pid = 0;
     }
+
+    // Type-ahead the claimant never read goes back to the console rather than
+    // dying with the ring. The prompt is what makes this load bearing: a line
+    // abandoned with ^C drops its claim with the rest of what was typed still
+    // in it, and that has to reach the next prompt — which it did for free
+    // while the editor received on keys() itself. The pump has drained the
+    // channel by the time anything can release a claim, so this arrives ahead
+    // of whatever the host queues next rather than behind it.
+    for (Option<Key> k = ring_->try_recv(); k.has_value(); k = ring_->try_recv())
+        keys().try_send(k.value());
+
     ring_->~KeyRing();
     heap_free(ring_);
-}
-
-InputClaim::InputClaim(Pipe *to)
-{
-    if (g_cooked_by)
-        return;
-    g_cooked_by = this;
-    g_cooked    = to;
-    held_       = true;
-}
-
-InputClaim::~InputClaim()
-{
-    if (g_cooked_by != this)
-        return;
-    g_cooked_by = nullptr;
-    g_cooked    = nullptr;
 }
 
 KeyRing *tty_raw()
 {
     return g_raw;
-}
-
-Pipe *tty_cooked()
-{
-    return g_cooked;
 }
 
 u32 tty_keys_owner()

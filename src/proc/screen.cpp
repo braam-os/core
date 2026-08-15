@@ -2,26 +2,6 @@
 
 #include "kernel/alloc.h"
 
-namespace {
-
-// Both claims answer with the geometry, so taking one and sizing the grid to
-// what came back is the same two lines either way.
-Task<Result<void>> claim(Sys op, bool take, u32 &cols, u32 &rows)
-{
-    Result<SysReply> r = co_await sys_call(op, take ? 1 : 0);
-    if (r.is_err())
-        co_return Err(r.error());
-    if (r.value().data.size() < 8)
-        co_return Err(Error::Io);
-
-    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
-    cols        = sys_get_u32(p);
-    rows        = sys_get_u32(p + 4);
-    co_return {};
-}
-
-} // namespace
-
 ProcScreen::~ProcScreen()
 {
     heap_free(grid_.cells);
@@ -52,26 +32,26 @@ Result<void> ProcScreen::resize(u32 cols, u32 rows)
 
 Task<Result<void>> ProcScreen::take_keys()
 {
-    u32 cols = 0, rows = 0;
-    Task<Result<void>> t = claim(Sys::KeyClaim, true, cols, rows);
+    Task<Result<Geometry>> t = keys_claim(true);
     if (!t)
         co_return Err(Error::NoMemory);
-    if (Result<void> r = co_await t; r.is_err())
+    Result<Geometry> r = co_await t;
+    if (r.is_err())
         co_return Err(r.error());
     keys_ = true;
-    co_return resize(cols, rows);
+    co_return resize(r.value().cols, r.value().rows);
 }
 
 Task<Result<void>> ProcScreen::take_screen()
 {
-    u32 cols = 0, rows = 0;
-    Task<Result<void>> t = claim(Sys::ScreenEnter, true, cols, rows);
+    Task<Result<Geometry>> t = screen_claim(true);
     if (!t)
         co_return Err(Error::NoMemory);
-    if (Result<void> r = co_await t; r.is_err())
+    Result<Geometry> r = co_await t;
+    if (r.is_err())
         co_return Err(r.error());
     screen_ = true;
-    co_return resize(cols, rows);
+    co_return resize(r.value().cols, r.value().rows);
 }
 
 Pane ProcScreen::body()
@@ -119,15 +99,15 @@ Task<Result<void>> ProcScreen::flush()
 
 Task<Result<Key>> ProcScreen::next_key()
 {
-    Result<SysReply> r = co_await sys_call(Sys::KeyRead, 0);
+    Task<Result<KeyPress>> t = key_read();
+    if (!t)
+        co_return Err(Error::NoMemory);
+    Result<KeyPress> r = co_await t;
     if (r.is_err())
         co_return Err(r.error());
-    if (r.value().data.size() < 16)
-        co_return Err(Error::Io);
 
-    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
-    Key k{ sys_get_u32(p), sys_get_u32(p + 4) };
-    if (Result<void> bad = resize(sys_get_u32(p + 8), sys_get_u32(p + 12)); bad.is_err())
+    // The geometry rides on every key, so a resize needs no event of its own.
+    if (Result<void> bad = resize(r.value().at.cols, r.value().at.rows); bad.is_err())
         co_return Err(bad.error());
-    co_return k;
+    co_return Key{ r.value().code, r.value().mods };
 }

@@ -45,6 +45,16 @@ struct Channel {
         wake_send();
     }
 
+    // Undoes both. A pipe is closed once and dies, but the console is a device:
+    // its end of input belongs to whatever was in front when ^D was typed, not
+    // to the channel's life (console.h). Queued values and parked tokens are
+    // left alone, so this is safe with a reader still suspended on it.
+    void reopen()
+    {
+        closed_ = false;
+        hup_    = false;
+    }
+
     // The reader is gone. Anything parked in send() resumes with Err(Closed).
     void hangup()
     {

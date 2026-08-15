@@ -61,6 +61,7 @@ add_subdirectory(src/svc)
 add_subdirectory(src/ui)
 add_subdirectory(src/user)
 add_subdirectory(src/proc)
+add_subdirectory(src/sh)
 add_subdirectory(src/cmd)
 
 # kernel.wasm — main.cpp holds the exports, so it links into the executable

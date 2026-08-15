@@ -1,5 +1,4 @@
 #include "decl.h"
-#include "user/builtin.h"
 
 namespace {
 
@@ -11,7 +10,7 @@ constexpr Builtin TABLE[] = {
     { "fg", "[%n] — wait for a background job in the foreground", builtin_fg },
     { "help", "list the builtins and the programs in /bin", builtin_help },
     { "jobs", "list the jobs started with &", builtin_jobs },
-    { "kill", "%n | pid... — cancel a job or a task", builtin_kill },
+    { "kill", "%n — cancel a job", builtin_kill },
 };
 
 } // namespace

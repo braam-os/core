@@ -32,6 +32,7 @@ pbcopy.wasm = 32768
 pbpaste.wasm = 16384
 pwd.wasm = 16384
 rm.wasm = 16384
+sh.wasm = 98304
 sleep.wasm = 16384
 spin.wasm = 16384
 tail.wasm = 32768

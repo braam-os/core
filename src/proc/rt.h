@@ -8,6 +8,7 @@
 // the instance, so a killed process never unwinds.
 #pragma once
 
+#include "kernel/args.h"
 #include "kernel/coroutine.h"
 #include "kernel/result.h"
 #include "kernel/span.h"
@@ -25,19 +26,6 @@
 
 BRAAM_SYS_IMPORT("sys") i32 sys(u32 op, u32 a0, u32 a1, u32 a2);
 BRAAM_SYS_IMPORT("sys_async") void sys_async(u32 op, u32 token, u32 ptr, u32 len);
-
-// argv, the same shape src/user/prog.h gives a shell builtin.
-struct Args {
-    Span<const Str> v;
-
-    usize size() const { return v.size(); }
-
-    Str operator[](usize i) const { return v[i]; }
-
-    Str name() const { return v.empty() ? Str() : v[0]; }
-
-    Args tail() const { return Args{ v.subspan(1) }; }
-};
 
 // What a program defines. The runtime's _start builds argv and enters it.
 Task<i32> proc_main(Args args);
@@ -66,10 +54,11 @@ struct SysReply {
 };
 
 // How many tasks a process may have at once, and therefore how many syscalls
-// it may have outstanding: one each. Four, because the one program that needs
-// more than the root task needs exactly one more, and a table this small costs
-// bytes rather than a design.
-constexpr usize PROC_TASKS = 4;
+// it may have outstanding: one each. Eight, because the shell is a process: a
+// prompt, a reaper parked on wait_child, and a task per builtin standing in a
+// pipeline. Most programs use one, and a table this small costs bytes rather
+// than a design.
+constexpr usize PROC_TASKS = 8;
 
 // A second task, for a program that must await two things at once — `chat`
 // listens to a socket while it reads what is typed. The task starts at once and

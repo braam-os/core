@@ -4,12 +4,12 @@
 #include "user/io.h"
 #include "user/tty.h"
 
-// The three routes through the tty pump, each with one holder. Destroying them
-// out of the order they were made is the case that matters: a parent and a
+// The two routes through the console pump, each with one holder. Destroying
+// them out of the order they were made is the case that matters: a parent and a
 // child claim in either order and die in either order, and the pump must be
-// left pointing at nothing rather than at a freed ring or a dead pipe. The
-// claims are reached directly here, since the in-wasm tests cannot run a
-// program and only a program claims the screen.
+// left pointing at nothing rather than at a freed ring. The claims are reached
+// directly here, since the in-wasm tests cannot run a program and only a
+// program claims either of them.
 
 void test_tty()
 {
@@ -82,29 +82,4 @@ void test_tty()
         CHECK_EQ(screen_cells()[0].ch, 'a');
     }
     screen_reset();
-
-    // Cooked bytes: one holder, and the refused claim leaves the route alone
-    // however late it is destroyed.
-    {
-        Pipe one, two;
-        InputClaim *a = heap_new<InputClaim>(&one);
-        InputClaim *b = heap_new<InputClaim>(&two);
-        CHECK(a && a->ok());
-        CHECK(b && !b->ok());
-        CHECK(tty_cooked() == &one);
-        heap_delete(a);
-        CHECK(tty_cooked() == nullptr);
-        heap_delete(b);
-        CHECK(tty_cooked() == nullptr);
-    }
-
-    // A null pipe is a legal claim — `fg` makes one when the job it adopted has
-    // no stage left — and it still holds the route against a second claimant.
-    {
-        InputClaim a(nullptr);
-        CHECK(a.ok());
-        CHECK(tty_cooked() == nullptr);
-        InputClaim b(nullptr);
-        CHECK(!b.ok());
-    }
 }

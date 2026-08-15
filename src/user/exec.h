@@ -3,20 +3,18 @@
 // metadata, so userland asks for a name and never asks for a tier.
 #pragma once
 
-#include "builtin.h"
 #include "kernel/string.h"
 #include "kernel/sysabi.h"
 #include "kernel/task.h"
 #include "prog.h"
 
-// A resolved command: a shell builtin, or a binary and its bytes. The pid is
-// filled in by whoever spawns the task, and read by the task itself a tick
-// later — a Task is lazy, so nothing has looked yet.
+// A resolved command: a binary and its bytes. The pid is filled in by whoever
+// spawns the task, and read by the task itself a tick later — a Task is lazy,
+// so nothing has looked yet.
 struct Executable {
-    Tier tier              = Tier::Instance;
-    const Builtin *builtin = nullptr;
-    u32 pid                = 0;
-    u32 depth              = 0; // how many spawns from the shell this is
+    Tier tier = Tier::Instance;
+    u32 pid   = 0;
+    u32 depth = 0; // how many spawns from init this is
     String path;
     String image;
     ProcMeta meta{};
@@ -26,12 +24,14 @@ struct Executable {
 // none to read and the file is therefore not a program.
 Result<ProcMeta> exec_meta(Str image);
 
-// The builtins first, then /bin, then the name itself once it looks like a
-// path. Err(NotFound) is "no such command"; Err(Invalid) is "not executable".
+// /bin, then the name itself once it looks like a path. Err(NotFound) is "no
+// such command"; Err(Invalid) is "not executable". There is nothing to look at
+// before /bin any more: a builtin is the shell's own frame, and the shell is a
+// program that never asks the kernel for one.
 //
 // `cwd` is what a name with a slash in it is relative to. Empty means the
-// shell's, which is what a command typed at the prompt is relative to; a
-// Sys::Spawn passes the spawning process's.
+// kernel's own, which is what init runs /bin/sh from; a Sys::Spawn passes the
+// spawning process's.
 Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str());
 
 // A tier-2 program as its own instance. The task returned *is* the process:

@@ -4,15 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**The plan is finished: M0–M9 are all done.** Since then the kernel applet has been retired:
-every program is a binary, `src/prog/` and the program registry are gone, and thirty-one
-programs live in `src/cmd/` beside six shell builtins in `src/user/builtin/`. `kernel.wasm` is
-about 181 KB against a 256 KiB budget and `bundle.bin` is 406 KB; the wasm ABI is still six
-imports and nine exports, and the three CTest cases pass. Work here is change to a working
-system, so the bar is that nothing above regresses, and Milestones.md is history rather than a
-to-do list.
+**The plan is finished: M0–M9 are all done.** Since then the kernel applet has been retired and
+then the shell followed it: every program is a binary, including `/bin/sh`, and thirty-two of
+them live in `src/cmd/` with the shell's own parts in `src/sh/`. There is no in-kernel program of
+any kind and no program registry. `kernel.wasm` is about 137 KB against a 256 KiB budget and
+`bundle.bin` is 491 KB; the wasm ABI is still six imports and nine exports, and the three CTest
+cases pass. Work here is change to a working system, so the bar is that nothing above regresses,
+and Milestones.md is history rather than a to-do list.
 
-What each milestone left behind, since the layout still reflects it:
+What each milestone left behind. The layout still reflects it except where the shell is
+concerned — `src/user/parse.cpp`, `edit.cpp`, `job.cpp` and `builtin/` below are all in `src/sh/`
+now, and `shell.cpp` is `src/cmd/sh.cpp`:
 
 M0 (nucleus) is done: CMake build, the coroutine shim, the allocator, `Str`/`Span`/`Vec`/
 `Result`/`Option`, `host_log`, a Node test harness, and CI with a size budget. M1 (scheduler)
@@ -59,12 +61,20 @@ turned into a library over
 a `Grid` that a process links, and the step protocol given a token so a process can have several
 calls outstanding at once.
 
-**Since then, a process can start a process.** The §4.3 table is thirty-two: `chdir` beside the
-filesystem operations, and `pipe`/`spawn`/`wait`/`kill` as a family at 80. Every process has a
-working directory of its own, inherited from its spawner; the shell stays resident and `cd` is
-still a builtin, moving the shell's. A descriptor named in a spawn is *moved* into the child, and
-a child is an ordinary scheduler job its parent's destructor cancels. `timeout` and `watch` are
-the callers. `PROC_ABI` is 3, and none of it touched the wasm ABI or any JavaScript.
+**Since then, a process can start a process.** The §4.3 table gained `chdir` beside the
+filesystem operations and `pipe`/`spawn`/`wait`/`kill` as a family at 80. Every process has a
+working directory of its own, inherited from its spawner. A descriptor named in a spawn is
+*moved* into the child, and a child is an ordinary scheduler job its parent's destructor cancels.
+`timeout` and `watch` were the first callers.
+
+**And then the shell became a program.** `/bin/sh` is a binary init runs; `src/user/shell.cpp`,
+`edit.cpp`, `job.cpp` and `src/user/builtin/` are gone, and the same code lives in `src/sh/` over
+the syscall table. Two operations were added for it — `cursor` at 69, the scrolling screen's
+cursor, and `fg` at 84, which names what `^C` reaches — so the table is thirty-four and
+`PROC_ABI` is 4. The tty pump is now permanent and init spawns it (`src/user/console.h`),
+because something has to hold the keyboard while nothing is running and a process has no
+`keys()`. None of it touched the wasm ABI, and the only JavaScript that changed was splitting
+`proc.shutdown()` so it stops killing tier-2 processes.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -241,17 +251,24 @@ Further constraints that are easy to violate by habit:
   cost 2,812 bytes across the kernel's call sites.
 - **Never `new` anything.** `operator new` returns null on failure and `-fno-exceptions` means
   the expression would construct at address zero. Use `heap_new`/`heap_delete` from `alloc.h`.
-- **One receiver per `Channel`, and the keyboard's is the tty pump.** A full-screen program
-  claims a route through it (`KeyInput`, `InputClaim` in `src/user/tty.h`) rather than receiving
-  on `keys()`, which would displace the pump silently and lose `^C`. `^C` is never routed to a
-  claimant. And since `CancelState::waiting` is one slot, no task can be parked on a pipe and on
-  the keyboard at once — which is why `less` reads its input to the end before it paints.
+- **One receiver per `Channel`, and the keyboard's is the console pump.** It is permanent and
+  init spawns it (`src/user/console.h`); it used to be spawned per foreground pipeline, and could
+  not stay that way once the shell became a process, because something has to hold the keyboard
+  while nothing is running. A program claims a route through it (`KeyInput` in `src/user/tty.h`)
+  rather than receiving on `keys()`, which would displace the pump silently and lose `^C` — and
+  the prompt is no exception. Since `CancelState::waiting` is one slot, no task can be parked on
+  a pipe and on the keyboard at once, which is why `less` reads its input to the end before it
+  paints.
 
-  Each of the three routes has **one holder, and a second claim is `Err(Perm)` rather than a
-  nested one**: the two a process makes are named by its pid, `InputClaim` by the claim object,
-  since `fg` is a builtin with no pid. A claim clears its route only if it is still the holder, so
-  a parent and its child may die in either order. Nesting meant restoring a predecessor that may
-  already be gone — a freed key ring, a dead job's pipe, or for `FullScreen` a snapshot of the
+  **`^C` cancels the foreground if there is one and is delivered to the claimant if there is
+  not.** The foreground is a set of pids armed with `Sys::Fg`; a shell arms its stages before it
+  waits, and at a prompt arms nothing, so the interrupt arrives as an ordinary key and abandons
+  the line. Without that split a shell that is a process would be killed by its own `^C`.
+
+  Each of the two routes has **one holder, and a second claim is `Err(Perm)` rather than a
+  nested one**, named by the pid that took it. A claim clears its route only if it is still the
+  holder, so a parent and its child may die in either order. Nesting meant restoring a
+  predecessor that may already be gone — a freed key ring, or for `FullScreen` a snapshot of the
   blank grid the first claimant was painting.
 
   The same rule is why a `Sys::Spawn` **moves** a descriptor into the child rather than
@@ -288,13 +305,15 @@ Further constraints that are easy to violate by habit:
 Every program is a binary; there is no in-kernel program and no way to write one. `exec` picks
 between the two isolated tiers from binary metadata, so userland does not notice (Concept.md §4):
 
-- **Shell builtin** — not a program and not a file: `cd`, `fg`, `jobs`, `kill`, `help`, `exit`,
-  in `src/user/builtin/`. Each is one no syscall could serve — the shell's own working directory
-  is what a typed command inherits, and the job table and the tty pump are the shell's. A builtin is an ordinary pipeline
-  stage, so it pipes, redirects and takes `^C` with nothing added for it. The table is an
-  explicit array, not a registrar: `braam_user` is an archive, and `--gc-sections` would drop an
-  unreferenced registrar silently — which is the trap `src/prog/` needed an OBJECT library to
-  avoid.
+- **Shell builtin** — not a program and not a file, and no longer kernel code either: `cd`, `fg`,
+  `jobs`, `kill`, `help`, `exit` live in `src/sh/builtin/`, inside `/bin/sh`. What makes one a
+  builtin is that it touches the shell *process's* own state — its working directory, which a
+  typed command inherits at spawn; its job table, which no syscall shows to anyone; its loop. A
+  builtin pipes and redirects by reading and writing descriptors like anything else, but it runs
+  **in its turn rather than alongside**, because nothing inside a process can wait for a sibling
+  task — so a builtin must buffer its output and write it once, or it fills an eight-slot pipe
+  and parks with nobody left to drain it. The table is an explicit array, not a registrar:
+  `braam_sh` is an archive, and `--gc-sections` would drop an unreferenced registrar silently.
 - **Separate instance, shared worker** (M8) — address-space, capability, descriptor and
   memory-cap isolation. A binary in `/bin` carrying a `braam` custom section; `exec` reads
   the tier out of it.
@@ -332,11 +351,13 @@ header so neither can drift alone. Three rules about it are load bearing:
 - **A process ends when its root task returns**, whatever the others are doing — as a process
   ends when main does. The kernel then drops the instance and cancels the servers of anything
   the other tasks had outstanding.
-- **The in-wasm unit tests cannot run a program at all.** Stepping one means returning to the
-  host, and `run_tests()` does that once. With no applets left, `test/unit/` can drive only the
-  six builtins — which is enough for pipelines (`jobs | help` is two real stages), redirection,
-  the boot-cost guard and the leak check. Everything that needs a program to actually run is in
-  `test/run.mjs`: put it there rather than reaching for a test-only applet.
+- **The in-wasm unit tests cannot run a program at all,** and the shell is one. Stepping an
+  instance means returning to the host, and `run_tests()` does that once. What `test/unit/` can
+  still reach is everything *below* a program: the console and its claims (`test_console.cpp`,
+  `test_tty.cpp`), the pipes, `/proc`, the VFS, and the grammar — `parse.cpp` and `tokenize.cpp`
+  are pure and are compiled straight into the suite rather than linked from `braam_sh`, which
+  would drag the process runtime's imports in with them. Anything that needs the shell or a
+  program to actually run belongs in `test/run.mjs`.
 - **Both halves of the tier-3 step protocol live in `web/proc.js`** — `serveProc` is the
   process's side and `makeProc` the host's, and `web/procworker.js` and `test/fakeworker.mjs`
   are wiring around them. Two files describing one wire is how it drifts.
@@ -387,9 +408,20 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
 - **Every command costs an instantiation** — roughly a millisecond, plus reading the image out of
   `BundleFs`, where an applet cost nothing. The host caches the compiled `Module` by path, so the
   bytes still cross the VFS on every `exec` and only the compile is saved.
-- **The boot archive is ~406 KB**, against 47 KB when four programs were binaries. That is §4.4's
-  duplication: every binary carries the allocator, the string types and the coroutine runtime.
-  `bundle.bin` carries a size budget of its own, so the number stays visible.
+- **The boot archive is ~491 KB**, against 47 KB when four programs were binaries. That is §4.4's
+  duplication: every binary carries the allocator, the string types and the coroutine runtime,
+  and `sh.wasm` is 81 KB of it. `bundle.bin` carries a size budget of its own, so the number
+  stays visible.
+- **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything that is not a child of
+  the caller, and a bare pid the shell never started is exactly that.
+- **No `/proc/jobs`.** The job table is the shell process's own memory, and no syscall shows one
+  process another's. The stages are still tasks, so `/proc/<pid>` lists them — which is how the
+  shell notices a background job has finished.
+- **A keystroke at the prompt costs about six ticks**: `key_read`, then a repaint of four
+  syscalls, each a park and a step. It was one channel receive when the editor was kernel code.
+  Nothing about it is wrong; it is what §4.4's cost model looks like on the interactive path.
+- **The shell has no variables, no `-c`, no globbing and no scripts beyond `sh -s`.** None of it
+  was blocked by the shell being kernel code, and none of it is blocked now.
 - **Two tier-3 fidelity losses (§4.3):** a binary that will not instantiate reads as a crash
   rather than as a refusal, and `Sys::Now` is relative.
 
@@ -402,14 +434,17 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
 - Commits: no `Co-Authored-By` trailer, no generated-with footer. Commit only when asked.
 - Layout: `src/kernel/`, `src/fs/` (paths, the VFS, the filesystems, the host storage ABI),
   `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock, the process operations),
-  `src/ui/` (the layout layer over a `Grid`: `Pane`, `TextBuf`, `TextView`), `src/user/` (line
-  editor, grammar, job runtime and job table, shell, `exec`, `ProcFs`, boot) with
-  `src/user/builtin/` under it, `src/proc/` (a process binary's runtime, `screen.cpp` included)
-  and `src/cmd/` (one file per program), `test/unit/`, `web/` (`proc.js` both halves of the
-  process protocol, `procworker.js` a tier-3 process's worker), `bundle/`, `tools/`, `cmake/`.
+  `src/ui/` (the layout layer over a `Grid`: `Pane`, `TextBuf`, `TextView`), `src/user/` (`exec`
+  and the syscall dispatcher, the console and its pump, the pipes behind a stage's stdio,
+  `ProcFs`, boot and init), `src/proc/` (a process binary's runtime, `screen.cpp` included),
+  `src/sh/` (the shell: grammar, line editor, job runtime, builtins) and `src/cmd/` (one file per
+  program, `sh.cpp` among them), `test/unit/`, `web/` (`proc.js` both halves of the process
+  protocol, `procworker.js` a tier-3 process's worker), `bundle/`, `tools/`, `cmake/`.
   Concept.md §7. `braam_fs` and `braam_svc` are siblings above the kernel and below userland and
-  must not depend upwards or on each other; anything needing the job table or the shell belongs
-  in `src/user/`, which is why `ProcFs` lives there. **`braam_ui` is no longer one of them**: it
+  must not depend upwards or on each other; anything needing the scheduler or the screen belongs
+  in `src/user/`, which is why `ProcFs` lives there. **`braam_sh` links `braam_proc`**, so
+  nothing in it may reach a kernel header that pulls in the scheduler — the exact-import
+  assertion over `sh.wasm` will say so. **`braam_ui` is no longer one of them**: it
   links `braam_flags` alone and the kernel does not link it at all, because `less` and `edit` are
   binaries and a process links it instead. Keep it clear of the VFS, the screen and every host
   import, or the exact-import assertion over each binary will say so.

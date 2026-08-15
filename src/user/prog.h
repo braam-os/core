@@ -1,7 +1,8 @@
-// argv, stdio and the pipes behind them — what a command is entered with,
-// whichever side of the process boundary it runs on (Concept.md §3.6).
+// stdio and the pipes behind it — what a process is entered with, and what the
+// syscall dispatcher reads and writes on its behalf (Concept.md §3.6).
 #pragma once
 
+#include "kernel/args.h"
 #include "kernel/coroutine.h"
 #include "kernel/result.h"
 #include "kernel/sched.h"
@@ -10,20 +11,6 @@
 #include "kernel/string.h"
 #include "kernel/task.h"
 #include "kernel/types.h"
-
-// argv. The words are views into the shell's line buffer, which outlives the
-// program; nothing here owns anything.
-struct Args {
-    Span<const Str> v;
-
-    usize size() const { return v.size(); }
-
-    Str operator[](usize i) const { return v[i]; }
-
-    Str name() const { return v.empty() ? Str() : v[0]; }
-
-    Args tail() const { return Args{ v.subspan(1) }; }
-};
 
 // A byte sink: the console, or a pipe. A function pointer rather than a
 // vtable, because the implementations are few and known.
@@ -187,14 +174,14 @@ struct Source {
     Read read() const { return Read{ fn, park, ctx }; }
 };
 
-// Concept.md §3.6's stdio. `in` is empty rather than absent for a program the
-// shell gave no input: reading it reports EOF immediately.
+// Concept.md §3.6's stdio. `in` is empty rather than absent for a program that
+// was given no input: reading it reports EOF immediately.
 //
 // `hold` and `owner` are who the three of them point *at*. A Stream is a
 // function pointer and a ctx, and the ctx is a pipe some other block owns — the
-// shell's Job, for a pipeline stage. Anything that may still touch these
-// streams after the stage that built them is gone holds a reference for as long
-// as that is true. Null is the console, which nobody owns.
+// Spawned record of whoever started this process, for a child. Anything that
+// may still touch these streams after that record is gone holds a reference for
+// as long as that is true. Null is the console, which nobody owns.
 struct Stdio {
     using HoldFn = void (*)(void *ctx, bool on);
 
@@ -215,9 +202,3 @@ struct Stdio {
             hold(owner, false);
     }
 };
-
-// What the job runtime enters, whether it is a shell builtin or the proxy task
-// standing in for a process. There is no registry behind it any more: a program
-// is a file in /bin, and the only things with this shape inside the kernel are
-// the six builtins (builtin.h).
-using ProgramFn = Task<i32> (*)(Args, Stdio);

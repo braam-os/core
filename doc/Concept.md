@@ -116,7 +116,7 @@ sequence to mis-parse. Rendering is under 200 lines of JavaScript.
 │  ┌────────────────────┴──── kernel.wasm ─────────────────┐ │
 │  │  allocator · core types · Task<T> · scheduler         │ │
 │  │  Channel<T> · scheduler jobs · CancelToken            │ │
-│  │  screen cells · VFS mount table · shell and builtins  │ │
+│  │  screen cells · VFS mount table · console · exec      │ │
 │  └───────────────────────────────────────────────────────┘ │
 │  ┌─────── (M8+) per-process WebAssembly.Instance ────────┐ │
 │  │  own linear memory, own import closure, own limits    │ │
@@ -325,20 +325,33 @@ That is §2.3 applied to input. Line editing — history, cursor movement, kill-
 lives in a **userland** `LineEditor` coroutine, not in the kernel. That is where the "line
 discipline" belongs, and it is far nicer as a coroutine than as a termios state machine.
 
-There is exactly one receiver on that channel, and while a pipeline runs it is the tty pump. A
-full-screen program therefore **does not take the keyboard — it claims a route through the
-pump**: `KeyInput` for raw keys with no echo, `InputClaim` to send the cooked bytes to another
-job's stdin, which is what `fg` needs. `^C` is never routed; it cancels the pipeline whatever
-is claimed, so a program that has taken the screen and stopped answering stays killable.
+There is exactly one receiver on that channel and it is the **console pump**, which init spawns
+and which never ends (`src/user/console.h`). It used to belong to the foreground pipeline and be
+spawned per job; it cannot, now that the shell is a program — something has to hold the keyboard
+while nothing is running, and a process has no `keys()` at all. A program therefore **does not
+take the keyboard — it claims a route through the pump**, and the prompt is no exception: the
+shell claims `KeyInput` for raw keys and gives it back around anything it runs.
 
-**Each of the three routes — raw keys, the screen, cooked bytes — has one holder at a time, on
-the kernel.** A second claim is `Err(Perm)`; it does not nest. The two a process makes are named
-by its pid, and a claim clears its route only if it is still the holder, so a parent and a child
-may die in either order. Nesting would mean restoring a predecessor that has already gone: a
-freed key ring for `KeyInput`, a dead job's pipe for `InputClaim`, and for `FullScreen` a
-snapshot of the blanked grid the first claimant was painting — the shell's screen thrown away
-rather than given back. Painting is held to the same rule: a `ScreenBlit` from a process that
-does not hold the screen is refused (§4.3).
+**Each of the two routes — raw keys and the screen — has one holder at a time, on the kernel,
+named by the pid that took it.** A second claim is `Err(Perm)`; it does not nest, and a claim
+clears its route only if it is still the holder, so a parent and a child may die in either
+order. Nesting would mean restoring a predecessor that has already gone: a freed key ring for
+`KeyInput`, and for `FullScreen` a snapshot of the blanked grid the first claimant was painting
+— the shell's screen thrown away rather than given back. Painting is held to the same rule: a
+`ScreenBlit` from a process that does not hold the screen is refused (§4.3).
+
+**`^C` goes to whatever is in front, and to the claimant when nothing is.** The foreground is a
+set of pids a process names with `Sys::Fg`, which is what a shell does for each stage of a
+pipeline before it waits; the pump cancels them, and a program that has taken the screen and
+stopped answering stays killable. With nobody in front it is an ordinary key, delivered to
+whoever holds the raw route — and *that* is what lets a line editor abandon the line being typed
+instead of being cancelled by it. A shell that is a process could not exist without the
+distinction: it would be killed by its own interrupt.
+
+Everything the pump does not route to a claimant it **cooks**: echo, a line at a time, `^D` for
+end of input, into one console channel that is the stdin of whatever is in front. A shell hands
+that channel to a child simply by letting go of the keyboard, which is why `cat` with no argument
+reads what is typed.
 
 ### 3.6 Kernel objects
 
@@ -362,13 +375,15 @@ does not hold the screen is refused (§4.3).
   awaitable needs intrusive queue links inside `Waiter` first — the same work a channel with two
   blocked senders would need — and Release_Notes.md's "Structured concurrency, put back by hand"
   is the full argument.
-- **The job table** — a pipeline started with `&` outlives the shell frame that started it, so
-  M7 filed it here: an id, the command text, the stages' pids, and a reaper task standing where
-  the shell stands for a foreground pipeline. `jobs`, `fg` and `kill` are shell builtins over it
-  (§4) — the table is the shell's, and no syscall shows one process another's — and the shell
-  announces a finished job at the next prompt. There is no `bg` and no
-  `^Z`: stopping a running coroutine at an arbitrary point is the resume-side twin of
-  `CancelToken` and would have to reach every awaitable.
+- **The job table is not one of these any more.** It was a kernel object while the shell was
+  kernel code; the shell is a process now, so the table is that process's own memory — an id, the
+  command text and the stages' pids — and `jobs`, `fg` and `kill` read and signal it without a
+  syscall between them. What the kernel keeps is what a syscall must serve: the children on each
+  process's record (§4.3). A finished background job is noticed at the next prompt by asking
+  `/proc` whether its pids are still there, because a `wait` would park and the prompt has to come
+  back either way. There is still no `bg` and no `^Z`: stopping a running coroutine at an
+  arbitrary point is the resume-side twin of `CancelToken` and would have to reach every
+  awaitable.
 - **Filesystem** — an async node tree, not inodes. One interface, split by *when* the work can
   happen rather than by what it does: naming a file may need the host and therefore a wake
   token, but an already-open file does not (§5.2).
@@ -398,10 +413,11 @@ does not hold the screen is refused (§4.3).
   holds the descriptors. Implementations in §5.
 - **Programs** — one file in `src/cmd/`, built into a binary of its own, so adding a command
   means adding one file and a line naming it. There was a registry of `Task<int>(Args, Stdio)`
-  functions here until every program became a binary (§4); what still has that shape inside the
-  kernel is the six shell builtins, and their table is written out by hand rather than filled in
-  at static-init time — `braam_user` is an archive, and a registrar nothing references would be
-  dropped by `--gc-sections` without a word.
+  functions here until every program became a binary (§4), and then a table of six shell builtins
+  until the shell became one too. Nothing of that shape is left in the kernel. The builtins'
+  table went with them and is still written out by hand rather than filled in at static-init
+  time — `braam_sh` is an archive, and a registrar nothing references would be dropped by
+  `--gc-sections` without a word.
 
 ### 3.7 Holding JS objects
 
@@ -445,9 +461,14 @@ between them from a flag in the binary's metadata — userland does not notice.
 
 | Tier | Isolation | Spawn cost | Kill | Used for |
 |---|---|---|---|---|
-| *(builtin)* | none — it *is* the shell | ~0 | cooperative | `cd`, `fg`, `jobs`, `kill`, `help`, `exit` |
-| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | every program |
+| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | every program, the shell included |
 | **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | untrusted or long-running |
+
+**There is no third row, and the shell is not an exception to the two.** `/bin/sh` is a binary
+in `/bin` that init runs, and everything a prompt needs — a pipeline, a redirection, a job, a
+working directory, the keyboard, the cursor — it asks for through §4.3 like any other program.
+What is left inside the kernel is not a weaker tier: it is the dispatcher those requests arrive
+at.
 
 `exec` reads the tier out of a binary's `braam` custom section (§4.3): a name in `/bin` is a
 binary, and the binary says which tier it wants. One asking for tier 3 still runs at tier 2 where
@@ -463,13 +484,20 @@ nothing between a bug and the kernel's heap. So the applets became binaries, the
 meet them (§4.3), and `Tier::Retired` keeps the number 1 reserved so a binary stamped by an older
 build is refused rather than misread.
 
-What is left in the kernel is not a weaker tier but a different kind of thing: a **shell
-builtin**, which is not a program at all and has no file in `/bin`. The six are the ones no
-syscall could serve — `cd` moves the *shell's* working directory (§5.1), `jobs`, `fg` and `kill`
-read and signal the shell's own job table, `fg` claims the keyboard route of the very pipeline it
-is a stage of (§3.5), `exit` ends the shell's loop, and `help` lists the rest. A builtin is an
-ordinary pipeline stage — a `Task<i32>(Args, Stdio)` handed to the job runtime like any other —
-so it pipes, redirects and takes `^C` with nothing added for it.
+A **shell builtin** is still not a program and still has no file in `/bin`, but it is no longer
+kernel code: the six live inside `/bin/sh`, in `src/sh/builtin/`. What makes one a builtin has
+changed with them. It is not "no syscall could serve it" — `chdir`, `wait` and `kill` all exist.
+It is that the thing it touches is *the shell process's own*: `cd` moves the working directory a
+typed command inherits (§5.1), `jobs`, `fg` and `kill` read and signal a table no syscall shows to
+anybody else, `exit` ends the shell's loop, and `help` lists the rest.
+
+A builtin runs inside the shell rather than as a child, so it pipes and redirects by reading and
+writing descriptors like anything else. One discipline goes with that, and it is worth stating
+because it is a real constraint rather than a style: **a builtin buffers its output and writes it
+once.** Nothing inside a process can wait for a sibling task — the only resumption a task has is a
+syscall reply — so a builtin in a pipeline runs to completion in its turn rather than alongside,
+and a pipe holds eight chunks. A builtin that wrote a line at a time would fill one and park with
+nobody left to drain it.
 
 The cost is paid twice over and is worth naming. Retiring the applet took `kernel.wasm` from
 236,965 bytes to under 170,000, because a quarter of it was userland; the same code now ships as
@@ -479,9 +507,11 @@ arriving in full. It buys a memory cap, a descriptor table and a kill switch for
 the system has, which is the trade this section has always described.
 
 One consequence lands on the tests. The in-wasm unit tests cannot drive a binary — stepping an
-instance means returning to the host, and `run_tests()` does that once — so with no applets left
-they can drive only the builtins. Everything that needs a real program is asserted in
-`test/run.mjs`, against the real one.
+instance means returning to the host, and `run_tests()` does that once — so with the shell a
+binary too they can drive nothing that runs. What they can still reach is everything below a
+program: the console and its claims, the pipes, `/proc`, the VFS, and the grammar, which is pure
+and is compiled straight into the suite. Everything else is asserted in `test/run.mjs`, against
+the real shell and the real programs.
 
 ### 4.1 What separate instances buy
 
@@ -579,11 +609,32 @@ five terminal operations for a program that takes the whole screen. Every one ha
 **A process can start a process, and that took five more.** The table is thirty-two: `chdir`
 beside the filesystem operations, and `pipe`, `spawn`, `wait` and `kill` as a family of their
 own. What forced them is that a program whose job is to run another program had nowhere to
-live — a builtin is the shell's own frame and the six that exist are the six no syscall could
-serve, so `timeout` and `watch` were unwritable rather than merely unwritten. Those two are the
-callers, and the rule above is why there are two and not a plausible half-dozen.
+live — a builtin is the shell's own frame, so `timeout` and `watch` were unwritable rather than
+merely unwritten. Those two were the first callers, and the rule above is why there were two and
+not a plausible half-dozen. The shell is the third, and the one that made the family general: a
+prompt is a supervisor, and it needs every one of the five.
 
-All five are asynchronous, because the synchronous half is closed and stays closed. That costs a
+**And the shell took two: `cursor` and `fg`.** The table is thirty-four. Both exist because a
+prompt is a program now, and both are the terminal rather than the process:
+
+- **`cursor`** reports and moves the cursor of the *scrolling* screen, get and set in one
+  operation. A line editor writes with `write` — which wraps and scrolls, exactly as it did when
+  the editor was kernel code — and then has to know where that landed, because nothing counts
+  scrolls. `ScreenBlit` could not serve it: it is refused without the alternate screen, and taking
+  the alternate screen blanks the grid the prompt lives in.
+- **`fg`** names which of a process's children is in front, and therefore what `^C` reaches. With
+  nobody in front the interrupt is delivered to whoever holds the raw keys instead (§3.5). Without
+  it a shell that is a process would be cancelled by the interrupt meant for the command it ran,
+  which is not a thing that can be worked around from userland.
+
+`fg` is authorised the way `kill` is, and then some: the pid must be a child of the caller, and
+the caller must have the terminal already — it holds the raw keys, or it is itself in front, or
+nobody is. That last clause is not slack. A shell must let go of the keyboard *before* it spawns,
+because a child is a scheduler job that runs as soon as the shell next parks and a full-screen
+program claims the keys in its very first step; handing them over afterwards is a race the child
+loses.
+
+All the rest are asynchronous, because the synchronous half is closed and stays closed. That costs a
 park and a step even for `wait` on a child that has already exited, which is the cost model of
 §4.4 arriving where it always does.
 
@@ -745,22 +796,22 @@ Several of those differ from what this section first said:
   generated directory level would hold exactly one file. Content is produced at `open` and read
   out of that snapshot, so a two-block read cannot describe two different moments.
 
-  `/proc/cwd` is **the shell's** working directory, and a process's own is a line in its own
-  `/proc/<pid>`. The two are different things now, which is the paragraph below.
+  `/proc/cwd` is the **kernel's** working directory — what init runs `/bin/sh` from — and every
+  process's own is a line in its own `/proc/<pid>`. The shell's is one of those now rather than
+  the first. `/proc/jobs` is gone with the same change: the job table is a process's memory, and
+  no syscall shows one process another's.
 
-**There are two kinds of working directory.** The shell's is one global, moved by `cd` and by
-nothing else, and it is what a command typed at the prompt starts in — which is also what a
-redirection on that line is relative to, since the shell opens those before any stage runs. Every
-process then has one of its own, inherited from whoever spawned it and moved only by its own
-`chdir`. A child inherits its parent's, not the shell's, so a `cd` in one process moves nobody
-else's feet.
+**Every process has a working directory of its own**, inherited from whoever spawned it and moved
+only by its own `chdir`. There is no longer a special one: the shell's is the shell process's,
+`cd` moves that, and a typed command inherits it at spawn — which is also what a redirection on
+that line is relative to, since the shell opens those itself before any stage runs. A `cd` in one
+process moves nobody else's feet, and that is the whole of why `cd` is a builtin: a `/bin/cd`
+would move its own and exit, leaving the shell where it was.
 
-This is why `cd` stays a builtin, and the reason has changed: not that there is only one
-directory, but that the one it moves is the shell's, and no syscall may reach another process's
-anything. It also splits what used to be one sentence — a process is now isolated in address
-space, memory, descriptors *and* the directory it names things from. What it is still not
-isolated in is the namespace itself: there is no per-process root, and `open` resolves with the
-kernel's full authority once the path is absolute.
+The kernel keeps one for itself, which is where init resolves `/bin/sh` from and what `/proc/cwd`
+reports. A process is therefore isolated in address space, memory, descriptors *and* the directory
+it names things from. What it is still not isolated in is the namespace itself: there is no
+per-process root, and `open` resolves with the kernel's full authority once the path is absolute.
 
 ### 5.2 OPFS is the primary store
 
@@ -889,9 +940,11 @@ src/cmd/                one file per program; every program is a binary of its o
 src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
 src/svc/                fetch, WebSocket, clipboard, file transfer, clock, processes
 src/ui/                 the layout layer over a Grid: Pane, TextBuf, TextView (§3.5)
-src/user/               LineEditor, grammar, job runtime, shell, exec, ProcFs, boot
-src/user/tty.h          the tty pump and the terminal claims: KeyInput, FullScreen
-src/user/builtin/       one file per shell builtin, plus the table (§4)
+src/user/               exec and the syscall dispatcher, the console and its pump, the
+                        pipes behind a stage's stdio, ProcFs, boot and init
+src/user/tty.h          the terminal claims: KeyInput, FullScreen
+src/sh/                 the shell: grammar, LineEditor, job runtime, builtins
+src/cmd/sh.cpp          its entry point — /bin/sh is a binary like any other
 bundle/                 the tree tools/pack.py packs into /bin and /share
 test/                   in-wasm unit tests, the Node driver, and the fakes: storage,
                         services, and a tier-3 worker with no thread in it
