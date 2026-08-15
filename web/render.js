@@ -25,13 +25,14 @@ const ATTR_REVERSE = 4;
 
 // The palette the kernel's fg/bg indices name.
 const PALETTE = [
-    "#12131a", "#e5687a", "#8fcf7e", "#e0c184",
-    "#7aa6e5", "#c58fe0", "#6fc7cf", "#c8cbd6",
+    "#111111", "#e5687a", "#8fcf7e", "#e0c184",
+    "#7aa6e5", "#c58fe0", "#6fc7cf", "#cccccc",
     "#4a4e5e", "#ff8b9a", "#aeeb9c", "#ffe0a3",
     "#9cc4ff", "#e0acff", "#8fe8f0", "#ffffff",
 ];
 
-const FONT_STACK = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const FONT_STACK =
+    "'Andale Mono', 'DejaVu Sans Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 const FONT_PX = 15;
 

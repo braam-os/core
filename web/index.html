@@ -9,17 +9,19 @@
     body {
         margin: 0;
         height: 100vh;
+        box-sizing: border-box;
+        padding: 1.25em 1.5em;
         display: flex;
         flex-direction: column;
-        background: #12131a;
-        color: #c8cbd6;
-        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #111111;
+        color: #cccccc;
+        font: 13px/1.5 'Andale Mono', 'DejaVu Sans Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     #screen { flex: 1 1 auto; display: block; width: 100%; min-height: 0; }
     #status {
         flex: 0 0 auto;
         margin: 0;
-        padding: 0.35rem 0.6rem;
+        padding: 0.35rem 0;
         border-top: 1px solid #24263200;
         color: #6f7488;
         white-space: pre-wrap;
