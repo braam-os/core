@@ -1,6 +1,7 @@
-// The tier measurement, doc/TODO.md T1. Boots the same kernel against three
-// boot archives — the one that ships, and the two tier-3 twins `make bench`
-// packs — runs the same four workloads against each, and reports.
+// The tier measurement, doc/TODO.md T1 and T5. Boots the same kernel against
+// three boot archives — the one that ships, and the two twins `make bench`
+// packs, one tier at each end — runs the same four workloads against each, and
+// reports.
 //
 // It is a page and not a Node driver on purpose: the numbers wanted are a
 // browser's postMessage, its microtask queue and its setTimeout clamp.
@@ -33,9 +34,9 @@ const EIGHT = ["sh", "edit", "less", "grep", "ls", "cat", "wc", "chat"]
 const COUNTS = /^\d+ \d+ \d+$/m;
 
 const ARMS = {
-    t2: { label: "tier 2, as shipped", bundle: "./bundle.bin", tier3: false },
+    t2: { label: "tier 2, every program", bundle: "./bundle2.bin", tier3: false },
     t3: { label: "tier 3, sh included", bundle: "./bundle3.bin", tier3: true },
-    t3nosh: { label: "tier 3, sh at tier 2", bundle: "./bundle3nosh.bin", tier3: true },
+    t3nosh: { label: "tier 3, sh at tier 2 — as shipped", bundle: "./bundle.bin", tier3: true },
 };
 
 // Each arm twice, the second pass in reverse: JIT warm-up and thermal drift

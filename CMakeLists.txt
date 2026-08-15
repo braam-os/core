@@ -162,42 +162,42 @@ add_custom_target(serve
     USES_TERMINAL
     COMMENT "Serving ${CMAKE_BINARY_DIR}/web at http://localhost:8080/")
 
-# Two more boot archives for the tier measurement, doc/TODO.md T1: the same
-# binaries with the tier in their `braam` section rewritten, one with the shell
-# among them and one without. stamp.py strips a prior section before appending,
-# so re-stamping a staged copy is the whole of it — nothing is recompiled and
-# bundle.bin is untouched. Outside ALL, and invisible to the three test cases.
+# Two more boot archives for the tier measurement, doc/TODO.md T1 and T5: the
+# same binaries with the tier in their `braam` section rewritten, one twin with
+# every program at tier 3 and one with every program at tier 2. bundle.bin is
+# the third arm and the middle one — tier 3 but for the shell. stamp.py strips a
+# prior section before appending, so re-stamping a staged copy is the whole of
+# it — nothing is recompiled and bundle.bin is untouched. Outside ALL, and
+# invisible to the three test cases.
 set(BRAAM_BENCH_STAGE ${CMAKE_BINARY_DIR}/bench)
 
 foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
     set(BRAAM_BENCH_STAMP
-        COMMAND ${Python3_EXECUTABLE} ${BRAAM_STAMP} --tier 3
+        COMMAND ${Python3_EXECUTABLE} ${BRAAM_STAMP}
                 --sysabi ${BRAAM_SYSABI}
                 --initial-pages ${BRAAM_BIN_INITIAL_PAGES}
                 --max-pages ${BRAAM_BIN_MAX_PAGES})
-    list(APPEND BRAAM_BENCH_STAMP_ALL
-        ${BRAAM_BENCH_STAMP} ${BRAAM_BENCH_STAGE}/all/bin/${prog})
-    if(NOT prog STREQUAL "sh")
-        list(APPEND BRAAM_BENCH_STAMP_NOSH
-            ${BRAAM_BENCH_STAMP} ${BRAAM_BENCH_STAGE}/nosh/bin/${prog})
-    endif()
+    list(APPEND BRAAM_BENCH_STAMP_TIER3
+        ${BRAAM_BENCH_STAMP} --tier 3 ${BRAAM_BENCH_STAGE}/tier3/bin/${prog})
+    list(APPEND BRAAM_BENCH_STAMP_TIER2
+        ${BRAAM_BENCH_STAMP} --tier 2 ${BRAAM_BENCH_STAGE}/tier2/bin/${prog})
 endforeach()
 
 add_custom_target(bench
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${BRAAM_BENCH_STAGE}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${BRAAM_BUNDLE_STAGE} ${BRAAM_BENCH_STAGE}/all
+            ${BRAAM_BUNDLE_STAGE} ${BRAAM_BENCH_STAGE}/tier3
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${BRAAM_BUNDLE_STAGE} ${BRAAM_BENCH_STAGE}/nosh
-    ${BRAAM_BENCH_STAMP_ALL}
-    ${BRAAM_BENCH_STAMP_NOSH}
+            ${BRAAM_BUNDLE_STAGE} ${BRAAM_BENCH_STAGE}/tier2
+    ${BRAAM_BENCH_STAMP_TIER3}
+    ${BRAAM_BENCH_STAMP_TIER2}
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
-            ${BRAAM_BENCH_STAGE}/all ${CMAKE_BINARY_DIR}/web/bundle3.bin
+            ${BRAAM_BENCH_STAGE}/tier3 ${CMAKE_BINARY_DIR}/web/bundle3.bin
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
-            ${BRAAM_BENCH_STAGE}/nosh ${CMAKE_BINARY_DIR}/web/bundle3nosh.bin
+            ${BRAAM_BENCH_STAGE}/tier2 ${CMAKE_BINARY_DIR}/web/bundle2.bin
     DEPENDS web
     VERBATIM
-    COMMENT "Packing the tier-3 twin archives")
+    COMMENT "Packing the twin archives, one tier at each end")
 
 # The SDK — doc/Programming_Manual.md. Two libraries and no more: braam_core,
 # braam_fs, braam_svc and braam_user each carry a host import no binary may have.

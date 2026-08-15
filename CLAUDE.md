@@ -257,14 +257,16 @@ service where that gap matters: a real WebSocket server, so `make serve` gives t
 conversation rather than a loopback.
 
 **`make bench` is the other counterweight, and it is a measurement rather than a test.** The cmake
-`bench` target packs two tier-3 twins of the boot archive by re-stamping the staged binaries —
-nothing is recompiled and `bundle.bin` is byte-identical — `web/bench.html` drives the shipped page
-against all three, and `tools/bench.mjs` serves them and collects what the page posts into
+`bench` target packs two twins of the boot archive by re-stamping the staged binaries — one tier at
+each end, `bundle2.bin` and `bundle3.bin`, with the shipped `bundle.bin` as the middle arm; nothing
+is recompiled and `bundle.bin` is byte-identical — `web/bench.html` drives the shipped page against
+all three, and `tools/bench.mjs` serves them and collects what the page posts into
 `build/bench-<engine>.json`. It answers what a fake cannot: what a syscall costs on a real
 `postMessage`. The counters behind it are unconditional and live in `makeProc`'s `stats()` and in
-`web/worker.js`; the figures are in doc/TODO.md T1. Since T3 the twin without the shell in it is
-`bundle.bin` again, so the harness has three arms and two distinct ones: whatever T5 re-measures
-against wants a *tier-2* twin, which the target does not pack.
+`web/worker.js`; the figures are in doc/TODO.md T1 and T5. **The arm ids mean what they meant at
+T1** — `t2` every program at tier 2, `t3nosh` tier 3 but for the shell, `t3` all of it — so the two
+measurements can be read against each other; keep it that way, since T5's own code change was
+repairing an arm that had silently stopped being a control.
 
 ## Architecture invariants
 
@@ -395,8 +397,8 @@ between the two isolated tiers from binary metadata, so userland does not notice
   unless a program asks for 2, so every program but the shell has one — and it runs at tier 2
   where the host cannot make a worker. The protocol is one message each way per step, the tier
   rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and a tier-3 syscall
-  costs two `postMessage` hops rather than a call: 34–44 µs measured, which doc/TODO.md T1 is
-  the argument for paying everywhere.
+  costs two `postMessage` hops rather than a call: 34–45 µs measured, which doc/TODO.md T1 is
+  the argument for paying everywhere and T5 re-measured unmoved after the flip.
 
 The kernel↔process ABI is Concept.md §4.3 and `src/kernel/sysabi.h`, and both ends include the
 header so neither can drift alone. Three rules about it are load bearing:
@@ -491,10 +493,12 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   `Module` by path, so the bytes still cross the VFS on every `exec` and only the compile is
   saved; the worker comes from the pool, and only a pipeline wider than `MAX_IDLE` or a killed
   process makes the host start one.
-- **Every syscall a program makes is two `postMessage` hops**, 34–44 µs, since T3 put every
+- **Every syscall a program makes is two `postMessage` hops**, 34–45 µs, since T3 put every
   program in its own worker. `sh` is the exception and stays at tier 2 for it. Bulk I/O pays it
-  per `SYS_CHUNK`, which is 512 bytes — doc/TODO.md T5 is where that is re-measured and T6 is
-  what would be done about it.
+  per `SYS_CHUNK`, which is 512 bytes: doc/TODO.md T5 re-measured that at 6–13 ms more than tier 2
+  for a quarter of a megabyte through three processes, and **decided against T6** — a bigger chunk
+  or a batched step protocol — because nothing written for this system can perceive it. A workload
+  that moves megabytes is what would reopen it, not a better figure.
 - **The boot archive is ~491 KB**, against 47 KB when four programs were binaries. That is §4.4's
   duplication: every binary carries the allocator, the string types and the coroutine runtime,
   and `sh.wasm` is 86 KB of it. `bundle.bin` carries a size budget and the binaries under it do

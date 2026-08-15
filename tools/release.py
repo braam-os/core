@@ -23,7 +23,7 @@ REQUIRED = ("index.html", "kernel.wasm", "bundle.bin")
 # The tier measurement's own files, which land in build/web/ so they can be
 # served and are no part of the site. Names, not a pattern: an exclusion that
 # guesses is worse than one that is spelled.
-SKIP = {"bench.html", "bench.js", "bundle3.bin", "bundle3nosh.bin"}
+SKIP = {"bench.html", "bench.js", "bundle2.bin", "bundle3.bin"}
 
 # Fixed, because a zip timestamp is the difference between two identical
 # builds. 1980-01-01 is the earliest a zip can express.

@@ -197,7 +197,98 @@ wants is the *other* twin — every program back at tier 2 — which the cmake `
 not pack, since when it was written that archive was the one being shipped. One more `--tier 2` pass
 over a third staged copy is the whole of it.
 
+**Done, and T6 is not worth starting.** The twin is packed: `bundle2.bin` is every program at
+tier 2, `bundle3.bin` every program at tier 3, and `bundle.bin` — the archive that ships — is the
+middle arm. `bundle3nosh.bin` is gone rather than duplicated. The three arm ids keep their T1
+meanings, so the tables below read straight against T1's, whose figures are in brackets.
+
+Measured at 0.2.47-8ca8053 on the same 8-core Mac, same method: ten timed runs after two warm-ups,
+medians, three engines, six passes each. Not one of the nine arm reports is tainted and no
+keystroke was dropped anywhere — so unlike T1, WebKit's column is not marked.
+
+### The two figures, as the system ships
+
+**A round trip still costs 34–45 µs**, which is T1's answer unmoved:
+
+| | Blink | Gecko | WebKit |
+|---|---|---|---|
+| tier 2, every program | 41.8 µs (40.2) | 79.1 µs (80.8) | 10.1 µs (5.1) |
+| **as shipped** | **44.9 µs** (42.3) | **38.7 µs** (33.7) | **33.7 µs** (33.7) |
+| tier 3, sh included | 47.0 µs (44.4) | 40.4 µs (38.7) | 35.4 µs (38.7) |
+
+Gecko and WebKit step `performance.now()` in whole milliseconds, so their tier-2 row is quantised
+— 297 round trips into a 1 ms grid is a ±3.4 µs quantum, and WebKit's 5.1 → 10.1 is one grid step,
+not a regression.
+
+**The prompt is exactly where it was, because the shell is where it was.** Key to the last repaint
+it caused, and 64 keys back to back:
+
+| | Blink | Gecko | WebKit |
+|---|---|---|---|
+| tier 2, every program | 0.20 ms | 2.00 ms | 0.00 ms |
+| **as shipped** | **0.20 ms** | **2.00 ms** | **0.00 ms** |
+| tier 3, sh included | 0.65 ms | 2.00 ms | 3.00 ms |
+| 64 keys, per key — as shipped | 0.09–0.12 ms | 0.41–0.42 ms | 0.25–0.27 ms |
+| 64 keys, per key — tier-3 shell | 0.27–0.28 ms | 2.58–2.62 ms | 6.20–6.25 ms |
+
+The shipped row is the tier-2 control's row to the clock in all three engines. Sustained typing is
+0.09–0.42 ms a key, a fortieth of a frame at worst. T1's alarming figures were never the system's:
+they are the tier-3-shell arm's, and in WebKit that arm got *worse* on the re-run — 6.2 ms a key
+against 5.1. That is T7 and T8's number, and it is the strongest thing in this table.
+
+### Bulk I/O, which is what the decision turns on
+
+Medians, in milliseconds:
+
+| | Blink | Gecko | WebKit |
+|---|---|---|---|
+| `wc /bin/sh` — tier 2 | 4.2 (4.2) | 9.5 (9.0) | 6.0 (6.5) |
+| `wc /bin/sh` — as shipped | 11.0 (11.4) | 15.5 (16.0) | 12.0 (12.0) |
+| `wc` over eight files — tier 2 | 16.6 (16.2) | 33.0 (33.0) | 9.0 (8.0) |
+| `wc` over eight files — as shipped | 24.4 (24.0) | **27.0** (26.0) | 22.0 (22.0) |
+| `cat /bin/sh \| cat \| wc` — tier 2 | 7.8 (7.7) | 13.0 (13.0) | 9.5 (11.5) |
+| `cat /bin/sh \| cat \| wc` — as shipped | 19.7 (25.6) | 26.0 (30.0) | 19.0 (27.0) |
+
+So the tier costs **10–13 ms** on the heaviest thing in the suite — a quarter of a megabyte through
+three processes — and 6–7 ms on an 86 KB file. In Gecko `wc` over eight files is *faster* as
+shipped than with everything at tier 2, for the reason below.
+
+All of that is round trips and none of it is the worker. `true` — one spawn, one exit, no I/O —
+costs the same as shipped as it does at tier 2 to within 1.5 ms in every engine (+0.2 Blink,
++1.5 Gecko, +0.0 WebKit), because the pool has a worker waiting. The tier's price is paid per
+`SYS_CHUNK`, exactly where §4.4 says it is.
+
+### What else the re-run found
+
+- **T2's pool sizing is worth 4–8 ms on a pipeline, in every engine.** `cat | cat | wc` goes from
+  T1's `hired 1, reused 2, terminated 1` to `hired 0, reused 3, terminated 0` in all three, and the
+  command drops 25.6→19.7 ms in Blink, 30→26 in Gecko and 27→19 in WebKit. That is the whole of
+  the improvement in the last row above; the per-round-trip cost did not move.
+- **T1's every-64th `setTimeout(drain, 0)` finding has mostly retired itself.** `wc` over eight
+  files takes that route 8 times at tier 2 — costing 9.5 ms in Blink, 18.5 in Gecko, 2.0 in WebKit
+  — and **0 times as shipped**, because the only tier-2 process left is the shell, which does 21
+  steps rather than 483. The item T2 deferred is now worth a few milliseconds of `sh`'s own
+  stepping instead of the larger half of every bulk command. It is also why Gecko's shipped figure
+  beats its tier-2 control.
+- **The Gecko and WebKit boot flake is still there and still self-correcting**: three `selectall`
+  retries across the eighteen passes, every one recovered by the harness's own reload.
+
+### The decision
+
+**Skip T6.** Both of its conditions are met and neither of its options is cheap. The prompt is
+0.09–0.42 ms a key sustained with nothing dropped — forty to two hundred times inside a frame —
+and bulk I/O costs at most 13 ms over tier 2 on the largest workload in the suite. A bigger
+`SYS_CHUNK` is an allocator change (§8.2) and batched replies are a protocol change to something
+that works, for a saving nothing today can perceive.
+
+What would reopen it is a workload, not a number: something that moves megabytes rather than a
+quarter of one — `curl` into a file, `grep` over a large tree — where 34–45 µs per 512 bytes is
+70–90 ms a megabyte. T6 stays written down for that day.
+
 ## T6. Only if T5 says so: cut the number of round trips
+
+**T5 says not to.** Not started, and not to be started without a workload that needs it — see the
+decision at the end of T5. What follows is the shape it would take if one ever turns up.
 
 Both options are expensive, and neither should be started on a guess.
 

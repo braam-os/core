@@ -7,6 +7,71 @@ of the two needs amending.
 
 ---
 
+## The re-measurement, and why T6 is not being written
+
+[doc/TODO.md](TODO.md) T5. T3 put thirty-one programs in workers of their own on the strength of
+T1's figures; T5 is the gate on the other side of that, and it decides one thing — whether to spend
+a week on T6, which is either a bigger `SYS_CHUNK` or a batched step protocol. **No.** The prompt
+costs 0.09–0.42 ms a key under sustained typing and bulk I/O costs 10–13 ms more than tier 2 on the
+largest workload in the suite, which are T5's own two conditions for skipping it. The figures are
+in T5; this is why they mean that.
+
+### The harness had lost its control, which is the whole of the code change
+
+T1's three arms were `bundle.bin` (every program at tier 2, as it shipped then) and two re-stamped
+twins. T3 inverted the default, so `bundle.bin` became the tier-3-but-for-`sh` archive — which is
+what `bundle3nosh.bin` already was. The two files were byte-identical, verifiable with `shasum`,
+and the harness was measuring one configuration twice and the genuine tier-2 case not at all.
+
+So the `bench` target packs `bundle2.bin` — every program stamped `--tier 2`, `sh` included — and
+no longer packs `bundle3nosh.bin`, whose job `bundle.bin` now does. The staging directories are
+`tier2` and `tier3` rather than `all` and `nosh`, which named a distinction that no longer exists.
+
+The three arm *ids* were left alone deliberately: `t2` means every program at tier 2 exactly as it
+did at T1, `t3nosh` means tier 3 but for the shell, `t3` means all of it. Only the file behind two
+of them changed. That is what lets T5's tables be read straight against T1's, and it is worth more
+than a tidier name — a benchmark whose arms silently change meaning between runs is worse than no
+benchmark, which is precisely the failure this change repairs.
+
+### What the numbers say that T1's could not
+
+T1 could not separate the tier's cost from the shell's, because its tier-2 arm was also its
+tier-2-shell arm. With a real control the two come apart:
+
+- **The prompt is the tier-2 control's prompt, to the clock, in all three engines.** As shipped a
+  keystroke echoes in 0.20 ms under Blink and under the 1 ms clock step in Gecko and WebKit, and 64
+  keys back to back cost 0.09–0.42 ms each with nothing dropped. T1's frightening figures — 2.7 ms
+  a key in Gecko, 5.1 in WebKit — were never the shipped system's. They belong to the arm with the
+  shell at tier 3, where the re-run made WebKit worse still at 6.2 ms. That is T7 and T8's problem,
+  and T5 sharpens rather than softens it.
+- **A round trip is unchanged at 34–45 µs.** Nothing about putting thirty-one programs in workers
+  made the per-call cost move, which is the result a cost model should give and is worth recording
+  as a null.
+- **T2's pool sizing bought 4–8 ms on a pipeline, in every engine.** `cat | cat | wc` fell from
+  25.6 to 19.7 ms in Blink, 30 to 26 in Gecko, 27 to 19 in WebKit, and its counters went from
+  `hired 1, reused 2, terminated 1` to `hired 0, reused 3, terminated 0` everywhere. The
+  per-round-trip cost did not move, so all of that is the worker start T2 stopped paying — a
+  cheaper win than T6 proposed, taken before T6 was decided.
+- **T1's every-64th `setTimeout(drain, 0)` finding retired itself.** It was the larger half of a
+  bulk command's cost at tier 2 — 9.5 ms of 16.6 in Blink, 18.5 of 33 in Gecko. As shipped, `wc`
+  over eight files takes that route **zero** times, because the only tier-2 process left is the
+  shell and it takes 21 steps rather than 483. T2 deferred the item on the grounds that it wanted
+  its own measurement; this is that measurement, and it says the item shrank to the shell's own
+  stepping. It is also why Gecko's shipped figure beats its tier-2 control outright.
+
+### Why "acceptable" rather than a threshold
+
+T5's criterion is a judgement and should be written down as one. 10–13 ms on a quarter of a
+megabyte through three processes is under a frame for a command nobody waits on interactively, and
+nothing in `src/cmd/` moves more data than that. The honest statement of the decision is therefore
+not "the cost is small" but "nothing we have written can perceive it", and the thing that would
+reopen T6 is a workload rather than a figure — something moving megabytes, where 34–45 µs per 512
+bytes is 70–90 ms each.
+
+Recording that distinction is the point of skipping T6 in writing rather than by silence.
+
+---
+
 ## Every program in a worker of its own
 
 [doc/TODO.md](TODO.md) T3 and T4. Thirty-one of the thirty-two binaries in `/bin` now ask for
@@ -79,8 +144,7 @@ constraint on what may be written next rather than a regression.
 
 Bulk I/O is where the cost lands: a syscall per `SYS_CHUNK`, which is 512 bytes, at 34–44 µs each.
 T5 is the re-measurement that decides whether T6 — a bigger chunk, or batched replies — is worth
-starting. `make bench` needs one thing first: its `bundle3nosh.bin` twin is now a copy of
-`bundle.bin`, and what a re-measurement wants is a tier-2 twin the target does not pack.
+starting. It has since been taken, and the answer is no; the note above this one has it.
 
 The shell is untouched and stays at tier 2. T7 is the design question that has to be answered
 before it moves — a tier-3 shell dies with the workers, and nothing re-execs init.
