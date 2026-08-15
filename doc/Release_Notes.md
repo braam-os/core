@@ -40,6 +40,25 @@ clang-format a contributor happens to have is no longer a way to fail the build.
 distribution may ship one, and a sysroot injected behind the flags is exactly the failure the
 flag makes impossible.
 
+### The wasm features are named now
+
+The first CI run on Debian's clang 18 failed on `unknown type name '__externref_t'`, which is
+what clang says when reference-types is off. It had never been off: every clang the build had
+seen was new enough to have it in the default CPU. That default is not a stable thing to build
+on — the feature set `generic` implies has moved twice in recent releases — so the toolchain file
+now names what it needs, `-mreference-types -mbulk-memory -msign-ext -mmutable-globals
+-mnontrapping-fptoint`, and the code compiles the same on clang 18 as on clang 22.
+
+Two of those are load-bearing rather than cosmetic. Without reference-types the externref table
+of §3.7 cannot be declared at all. Without bulk-memory, LLVM stops lowering `memcpy` and
+`memset` inline and emits calls instead, which is a link error rather than a silent libc
+dependency — correct behaviour, thanks to `--allow-undefined` being gone, but a puzzling one to
+debug.
+
+The list was checked by building with `-mcpu=mvp` in front of it: nothing in the tree needs a
+feature that is enabled only by a modern default. `kernel.wasm` came out 12 bytes smaller that
+way, which is the measure of how little the rest of the default set is worth here.
+
 ## The Linux console's sixteen colours
 
 `web/render.js` shipped a palette of nobody's in particular — a softened set picked to look

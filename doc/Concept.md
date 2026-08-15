@@ -1168,6 +1168,7 @@ clang++ \
     --target=wasm32-unknown-unknown \
     -std=gnu++20 -Os \
     -nostdlib -nostdinc++ \
+    -mreference-types -mbulk-memory -msign-ext -mmutable-globals -mnontrapping-fptoint \
     -fno-exceptions -fno-rtti -fno-threadsafe-statics \
     -ffunction-sections -fdata-sections \
     -Wl,--no-entry -Wl,--gc-sections \
@@ -1180,7 +1181,11 @@ clang++ \
 - **`--allow-undefined` is gone.** Imports carry `__attribute__((import_module("host"),
   import_name(...)))`, so nothing is left to resolve — and without the flag, an accidental libc
   dependency is a link error instead of a runtime trap. `memcpy`/`memset` do not leak in:
-  bulk-memory is on by default and LLVM lowers them inline.
+  bulk-memory lets LLVM lower them inline.
+- **The wasm features are named, not defaulted.** `-mreference-types` for `__externref_t`,
+  `-mbulk-memory` for the above, and `-msign-ext -mmutable-globals -mnontrapping-fptoint`. Which
+  of these the default CPU turns on has changed between clang versions, so the build says which
+  it wants and compiles the same on an old clang and a new one.
 - **`--no-default-config` and `--stack-first` are new.** The first suppresses any
   `bin/clang++.cfg` a distribution ships, which is how a sysroot gets injected. The second puts the shadow stack below the data segment,
   so overflow traps rather than corrupting globals (§8.4).

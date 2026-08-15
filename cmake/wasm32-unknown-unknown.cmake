@@ -52,8 +52,15 @@ set(CMAKE_EXECUTABLE_SUFFIX     ".wasm")
 set(CMAKE_EXECUTABLE_SUFFIX_C   ".wasm")
 set(CMAKE_EXECUTABLE_SUFFIX_CXX ".wasm")
 
+# The wasm features the code needs, named rather than left to the compiler's
+# default CPU, which differs between clang versions: reference-types for
+# __externref_t, bulk-memory for inline memcpy/memset, the rest for parity with
+# what a recent clang enables anyway.
+set(BRAAM_WASM_FEATURES "-mreference-types -mbulk-memory -msign-ext -mmutable-globals \
+-mnontrapping-fptoint")
+
 # --no-default-config suppresses bin/clang++.cfg, which some distributions use
 # to inject a sysroot.
-set(CMAKE_C_FLAGS_INIT          "--no-default-config -nostdlib")
-set(CMAKE_CXX_FLAGS_INIT        "--no-default-config -nostdlib -nostdinc++")
+set(CMAKE_C_FLAGS_INIT          "--no-default-config -nostdlib ${BRAAM_WASM_FEATURES}")
+set(CMAKE_CXX_FLAGS_INIT        "--no-default-config -nostdlib -nostdinc++ ${BRAAM_WASM_FEATURES}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "--no-default-config -nostdlib")

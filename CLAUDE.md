@@ -189,6 +189,13 @@ SDK. Locally, **Homebrew**: `brew install llvm lld`, `lld` being a separate form
 toolchain file finds each tool with `find_program`, probing `/usr/local/opt/llvm` and
 `/opt/homebrew/opt/llvm` first because Homebrew keeps its keg off PATH, and it fails at
 configure time naming whichever of clang, clang++, llvm-ar, llvm-ranlib or wasm-ld is missing.
+The wasm features are named in the toolchain file rather than taken from the compiler's default
+CPU, which is not the same set on clang 18 as on clang 22: `-mreference-types` (without it
+`__externref_t` is an unknown type), `-mbulk-memory` (without it `memcpy` is a call to something
+nothing defines), and `-msign-ext -mmutable-globals -mnontrapping-fptoint` for parity. The list
+is verified sufficient by building with `-mcpu=mvp` on top of it, which is the oldest baseline
+there is.
+
 Note that neither distribution provides compiler-rt for `wasm32-unknown-unknown`; that is
 invisible only because `-nostdlib` links no builtins, so a construct that needs one (128-bit
 division, an outlined `memcpy`) fails on both.
