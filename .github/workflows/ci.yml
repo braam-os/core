@@ -40,12 +40,16 @@ jobs:
       - name: Test
         run: make run
 
+      # The binaries are build/src/cmd/, one per file in src/cmd/. failglob so a
+      # layout change is an error here rather than a literal pattern reaching
+      # python.
       - name: Report size
         run: |
+          shopt -s failglob
           echo '### Binary size' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           python3 tools/size_budget.py --budgets tools/size_budget.txt build/kernel.wasm \
-            build/src/bin/*.wasm >> "$GITHUB_STEP_SUMMARY"
+            build/src/cmd/*.wasm >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
