@@ -31,14 +31,14 @@ bool shell_exit_wanted(i32 &status)
 
 namespace {
 
+// A nonzero status shows up here rather than in a diagnostic line: it costs
+// nothing when everything works, and a pipeline's status is its last command's,
+// so nothing about it changes. It is its own piece of the prompt because it is
+// its own colour (edit.h).
 void prompt_for(Buf<16> &b, i32 status)
 {
-    // A nonzero status shows up here rather than in a diagnostic line: it costs
-    // nothing when everything works, and a pipeline's status is its last
-    // command's, so nothing about it changes.
     if (status)
         b.put('[').put(status).put("] ");
-    b.put("$ ");
 }
 
 // The keyboard is ours for as long as we are at a prompt; run_line hands it to
@@ -64,10 +64,10 @@ Task<i32> interactive()
         if (Task<void> t = jobs_report(SYS_STDOUT))
             co_await t;
 
-        Buf<16> prompt;
-        prompt_for(prompt, status);
+        Buf<16> failed;
+        prompt_for(failed, status);
 
-        Task<Result<Line>> t = ed.read_line(prompt.str());
+        Task<Result<Line>> t = ed.read_line(Prompt{ failed.str(), "$ " });
         Result<Line> r       = t ? co_await t : Err(Error::NoMemory);
         if (r.is_err())
             co_return r.error() == Error::Cancelled ? 0 : 1;

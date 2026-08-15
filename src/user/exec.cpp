@@ -1495,6 +1495,23 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             break;
         }
 
+        // The colours the next Write paints with. The grid is cells and not a
+        // byte stream (§2.3), so a colour cannot ride in the bytes and is a
+        // syscall of its own — and it is sticky, so whoever sets one puts the
+        // default back. Refused while somebody else holds the screen, as a
+        // cursor set is.
+        case Sys::Style: {
+            u32 owner = tty_screen_owner();
+            if (owner && owner != p.pid) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            u32 a = sys_op_arg(c.op);
+            screen_style(sys_style_fg(a), sys_style_bg(a), sys_style_attrs(a));
+            status = 0;
+            break;
+        }
+
         // Both ends in this process's table. Whichever is moved into a child is
         // closed here by the move, and that is what gives the other end an end
         // of input — there is no second copy left open to prevent it.

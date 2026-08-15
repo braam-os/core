@@ -1,6 +1,7 @@
 #include "edit.h"
 
 #include "kernel/key.h"
+#include "kernel/screen.h"
 #include "kernel/text.h"
 #include "kernel/traits.h"
 
@@ -9,6 +10,27 @@ namespace {
 bool is_word(char32_t c)
 {
     return c != ' ' && c != '\t';
+}
+
+// One run of the prompt: the colour, then the bytes. Empty text sets the style
+// and writes nothing, which is how the default goes back on afterwards.
+Task<Result<void>> put_styled(u8 fg, Str s)
+{
+    if (Task<Result<void>> t = style_set(fg, COLOR_BLACK, 0)) {
+        if (Result<void> r = co_await t; r.is_err())
+            co_return Err(r.error());
+    } else
+        co_return Err(Error::NoMemory);
+
+    if (s.empty())
+        co_return {};
+
+    if (Task<Result<void>> t = write_all(SYS_STDOUT, s)) {
+        if (Result<void> r = co_await t; r.is_err())
+            co_return Err(r.error());
+    } else
+        co_return Err(Error::NoMemory);
+    co_return {};
 }
 
 } // namespace
@@ -93,7 +115,7 @@ Task<Result<void>> LineEditor::redraw()
 
 // The prompt goes out first and the anchor is where it ends — on a column the
 // cursor can be set to, which the deferred wrap column is not.
-Task<Result<void>> LineEditor::anchor(Str prompt)
+Task<Result<void>> LineEditor::anchor(Prompt prompt)
 {
     Task<Result<CursorAt>> t = cursor_get();
     if (!t)
@@ -102,13 +124,34 @@ Task<Result<void>> LineEditor::anchor(Str prompt)
     if (at.is_err())
         co_return Err(at.error());
 
+    // A newline paints no cell, so it rides with whichever run goes out first
+    // whatever colour that run is in.
     String out;
     if (at.value().x != 0 && !out.push('\n'))
         co_return Err(Error::NoMemory);
-    if (!out.append(prompt))
+
+    if (!prompt.status.empty()) {
+        if (!out.append(prompt.status))
+            co_return Err(Error::NoMemory);
+        if (Task<Result<void>> w = put_styled(COLOR_RED, out.str())) {
+            if (Result<void> r = co_await w; r.is_err())
+                co_return Err(r.error());
+        } else
+            co_return Err(Error::NoMemory);
+        out.clear();
+    }
+
+    if (!out.append(prompt.text))
+        co_return Err(Error::NoMemory);
+    if (Task<Result<void>> w = put_styled(COLOR_WHITE | COLOR_BRIGHT, out.str())) {
+        if (Result<void> r = co_await w; r.is_err())
+            co_return Err(r.error());
+    } else
         co_return Err(Error::NoMemory);
 
-    if (Task<Result<void>> w = write_all(SYS_STDOUT, out.str())) {
+    // Back to the default, so what is typed under it is ordinary text and so
+    // that a program the line starts inherits nothing.
+    if (Task<Result<void>> w = put_styled(COLOR_WHITE, Str())) {
         if (Result<void> r = co_await w; r.is_err())
             co_return Err(r.error());
     } else
@@ -201,7 +244,7 @@ usize LineEditor::word_start() const
     return i;
 }
 
-Task<Result<Line>> LineEditor::read_line(Str prompt)
+Task<Result<Line>> LineEditor::read_line(Prompt prompt)
 {
     buf_.clear();
     pending_.clear();

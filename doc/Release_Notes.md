@@ -7,6 +7,50 @@ of the two needs amending.
 
 ---
 
+## A prompt with a colour
+
+The prompt is bright white, and the `[N]` in front of it — the status of the command that just
+failed — is red. That is two lines of taste and one operation in the §4.3 table: `Sys::Style` at
+70, which makes the table thirty-five and `PROC_ABI` 5.
+
+**Why it needed an operation at all.** §2.3 says the terminal is a cell grid and not a byte
+stream, so there is nowhere in a `write` for a colour to ride: an escape sequence is precisely
+what the invariant exists to refuse, and the kernel's `screen_write` would paint `\x1b[1m` as five
+cells. The kernel has had `screen_style` since M2 and `show_motd` is its caller — green, then
+white again — but a process could not reach it. What a process *could* colour was a grid of its
+own, blitted with `ScreenBlit`, and that is refused without the alternate screen; taking the
+alternate screen blanks the grid the prompt lives in. This is the same wall `Sys::Cursor` was
+built against when the shell became a program, and the answer is the same shape.
+
+The argument fits in the op word — `fg | bg << 8 | attrs << 16`, three bytes of the available
+three — so the operation stages nothing and costs one park and one step, the cheapest an
+asynchronous syscall gets. It carries no reply data either. The rule that keeps the table honest
+is that every operation has a caller, and this one has exactly one: `/bin/sh`.
+
+**Sticky, and the prompt is what cleans up.** The style is grid state, not a property of a write,
+which is how it already worked for the kernel. So the convention is that whoever sets a colour
+puts the default back, and `anchor` does: red for the status, bright white for the `$`, then plain
+white before the cursor comes back — so what is typed is ordinary text and so a program the line
+starts inherits nothing. That last reset is also the repair for a program that dies halfway
+through a colour of its own. The screen cannot stay wrong for longer than one command, because the
+next prompt names all three fields unconditionally.
+
+The alternative — a colour argument on `Write`, or a style word in a write's payload — was worse
+in the way that matters: it would put a second meaning into the one operation every program uses,
+and a pipe would have to carry it or drop it. `Style` is refused from a process that does not hold
+the screen while somebody else does, exactly as a cursor set is, and needs no rule beyond that.
+
+**A prompt now costs three more syscalls**, one per style run, on top of the two `Cursor` calls and
+the write it already made. It is once per line rather than once per keystroke, so §4.4's cost model
+lands where it lands; the six-tick keystroke is unchanged, since `redraw` sets no style.
+
+The smoke test checks the colours rather than only the text: green motd, bright-white prompt under
+it, and after `false` a red `[1]` with a bright-white `$` beside it. The prompt assertion used to
+read "not green" — inheriting was the bug it was written for — and now reads "bright white", which
+is a stronger statement about the same cell.
+
+---
+
 ## Selecting with the mouse
 
 The terminal is a cell grid in shared memory, which means the page can read what is on the screen

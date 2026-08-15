@@ -226,7 +226,7 @@ how much memory to give it. Both live in a wasm custom section named `braam`, si
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 2
+    u32 abi;            // PROC_ABI, currently 5
     u32 tier;           // Tier::Instance (2) or Tier::Worker (3)
     u32 flags;
     u32 initial_pages;
@@ -649,6 +649,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 67 | `ScreenBlit` | — | seven `u32`s, then `w*h` `Cell`s | 0 | — |
 | 68 | `ScreenClear` | — | — | 0 | — |
 | 69 | `Cursor` | bit 0 = set, else report | `u32 x, y, on` when setting | 0 | `u32 x`, `y`, `on`, `cols`, `rows` |
+| 70 | `Style` | `fg \| bg << 8 \| attrs << 16` | — | 0 | — |
 | 80 | `Pipe` | — | — | 0 | `u32 read fd`, `u32 write fd` |
 | 81 | `Spawn` | — | `u32 fd0, fd1, fd2`, then the argv blob | the child's pid | — |
 | 82 | `Wait` | a pid, or `SYS_WAIT_ANY` | — | the child's status, 0–255 | `u32 pid` |
@@ -668,6 +669,16 @@ scrolls either: the grid moves under a write and `cursor_y` does not change. So 
 writes, asks, and infers the scroll from the shortfall. A *set* is refused with `Err(Perm)` while
 another process holds the alternate screen, for the reason `ScreenBlit` is; a get is always
 allowed. `/bin/sh` is the caller.
+
+**`Style` is the colour `Write` cannot carry.** The grid is cells and not a byte stream
+(Concept.md §2.3), so there is no escape sequence to put in the bytes and the colour is an
+operation instead — two palette indices and the `ATTR_*` bits, packed into the op word's argument
+by `sys_style_pack`, so it stages nothing. It is *sticky* grid state, exactly as it is for the
+kernel's own writers: whoever sets a colour puts the default back after it. `/bin/sh` is the
+caller — a prompt in bright white with a failed status in red before it — and the reset it does
+afterwards is also what corrects a program that died mid-colour, at the next prompt. Refused with
+`Err(Perm)` while another process holds the alternate screen, as a cursor set is; a program that
+has the alternate screen paints its own cells and names their colours in them.
 
 **`Fg` decides where `^C` goes.** The console keeps a set of foreground pids; the pump cancels
 them all on `^C`, and delivers the interrupt as an ordinary key to whoever holds the raw route

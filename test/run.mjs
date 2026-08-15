@@ -207,7 +207,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 4)
+        if (m[0] !== 0x6d617262 || m[1] !== 5)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         const tier = want_tier[basename(binary)] || 2;
         if (m[2] !== tier)
@@ -247,17 +247,17 @@ if (mode === "--kernel") {
     if (presented.length !== 1 || presented[0].w !== 60 || presented[0].h !== 16)
         fail(`the resize did not repaint the whole screen: ${JSON.stringify(presented)}`);
 
-    // init prints /share/motd before the shell, in green, and puts the style
-    // back so the prompt under it is not green too. COLOR_GREEN is 2 and
-    // COLOR_WHITE 7, from the enum in src/kernel/screen.h.
+    // init prints /share/motd before the shell, in green, and the prompt sets
+    // its own colour rather than inheriting one. COLOR_GREEN is 2 and
+    // COLOR_WHITE|COLOR_BRIGHT is 15, from the enum in src/kernel/screen.h.
     s = descriptor(addr);
     const motd_y = rows(s).findIndex((line) => line.startsWith("braam — a small operating system"));
     if (motd_y < 0)
         fail(`the motd did not print at boot: ${JSON.stringify(rows(s))}`);
     if (cell(s, 0, motd_y).fg !== 2)
         fail(`the motd is colour ${cell(s, 0, motd_y).fg}, expected green`);
-    if (cell(s, 0, s.cursor_y).fg !== 7)
-        fail(`the prompt inherited the motd's colour: ${cell(s, 0, s.cursor_y).fg}`);
+    if (cell(s, 0, s.cursor_y).fg !== 15)
+        fail(`the prompt is colour ${cell(s, 0, s.cursor_y).fg}, expected bright white`);
 
     const type = (text) => {
         for (const ch of text)
@@ -377,6 +377,12 @@ if (mode === "--kernel") {
     s = submit("false", 1060);
     if (!rows(s).includes("[1] $"))
         fail(`a failing program left ${row(s, s.cursor_y)}, expected [1] $`);
+    // And it is red, while the $ beside it is bright white: two runs, two
+    // Sys::Style calls. COLOR_RED is 1.
+    if (cell(s, 0, s.cursor_y).fg !== 1)
+        fail(`the status is colour ${cell(s, 0, s.cursor_y).fg}, expected red`);
+    if (cell(s, 4, s.cursor_y).fg !== 15)
+        fail(`the $ after a status is colour ${cell(s, 4, s.cursor_y).fg}, expected bright white`);
 
     s = submit("nosuch", 1070);
     if (!rows(s).some((line) => line.startsWith("braam: nosuch: not found")))

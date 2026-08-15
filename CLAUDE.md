@@ -70,11 +70,15 @@ working directory of its own, inherited from its spawner. A descriptor named in 
 **And then the shell became a program.** `/bin/sh` is a binary init runs; `src/user/shell.cpp`,
 `edit.cpp`, `job.cpp` and `src/user/builtin/` are gone, and the same code lives in `src/sh/` over
 the syscall table. Two operations were added for it — `cursor` at 69, the scrolling screen's
-cursor, and `fg` at 84, which names what `^C` reaches — so the table is thirty-four and
-`PROC_ABI` is 4. The tty pump is now permanent and init spawns it (`src/user/console.h`),
-because something has to hold the keyboard while nothing is running and a process has no
-`keys()`. None of it touched the wasm ABI, and the only JavaScript that changed was splitting
-`proc.shutdown()` so it stops killing tier-2 processes.
+cursor, and `fg` at 84, which names what `^C` reaches. The tty pump is now permanent and init
+spawns it (`src/user/console.h`), because something has to hold the keyboard while nothing is
+running and a process has no `keys()`. None of it touched the wasm ABI, and the only JavaScript
+that changed was splitting `proc.shutdown()` so it stops killing tier-2 processes.
+
+**And the prompt got a colour.** `style` at 70 sets what the next `Write` paints with — sticky
+grid state, the colour a cell grid cannot carry in the bytes (§2.3) — so the table is thirty-five
+and `PROC_ABI` is 5. `/bin/sh` is the only caller: red `[N]`, bright white `$`, and the default
+back before what is typed.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is

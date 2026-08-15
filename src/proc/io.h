@@ -149,6 +149,11 @@ Task<Result<CursorAt>> cursor_get();
 
 Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on);
 
+// The colours the next write paints with — COLOR_* and ATTR_* of screen.h. The
+// grid is cells, so a colour is not in the bytes; and it is sticky, so a
+// program that colours something puts the default back after it.
+Task<Result<void>> style_set(u8 fg, u8 bg, u8 attrs);
+
 // What `df` reports (Concept.md §5.3). `known` is false when the host would
 // not say, which is not the same as a quota of zero.
 struct StorageInfo {

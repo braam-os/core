@@ -22,6 +22,14 @@ struct Line {
     LineEnd how = LineEnd::Enter;
 };
 
+// The prompt in two pieces, because it is two colours and a colour is a syscall
+// rather than an escape in the bytes (Concept.md §2.3). Both are the caller's
+// storage and must outlive the read_line that draws them.
+struct Prompt {
+    Str status; // the last command's failure, in red; empty when it succeeded
+    Str text;   // the prompt proper, in bright white
+};
+
 struct LineEditor {
     // The oldest entries are dropped past this.
     static constexpr usize HISTORY_MAX = 32;
@@ -33,14 +41,14 @@ struct LineEditor {
     // it is at a prompt and gives it back around anything it runs, so that a
     // program that wants raw keys can claim them in its turn — and so that ^C,
     // with nothing in front, arrives here as an ordinary key.
-    Task<Result<Line>> read_line(Str prompt);
+    Task<Result<Line>> read_line(Prompt prompt);
 
     usize history() const { return history_.size(); }
 
 private:
     Task<Result<void>> redraw();
     Task<Result<void>> place_cursor();
-    Task<Result<void>> anchor(Str prompt);
+    Task<Result<void>> anchor(Prompt prompt);
     bool set_text(Str utf8);
     bool set_text(const Vec<char32_t> &from);
     bool set_pending();

@@ -653,6 +653,17 @@ because a child is a scheduler job that runs as soon as the shell next parks and
 program claims the keys in its very first step; handing them over afterwards is a race the child
 loses.
 
+**A colour took one more: `style`.** The table is thirty-five, and `PROC_ABI` is 5. §2.3 says the
+terminal is a cell grid rather than a byte stream, so a colour cannot be written *in* the bytes —
+there is no escape sequence to reach for, by design — and a program that has no grid of its own
+had no way to name one at all. `style` is that way: two palette indices and the `ATTR_*` bits in
+the op word's argument, applying to what `write` paints next. It is sticky grid state, as it is
+for the kernel's own writers, so the convention is that whoever sets a colour puts the default
+back — and the prompt doing so is also what corrects a program that died mid-colour. It is
+refused while another process holds the alternate screen, for `cursor`'s reason: a program with
+the alternate screen paints cells and names their colours in them. `/bin/sh` is the caller, and
+`ScreenBlit` is why there is not a second one.
+
 All the rest are asynchronous, because the synchronous half is closed and stays closed. That costs a
 park and a step even for `wait` on a child that has already exited, which is the cost model of
 §4.4 arriving where it always does.

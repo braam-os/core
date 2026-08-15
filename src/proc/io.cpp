@@ -330,6 +330,14 @@ Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on)
     co_return co_await cursor(1, Str(reinterpret_cast<const char *>(head), sizeof(head)));
 }
 
+Task<Result<void>> style_set(u8 fg, u8 bg, u8 attrs)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Style, sys_style_pack(fg, bg, attrs));
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
 Task<Result<void>> sleep_for(u32 ms)
 {
     u8 head[4];

@@ -35,7 +35,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 4;
+constexpr u32 PROC_ABI       = 5;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -144,6 +144,11 @@ enum class Sys : u32 {
     Cursor, // arg bit 0 = set;  payload = u32 x, y, on
             //   data = u32 x, y, on, cols, rows
 
+    // The colours the next Write paints with. Sticky grid state, as it is for
+    // the kernel's own writers, and refused while another process holds the
+    // alternate screen — Cursor's rule, for Cursor's reason.
+    Style, // arg = fg | bg << 8 | attrs << 16 (sys_style_pack)
+
     // Processes. A program that supervises another one cannot be a shell
     // builtin — the builtins are the six things no syscall could serve — so
     // this is what makes `timeout` and `watch` writable at all.
@@ -230,6 +235,29 @@ inline u32 sys_op_arg(u32 op)
 inline u32 sys_op_fd(u32 op)
 {
     return sys_op_arg(op);
+}
+
+// Sys::Style's argument: two palette indices and the ATTR_* bits of screen.h,
+// which fit the op word's 24 with a byte to spare — so the operation carries no
+// payload at all and needs no staging.
+inline u32 sys_style_pack(u8 fg, u8 bg, u8 attrs)
+{
+    return u32(fg) | (u32(bg) << 8) | (u32(attrs) << 16);
+}
+
+inline u8 sys_style_fg(u32 arg)
+{
+    return u8(arg);
+}
+
+inline u8 sys_style_bg(u32 arg)
+{
+    return u8(arg >> 8);
+}
+
+inline u8 sys_style_attrs(u32 arg)
+{
+    return u8(arg >> 16);
 }
 
 // The three stdio descriptors are the stage's Stdio; anything above indexes
