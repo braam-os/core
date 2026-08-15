@@ -321,6 +321,37 @@ Three answers, in the order they are worth considering:
 
 **Done when** §4 says which, in the commit that implements it.
 
+**Done: init respawns.** §4 says so, in the paragraph after the fallback's. A shell that *died* —
+a trap, a step that failed, an instance that would not be made — is replaced by an ordinary `exec`
+of `/bin/sh`, so it lands at whatever tier the host can still give and the fallback's promise comes
+out true for the shell as it is for `wc`. A shell that *exited* is not replaced: `exit` still ends
+the session, and so does a status of 130, which is the kernel being disposed of rather than a shell
+to start again. The bound is three deaths in quick succession, and a shell that lived longer than a
+second starts the count again.
+
+An `i32` could not carry the distinction — `exit 132` is a program's word for what 132 is the
+kernel's word for — so `exec_process` gained a last defaulted `bool *died`, true on entry and false
+at the one return that reports a process ending on its own terms. Init's loop re-resolves the
+binary each pass (the image was moved into the instance) and clears the console foreground between
+shells, or `^C` at the next prompt would reach the dead shell's pids.
+
+One bug on the way, and it was the answer T7 would have got by default: **`dropWorkers()` never
+failed the terminated worker's in-flight step**, so a tier-3 process caught mid-step left the
+kernel parked for ever on a reply that was not coming. With the shell at tier 3 that is a frozen
+session with no message — worse than any of the three answers, and unchosen. `kill()`'s tail is now
+a shared helper both callers use. `dropWorkers` still does not set `workers` false: a host that can
+still make one gets the tier back on the next `exec`.
+
+Two cases in `test/run.mjs`, both at tier 2 since the shell does not move here, both written to
+keep meaning something after T8: a held step then `dropWorkers()` — which without the fix asserts a
+blank row where `[1] home $` belongs — and killing the shell's instance from the host, which
+asserts the `braam: the shell died` line, a fresh prompt and a command on the new shell. It kills
+pid 0, since init runs the shell with a default-constructed `Executable`, and asserts `live()`
+either side so it cannot quietly stop testing anything.
+
+**What T8 can now rely on:** losing the tier under a running `/bin/sh` costs a shell rather than
+the session, whichever way the worker goes.
+
 ## T8. Flip the shell
 
 After T7 and not before.

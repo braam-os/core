@@ -1799,8 +1799,13 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
     co_return {};
 }
 
-Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd)
+Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died)
 {
+    // True until the one return that says otherwise, so a path added later
+    // reports a death rather than being forgotten.
+    if (died)
+        *died = true;
+
     Proc *p = heap_new<Proc>(exe.pid, io);
     if (!p || !proc_add(p)) {
         heap_delete(p);
@@ -1883,8 +1888,11 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd)
         if (s.is_err())
             co_return s.error() == Error::Cancelled ? 130 : 1;
 
-        if (s.value() == ProcStep::Exited)
+        if (s.value() == ProcStep::Exited) {
+            if (died)
+                *died = false;
             co_return p->exit;
+        }
         if (s.value() == ProcStep::Trapped) {
             if (Task<void> t2 = say(io.err, exe.path.str(), "crashed"))
                 co_await t2;

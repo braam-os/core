@@ -106,6 +106,15 @@ the documents the change made false. What did move is the test driver's model of
 spawning program binds its own worker before its child's, and the two cases that give the tier up
 run last so that everything before them runs at the tier it ships at.
 
+**And init started replacing the shell.** doc/TODO.md T7, the design question T8 waits on: a
+tier-3 process dies with its worker and there is no falling a running one back, so once `/bin/sh`
+is one of them a lost worker would be the session rather than a command. `init_task` is a loop
+now — a shell that **died** is replaced by an ordinary `exec`, which lands at whatever tier is
+left; one that **exited** is not, so `exit` still ends the session. `exec_process` grew a
+`bool *died` because an `i32` cannot tell `exit 132` from a trap. It also found a bug that would
+have decided T7 by itself: `dropWorkers()` terminated a worker without failing the step in it,
+which is a kernel parked for ever rather than a process that died.
+
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
 stable: amend it only when a design decision changes, and then in the same commit that changes
@@ -390,8 +399,7 @@ between the two isolated tiers from binary metadata, so userland does not notice
 - **Separate instance, shared worker** (M8) — address-space, capability, descriptor and
   memory-cap isolation. A binary in `/bin` carrying a `braam` custom section; `exec` reads
   the tier out of it. `/bin/sh` is the only binary that asks for it: `set(BRAAM_BIN_TIER_sh 2)`
-  in `src/cmd/CMakeLists.txt`, because a prompt pays the tier several times a keystroke and
-  nothing kills the shell.
+  in `src/cmd/CMakeLists.txt`, because a prompt pays the tier several times a keystroke.
 - **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
   preempted: `worker.terminate()`. **This is the default** — `braam_add_program` stamps tier 3
   unless a program asks for 2, so every program but the shell has one — and it runs at tier 2
@@ -399,6 +407,16 @@ between the two isolated tiers from binary metadata, so userland does not notice
   rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and a tier-3 syscall
   costs two `postMessage` hops rather than a call: 34–45 µs measured, which doc/TODO.md T1 is
   the argument for paying everywhere and T5 re-measured unmoved after the flip.
+
+**A process that loses its worker dies with it, and init replaces the shell** (doc/TODO.md T7).
+§4's tier-2 fallback is decided before a process starts, so it covers a host that never had
+workers and not one whose workers go mid-session — there is no falling a *running* process back,
+since the instance went with the worker. So init starts another `/bin/sh` when its shell **died**
+(a trap, a step that failed, an instance that would not be made) and does not when it **exited**:
+`exit` still ends the session. `exec_process`'s `bool *died` is what says which, since `exit 132`
+and a trap are the same `i32`. Bounded at three deaths in quick succession. Whoever takes a worker
+away — `kill()` or `dropWorkers()` — must fail the in-flight step, or the kernel is parked for
+ever on a reply that is not coming.
 
 The kernel↔process ABI is Concept.md §4.3 and `src/kernel/sysabi.h`, and both ends include the
 header so neither can drift alone. Three rules about it are load bearing:
@@ -508,6 +526,11 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
 - **No `/proc/jobs`.** The job table is the shell process's own memory, and no syscall shows one
   process another's. The stages are still tasks, so `/proc/<pid>` lists them — which is how the
   shell notices a background job has finished.
+- **A replaced shell is a fresh one, not the one that died.** Init respawning `/bin/sh` (T7) keeps
+  the session, not the state: the new shell starts in the kernel's `/home` with an empty job table,
+  and whatever the dead one had backgrounded went with it, since a process's children are cancelled
+  by its destructor. Carrying any of it over means a shell that can be handed its predecessor's
+  descriptors, which nothing in §4.3 offers.
 - **A keystroke at the prompt costs about six ticks**: `key_read`, then a repaint of four
   syscalls, each a park and a step. It was one channel receive when the editor was kernel code.
   Nothing about it is wrong; it is what §4.4's cost model looks like on the interactive path.

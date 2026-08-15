@@ -42,7 +42,12 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str());
 //
 // `cwd` is the directory it starts in, inherited from whoever spawned it. Empty
 // means the shell's, which is what a command typed at the prompt gets.
-Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd = Str());
+//
+// `died` is false only when the process ended on its own terms, and true on
+// every other way out — a trap, a step that failed, an instance that would not
+// be made. A status cannot say which: `exit 132` is a program's word for what
+// 132 is the kernel's word for. Init is what needs the difference (boot.cpp).
+Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd = Str(), bool *died = nullptr);
 
 // The working directory of a live process, for /proc to publish. False when the
 // pid is not one, which is every scheduler job that is not a program.

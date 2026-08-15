@@ -1,5 +1,6 @@
 #include "boot.h"
 
+#include "console.h"
 #include "exec.h"
 #include "fs/bundlefs.h"
 #include "fs/hostfs.h"
@@ -9,6 +10,7 @@
 #include "io.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
+#include "kernel/sched.h"
 #include "kernel/screen.h"
 #include "kernel/traits.h"
 #include "procfs.h"
@@ -16,8 +18,16 @@
 
 namespace {
 
+// Deaths in quick succession before init stops replacing the shell, and how
+// long one has to last to count as having got going.
+constexpr u32 RESPAWN_TRIES    = 3;
+constexpr f64 RESPAWN_FLOOR_MS = 1000;
+
+// On a row of its own: a shell that died left its prompt on this one.
 void say(Str s)
 {
+    if (screen().cursor_x != 0)
+        screen_newline();
     screen_write(s);
     screen_newline();
 }
@@ -200,35 +210,76 @@ Task<i32> init_task()
     if (Task<void> t = boot_filesystem())
         co_await t;
 
-    Executable exe;
-    Result<void> found = Err(Error::NoMemory);
-    if (Task<Result<void>> t = exec_resolve(SHELL, exe))
-        found = co_await t;
-    if (found.is_err()) {
-        // Said on the grid rather than through a Stream, because there is
-        // nobody left to print it: a bundle that will not give up /bin/sh is a
-        // system with no prompt, and the reason has to reach the screen.
-        no_shell(found.error());
-        co_return 1;
+    bool greeted = false;
+    u32 tries    = 0;
+    i32 status   = 1;
+
+    for (;;) {
+        // Resolved every time round: the image was moved into the instance, so
+        // the Executable cannot be reused.
+        Executable exe;
+        Result<void> found = Err(Error::NoMemory);
+        if (Task<Result<void>> t = exec_resolve(SHELL, exe))
+            found = co_await t;
+        if (found.is_err()) {
+            // Said on the grid rather than through a Stream, because there is
+            // nobody left to print it: a bundle that will not give up /bin/sh
+            // is a system with no prompt, and the reason has to reach the
+            // screen.
+            no_shell(found.error());
+            co_return 1;
+        }
+
+        // Only now, with a shell that is going to run: a system with no prompt
+        // coming should show why, not a greeting above a dead terminal. Once,
+        // however many shells follow.
+        if (!greeted) {
+            greeted = true;
+            if (Task<void> t = show_motd())
+                co_await t;
+        }
+
+        f64 started = sched_now();
+        bool died   = true;
+        Args args{ Span<const Str>(&SHELL, 1) };
+
+        // Scoped, so this shell's record — removed by a destructor in there —
+        // is gone before the next one, which answers to the same pid.
+        {
+            Task<i32> t = exec_process(exe, args, stdio_console(), Str(), &died);
+            if (!t) {
+                say("braam: /bin/sh would not start");
+                co_return 1;
+            }
+            status = co_await t;
+        }
+
+        // A shell that exited is the end of the session; so is a cancelled one,
+        // which is the kernel going away rather than a shell to replace.
+        if (!died || status == 130)
+            break;
+
+        // A shell that died is replaced, at whatever tier is left to it
+        // (Concept.md §4) — but not for ever, and a shell that lived a while is
+        // not a crash loop, so its death starts the count again.
+        tries = sched_now() - started >= RESPAWN_FLOOR_MS ? 1 : tries + 1;
+        if (tries >= RESPAWN_TRIES) {
+            say("braam: the shell will not stay up — reload to start again");
+            co_return status;
+        }
+
+        // The foreground the dead shell armed, or ^C at the next prompt reaches
+        // pids that are gone (console.h). The keyboard and screen claims need
+        // nothing: ~Proc drops both.
+        console_fg_clear();
+
+        Buf<96> line;
+        line.put("braam: the shell died (status ").put(status).put(") — starting another");
+        say(line.str());
     }
 
-    // Only now, with a shell that is going to run: a system with no prompt
-    // coming should show why, not a greeting above a dead terminal.
-    if (Task<void> t = show_motd())
-        co_await t;
-
-    Args args{ Span<const Str>(&SHELL, 1) };
-    Task<i32> t = exec_process(exe, args, stdio_console());
-    if (!t) {
-        say("braam: /bin/sh would not start");
-        co_return 1;
-    }
-    i32 status = co_await t;
-
-    // init spawns the shell and nothing else, so there is no getty to start
-    // another. Say so rather than leave a prompt that never comes back, and
-    // carry the status: a shell that died on its first step and one the user
-    // typed `exit` at look the same from here otherwise.
+    // The user's own `exit`, and there is no getty to start another. Say so
+    // rather than leave a prompt that never comes back, and carry the status.
     Buf<96> line;
     line.put("braam: the shell exited (status ").put(status).put(") — reload to start again");
     say(line.str());

@@ -7,6 +7,102 @@ of the two needs amending.
 
 ---
 
+## Init replaces a shell that died
+
+[doc/TODO.md](TODO.md) T7, and the design question T8 is waiting on: what happens to `/bin/sh`
+when the workers go. **Init starts another shell.** Concept.md §4 says so now, and this is why.
+
+The question exists because §4's fallback is decided *before* a process starts. `exec` asks the
+host for tier 3, the host says it has no worker, and the binary runs at tier 2 — one isolation
+weaker, and userland does not notice. That covers a browser without nested workers and a
+`procworker.js` that will not load at boot. It does not cover the tier going away *underneath* a
+process: the instance is inside the worker, the worker is terminated, and there is no state to
+carry back to tier 2. Every tier-3 process dies there. Today that costs a command. Once `/bin/sh`
+is a tier-3 binary it costs the session, because init ran the shell once and printed *"reload to
+start again"* when it ended.
+
+### Why the honest answer and not the cheap one
+
+T7 listed three. **Exempting `sh` from `dropWorkers`** is four lines, and it puts the string
+`/bin/sh` into `web/proc.js` — a layer that has never known a program's name, and whose whole
+discipline is that a pid is bound into a closure rather than a name being checked. It also answers
+the wrong half of the question: the case that actually happens is the shell's *own* worker
+breaking, which an exemption does nothing about. **Letting the session end** is defensible and free,
+but it makes §4's fallback promise conditional on which program is asking, and the promise is the
+reason the fallback is worth having.
+
+So init notices. It is the only place that can: a shell is a process like any other, and the thing
+that knows its child ended is its parent.
+
+### Died, not exited — and why a status could not say which
+
+`exec_process` returned an `i32` and nothing else, and an `i32` cannot carry the distinction. 132
+is the kernel's word for a trap and `exit 132` is a program's word for whatever it likes; a shell
+that a user typed `exit 130` at and one that was cancelled are the same number. So the function
+gained a last defaulted out-parameter, `bool *died`, set true on entry and false at the one return
+that reports a process ending on its own terms. Set that way round deliberately: a path added later
+reports a death by default, rather than being silently forgotten in an enumeration.
+
+The rule init applies is then a sentence rather than a table. **A shell that exited is final; a
+shell that died is replaced.** `exit` at the prompt ends the session exactly as it did — there is
+no login and no getty, and a prompt reappearing after `exit` reads as the command having failed.
+A shell whose status is 130 is not replaced either: that is the kernel being disposed of, and a
+cancelled init would otherwise spend its whole allowance restarting shells into a kernel that is
+going away.
+
+The replacement is an ordinary `exec` of `/bin/sh`, which is the load-bearing part. It asks for
+whatever tier the binary claims and gets whatever the host can still give — after a worker that
+would not load, `workers` is already false and the new shell is a tier-2 one. Nothing negotiates,
+nothing is exempt, and §4's promise comes out true for the shell for the same reason it is true
+for `wc`.
+
+### Bounded, and why the bound resets
+
+A shell that crashes on its own first step would otherwise announce it for ever. Three deaths in
+quick succession and init says the shell will not stay up and stops. The bound counts *consecutive
+fast* deaths, though: a shell that lived longer than a second starts the count again, because a
+session that has been up all day should not be one crash away from being unrestartable. Both
+numbers are constants at the top of `boot.cpp` and neither is precious.
+
+Two smaller things go with the loop. The `Executable` is resolved on every pass — its image was
+moved into the instance, so it cannot be reused, and a `/bin` repaired since the last shell died is
+picked up for nothing. And `console_fg_clear()` runs between shells: a shell that died with a
+pipeline armed leaves the console pointing at pids that are gone, and `^C` at the next prompt would
+cancel that set instead of abandoning the line being typed. The keyboard and screen claims need no
+such help — `~Proc` drops both, and a claim clears its route only if it is still the holder, which
+is exactly the rule that makes a dead claimant safe.
+
+`say()` now starts on a fresh row when the cursor is not at the margin. At boot it always was; a
+shell that died left its prompt on that row, and what init has to say about it is not a
+continuation of that prompt.
+
+### The bug this found, which would have been the default answer
+
+`dropWorkers()` terminated the worker holding a process and deleted the entry, and never touched
+`p.pending` — the step the kernel was waiting on. `kill()` has always done both, and CLAUDE.md
+states the rule: a terminated worker's in-flight step must be failed by whoever killed it. So the
+*actual* status quo for a tier-3 shell was not "the session ends" but "the session freezes" — no
+message, no prompt, the kernel parked for ever on a reply from a worker that no longer exists.
+That is the worst of T7's three answers, and nothing had chosen it.
+
+The fix is one shared helper called by both, so the two ways a worker is taken away cannot drift
+again. `dropWorkers` keeps its meaning otherwise: it lets go of what the host holds and does not
+set `workers` false, so a host that can still make workers gets tier 3 back on the next `exec`.
+Init's replacement shell converges either way.
+
+`test/run.mjs` has a case for it that fails loudly without the fix — a held step, then
+`dropWorkers()`, then the prompt: unfixed, the assertion reports a blank row where `[1] home $`
+should be, which is the freeze itself. The respawn has a case beside it: kill the shell's instance
+from the host, press a key so it steps and learns, and assert the `braam: the shell died` line, a
+fresh prompt, and a command running on the new shell. It kills pid 0 — init runs the shell with a
+default-constructed `Executable`, so that is its pid — and asserts `live()` before and after, so
+the case fails rather than quietly testing nothing if that ever stops being true.
+
+Both cases run at tier 2, since T7 does not move the shell. They will mean more after T8 and are
+written to keep working.
+
+---
+
 ## The re-measurement, and why T6 is not being written
 
 [doc/TODO.md](TODO.md) T5. T3 put thirty-one programs in workers of their own on the strength of

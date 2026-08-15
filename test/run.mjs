@@ -1534,6 +1534,30 @@ if (mode === "--kernel") {
     if (!rows(s).includes("back"))
         fail(`the resident shell did not come back: ${JSON.stringify(rows(s))}`);
 
+    // A worker taken away with a step still in it. `dropWorkers` is a host
+    // letting go of the whole tier where `broke()` lets go of one link, and
+    // either way the process has to be *failed* by whoever killed it: an
+    // unanswered request is a prompt that never comes back rather than a
+    // command that died.
+    s = submit("clear", 9075);
+    net.hold();
+    type("spin");
+    press(KEY.ENTER);
+    if (run(9075.1) !== -1)
+        fail("a spinning process left the kernel with work to do");
+    if (others() !== 1)
+        fail("spin did not reach an instance");
+
+    net.proc.dropWorkers();
+    if (run(9075.2) !== -1)
+        fail("dropping the workers left the kernel with work to do");
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== prompt(1))
+        fail(`a dropped worker left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived the workers holding them`);
+    net.release();
+
     // The two ways the tier is lost, last of all: both give it up for the rest
     // of the run, and with every program a tier-3 binary that would leave
     // everything after them running one isolation weaker than it ships.
@@ -1579,6 +1603,28 @@ if (mode === "--kernel") {
         fail("the fallback still bound a worker");
     if (row(s, s.cursor_y) !== prompt())
         fail(`the fallback exited ${row(s, s.cursor_y)}, expected a bare prompt`);
+
+    // The shell's own instance going away, which is what a lost worker will do
+    // to /bin/sh once it is a tier-3 binary: init notices its child *died*
+    // rather than exited and starts another (Concept.md §4). Killed from the
+    // host, since `kill` refuses anything that is not a child of the caller.
+    s = submit("clear", 9090);
+    if (net.proc.live() !== 1)
+        fail(`${net.proc.live()} processes at a bare prompt, expected the shell alone`);
+    net.proc.kill(0); // init runs the shell with a default Executable, so pid 0 is it
+    if (net.proc.live() !== 0)
+        fail("pid 0 is not the shell, so the case below would assert nothing");
+
+    press(KEY.ENTER); // the shell steps to answer it, and learns it is gone
+    run(9091);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
+        fail(`a shell whose instance went away said ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`the replacement shell left ${row(s, s.cursor_y)}, expected a bare prompt`);
+    s = submit("echo alive", 9092);
+    if (!rows(s).includes("alive"))
+        fail(`the replacement shell ran nothing: ${JSON.stringify(rows(s))}`);
 
     // exit ends the shell, and nothing runs after it. Last, for that reason.
     s = submit("clear", 9097);

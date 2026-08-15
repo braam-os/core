@@ -426,11 +426,28 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         }
     }
 
+    // Terminating the worker a process is in, and answering for it. The reply
+    // is not optional: an abandoned record is reaped by wake() on its token,
+    // so a request nobody answers is leaked and its caller parked for ever.
+    // Both ways a worker is taken away come through here.
+    function terminate(p) {
+        p.link.pid = 0;
+        stat.terminated++;
+        p.link.terminate();
+
+        if (p.pending) {
+            const { r, done } = p.pending;
+            p.pending = null;
+            r.fail(E.NOTFOUND);
+            done();
+        }
+    }
+
     // Told, not asked, and immediate. At tier 2 dropping the entry is all it
-    // takes; at tier 3 it is terminate(), which is the whole point of the tier
-    // — a process in a loop between syscalls has no other way out. A worker
-    // that had already finished its process is pooled instead, since `exec`
-    // kills every process it spawned, including the ones that exited.
+    // takes; at tier 3 the worker goes, which is the whole point of the tier —
+    // a process in a loop between syscalls has no other way out. A worker that
+    // had already finished its process is pooled instead, since `exec` kills
+    // every process it spawned, including the ones that exited.
     function kill(pid) {
         const p = procs.get(pid);
         if (!p)
@@ -439,24 +456,10 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         if (!p.link)
             return;
 
-        if (p.done && !p.pending) {
+        if (p.done && !p.pending)
             pool(p.link);
-            return;
-        }
-
-        p.link.pid = 0;
-        stat.terminated++;
-        p.link.terminate();
-
-        // The request the terminated worker will never answer. Nothing else
-        // frees it: an abandoned record is reaped by wake() on its token, and
-        // that only happens if somebody answers.
-        if (p.pending) {
-            const { r, done } = p.pending;
-            p.pending = null;
-            r.fail(E.NOTFOUND);
-            done();
-        }
+        else
+            terminate(p);
     }
 
     // Letting go of the whole tier, for a host that is disposing of the kernel.
@@ -468,7 +471,9 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     // Letting go of the workers alone: the pool, and every process one is
     // holding. A tier-2 process is untouched, because there is no worker
     // between it and the kernel — which is the whole of §4's fallback, and is
-    // why this is not `shutdown`. The shell is one of those, and permanent.
+    // why this is not `shutdown`. A process losing its worker here is killed by
+    // it, step and all; init replaces a shell that died this way (Concept.md
+    // §4).
     function dropWorkers() {
         for (const link of idle) {
             stat.terminated++;
@@ -477,9 +482,8 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         idle.length = 0;
         for (const [pid, p] of procs)
             if (p.link) {
-                stat.terminated++;
-                p.link.terminate();
                 procs.delete(pid);
+                terminate(p);
             }
     }
 

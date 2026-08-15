@@ -517,6 +517,24 @@ binary, and the binary says which tier it wants. One asking for tier 3 still run
 the host has no worker to put it in — a *fallback*, covering a browser without nested workers
 and a `procworker.js` that will not load.
 
+**A host that loses its workers takes every tier-3 process with it, and init replaces the shell.**
+The fallback above is decided before a process starts, so it covers a host that never had workers
+and not one whose workers go mid-session: a `procworker.js` that will not load, or a host letting
+go of the tier. Every process in a worker dies there, and once `/bin/sh` is one of them that would
+be the session rather than a command, because nothing re-execs init. So **init starts another
+shell when its shell *died* — a trap, a step that failed, an instance that would not be made —
+and does not when it *exited***, which is the user's own `exit` and the end of the session. The
+replacement is an ordinary `exec` of `/bin/sh`, so it lands at whatever tier is still available:
+after a worker that would not load, tier 2. That is what keeps this section's promise — that
+userland does not notice which tier it got — true of the shell as it is of everything else, and it
+is what makes tier 3's kill switch something `/bin/sh` can survive rather than something that
+ends the session.
+
+There is no falling a *running* process back to tier 2, and there could not be: the instance is
+gone with the worker and there is no state to carry over. Replacing the shell is the whole of the
+answer, and it is bounded — three deaths in quick succession and init says so and stops, since a
+shell that cannot get as far as a prompt would otherwise say it for ever.
+
 **Tier 3 is what a program gets unless it asks for less**, which is a decision taken once the
 tier had been measured: 34–44 µs a syscall round trip against §4.4's estimated 0.1 ms, so a
 command that is not interactive pays a few hundred microseconds for a kill switch it cannot be

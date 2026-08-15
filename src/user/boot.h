@@ -8,8 +8,8 @@
 #include "kernel/task.h"
 #include "kernel/types.h"
 
-// The one program init runs. There is no getty and no /etc/inittab: when it
-// returns, the terminal is done.
+// The one program init runs. There is no getty and no /etc/inittab: init starts
+// another when this one *dies*, and the terminal is done when it exits.
 constexpr Str SHELL = "/bin/sh";
 
 // Printed on the grid before that first prompt, and absent is not an error: a
