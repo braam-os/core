@@ -353,6 +353,25 @@ end of input, into one console channel that is the stdin of whatever is in front
 that channel to a child simply by letting go of the keyboard, which is why `cat` with no argument
 reads what is typed.
 
+**Selecting and copying are the page's business, and the kernel is told nothing.** A drag over
+the canvas never reaches wasm: `web/braam.js` turns it into device pixels, `web/render.js` turns
+those into cells and reverses them exactly as it reverses the cursor, and the text it reads back
+out of the grid crosses to the page when the drag settles. There is no mouse event in the ABI, no
+selection in the `Screen` descriptor and nothing a program can ask — because a selection is a
+*view* over the grid rather than input, and the grid is already shared (§2.3). `Ctrl+C` — `Cmd+C`
+on a Mac — copies when there is a selection and is `^C` when there is not, since a terminal with
+no second copy key must overload it; copying clears the selection, so the next one interrupts.
+The clipboard write happens inside the keydown handler because that keystroke is the transient
+activation permitting it (§A.2), which is why the page holds the text rather than asking the
+worker for it once the chord has arrived. Any other keystroke, and any resize, drops the
+selection: the cells it named mean something else the moment the grid moves under it.
+
+**Select all is `Cmd+A`, or `Ctrl+Shift+A` where there is no `Cmd`, and is deliberately not
+`Ctrl+A`** — which is the line editor's beginning-of-line and has no "is there a selection?" to
+tell the two apart the way copy does. It selects the grid, because there is no scrollback for it
+to mean anything else. Trailing blank rows never travel with a selection either way: the grid is
+a fixed rectangle and the rows below the last line of output are padding, not content.
+
 ### 3.6 Kernel objects
 
 - **`Channel<T>`** — an async MPSC queue with bounded capacity: `co_await ch.recv()` and

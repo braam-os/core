@@ -7,6 +7,7 @@ import { basename } from "node:path";
 
 import { FakeStore, makeFakeImports } from "./fakefs.mjs";
 import { FakeNet, makeFakeSvc } from "./fakesvc.mjs";
+import { Renderer } from "../web/render.js";
 
 function usage() {
     console.error("usage: run.mjs --kernel <wasm> [<bundle.bin> [<proc.wasm>...]] |" +
@@ -275,6 +276,73 @@ if (mode === "--kernel") {
         fail(`echo did not print: ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== "$")
         fail(`the prompt after a success is ${row(s, s.cursor_y)}, expected $`);
+
+    // The renderer's selection, read off the real grid rather than a mock of
+    // one. A drag names cells in device pixels and the text it gives back is
+    // what the page puts on the clipboard; none of it reaches the kernel
+    // (Concept.md §3.5), so this is the only check web/render.js gets.
+    {
+        let ground = []; // the background each cell of a painted row got
+        const ctx = {
+            measureText: (t) => ({
+                width: 8 * [...t].length,
+                fontBoundingBoxAscent: 12,
+                fontBoundingBoxDescent: 4,
+            }),
+            fillRect: () => ground.push(ctx.fillStyle),
+            fillText: () => {},
+        };
+        const r = new Renderer({ getContext: () => ctx }, mem, {});
+        r.attach(addr);
+
+        const y = rows(s).indexOf("hello");
+        const paint = () => {
+            ground = [];
+            r.present(0, y, s.cols, 1);
+            return ground;
+        };
+        const plain = paint();
+
+        r.select("start", 0, y * r.cellH);
+        r.select("move", 4 * r.cellW, y * r.cellH);
+        r.select("end", 4 * r.cellW, y * r.cellH);
+        if (r.text() !== "hello")
+            fail(`the renderer selected ${JSON.stringify(r.text())}, expected "hello"`);
+
+        // And the five cells it named, and no others, are painted reversed.
+        const swapped = paint().reduce((n, bg, i) => n + (bg !== plain[i] ? 1 : 0), 0);
+        if (swapped !== 5)
+            fail(`the selection reversed ${swapped} cells, expected 5`);
+
+        // Dragging the other way names the same cells: the anchor and the head
+        // are put in reading order, not in the order they were made.
+        r.select("start", 4 * r.cellW, y * r.cellH);
+        r.select("end", 0, y * r.cellH);
+        if (r.text() !== "hello")
+            fail(`a backwards drag selected ${JSON.stringify(r.text())}`);
+
+        // A drag off the edges clamps into the grid, and select-all names the
+        // same cells without a drag at all. Neither hands back the blank rows
+        // below the last line of output, and neither keeps a trailing blank.
+        const screen = rows(s).join("\n").replace(/\n+$/, "");
+        r.select("start", -99, -99);
+        r.select("end", 1e6, 1e6);
+        if (r.text() !== screen)
+            fail(`a full-screen drag gave ${JSON.stringify(r.text())}`);
+        if (r.text().endsWith("\n") || r.text().includes(" \n"))
+            fail("a full-screen drag kept blanks the screen only pads with");
+
+        r.clear();
+        r.all();
+        if (r.text() !== screen)
+            fail(`select-all gave ${JSON.stringify(r.text())}`);
+
+        // A click is not a selection: it clears, so ^C stays an interrupt.
+        r.select("start", 8, 8);
+        r.select("end", 9, 9);
+        if (r.text() !== "" || r.clear())
+            fail("a click left a selection behind");
+    }
 
     submit("clear", 1045); // the programs need more than the whole grid
     addr = instance.exports.resize(100, 48);

@@ -130,9 +130,96 @@ export function mount(options = {}) {
     }
     watchRatio();
 
+    // The mouse selects, and nothing about it reaches the kernel: the page
+    // names cells in device pixels, the renderer highlights them and reads them
+    // back as text (Concept.md §3.5). It costs no keystroke and no syscall.
+    let selection = "";
+    let dragging = null; // the pointer id of the drag in progress
+
+    function device(event) {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        return {
+            x: Math.round((event.clientX - rect.left) * dpr),
+            y: Math.round((event.clientY - rect.top) * dpr),
+        };
+    }
+
+    function drag(phase, event) {
+        const { x, y } = device(event);
+        worker.postMessage({ kind: "select", phase, x, y });
+    }
+
+    function onPointerDown(event) {
+        if (event.button !== 0)
+            return;
+        // A click has to focus, or the copy chord below would go to whatever
+        // the page focused last.
+        canvas.focus();
+        dragging = event.pointerId;
+        canvas.setPointerCapture(event.pointerId);
+        drag("start", event);
+    }
+
+    function onPointerMove(event) {
+        if (dragging === event.pointerId)
+            drag("move", event);
+    }
+
+    function onPointerUp(event) {
+        if (dragging !== event.pointerId)
+            return;
+        dragging = null;
+        drag("end", event);
+    }
+
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerUp);
+
+    function copy() {
+        const text = selection;
+        selection = ""; // ^C interrupts again from here, without waiting for a reply
+        worker.postMessage({ kind: "deselect" });
+        if (!navigator.clipboard) {
+            onError("braam: this origin has no clipboard");
+            return;
+        }
+        // Inside the keydown on purpose: the keystroke is the transient
+        // activation that permits the write (Concept.md §A.2). The page's own
+        // copy of the text is what makes that possible — asking the worker for
+        // it would answer a turn too late.
+        navigator.clipboard.writeText(text)
+            .catch((e) => onError(`braam: copy refused: ${e.message}`));
+    }
+
+    const letter = (event, c) =>
+        !event.altKey && (event.key === c || event.key === c.toUpperCase());
+
     // Scoped to the canvas rather than the window: an embedded terminal shares
     // its page, and two of them must not both read the same keystroke.
     function onKeyDown(event) {
+        // Ctrl+C — Cmd+C on a Mac — copies when there is a selection, and is
+        // ^C when there is not. A terminal with no second copy key has to
+        // overload it, and copying clears the selection, so the next one
+        // interrupts. Every other key just drops the selection, in the worker.
+        if (selection && (event.ctrlKey || event.metaKey) && letter(event, "c")) {
+            event.preventDefault(); // or the browser copies its empty selection over ours
+            copy();
+            return;
+        }
+
+        // Select all is the platform's chord and not Ctrl+A, which is the line
+        // editor's beginning-of-line and cannot be overloaded: there is no
+        // "there is a selection" to tell the two apart the way there is for
+        // copy. A browser that claims Ctrl+Shift+A for itself keeps it.
+        if ((event.metaKey || (event.ctrlKey && event.shiftKey)) && letter(event, "a")) {
+            event.preventDefault();
+            worker.postMessage({ kind: "selectall" });
+            return;
+        }
+
         const key = normalise(event);
         if (consumes(event, key))
             event.preventDefault();
@@ -238,6 +325,10 @@ export function mount(options = {}) {
     }
 
     worker.onmessage = ({ data }) => {
+        if (data.kind === "selection") {
+            selection = data.text;
+            return;
+        }
         if (data.kind === "svc") {
             service(data)
                 .then((value) => worker.postMessage({ kind: "svc-reply", id: data.id, value }))
@@ -265,12 +356,21 @@ export function mount(options = {}) {
             canvas.focus();
         },
 
+        // What the mouse has marked, which is what the copy chord writes.
+        selection() {
+            return selection;
+        },
+
         // Everything this page attached, in one place: a host that swaps views
         // must be able to let go of a terminal completely.
         dispose() {
             live = false;
             observer.disconnect();
             canvas.removeEventListener("keydown", onKeyDown);
+            canvas.removeEventListener("pointerdown", onPointerDown);
+            canvas.removeEventListener("pointermove", onPointerMove);
+            canvas.removeEventListener("pointerup", onPointerUp);
+            canvas.removeEventListener("pointercancel", onPointerUp);
             removeEventListener("paste", onPaste);
             if (ownPicker && picker.parentNode)
                 picker.parentNode.removeChild(picker);

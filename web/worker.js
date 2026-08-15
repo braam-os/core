@@ -135,11 +135,20 @@ function attach(canvas) {
     renderer = new Renderer(canvas, mem, options);
 }
 
+// A mouse selection is the page's gesture and the renderer's highlight, and the
+// kernel is told nothing about either (Concept.md §3.5). The text crosses back
+// when it settles, because only the page can reach the clipboard.
+function deselect() {
+    if (renderer && renderer.clear())
+        self.postMessage({ kind: "selection", text: "" });
+}
+
 // The worker owns the font, so it owns the geometry: the page reports a box in
 // device pixels and reads back whatever the kernel accepted.
 function fit({ width, height, dpr }) {
     if (!renderer)
         return;
+    deselect();
     const { cols, rows } = renderer.fit(width, height, dpr);
     const info = self.kernel.resize(cols, rows);
     if (info === 0) {
@@ -225,8 +234,25 @@ self.onmessage = ({ data }) => {
         pump();
         break;
     case "key":
+        deselect();
         self.kernel.key(data.code >>> 0, data.mods >>> 0);
         pump();
+        break;
+    case "select":
+        if (renderer) {
+            renderer.select(data.phase, data.x, data.y);
+            if (data.phase === "end")
+                self.postMessage({ kind: "selection", text: renderer.text() });
+        }
+        break;
+    case "selectall":
+        if (renderer) {
+            renderer.all();
+            self.postMessage({ kind: "selection", text: renderer.text() });
+        }
+        break;
+    case "deselect":
+        deselect();
         break;
     case "wake":
         self.kernel.wake(data.token >>> 0, data.ptr >>> 0, data.len >>> 0);

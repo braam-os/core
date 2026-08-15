@@ -53,6 +53,7 @@ export class Renderer {
         this.cellW = 8;
         this.cellH = 16;
         this.baseline = 12;
+        this.sel = null; // {ar, ac, br, bc}: the anchor and the head, in cells
         this.measure();
     }
 
@@ -66,6 +67,7 @@ export class Renderer {
     // rather than on the main thread, keeps the font and the geometry together.
     fit(width, height, dpr) {
         this.dpr = dpr;
+        this.sel = null; // the cells it named are about to mean something else
         this.canvas.width = Math.max(1, Math.floor(width));
         this.canvas.height = Math.max(1, Math.floor(height));
         this.fontPx = Math.max(8, Math.round(this.fontSize * dpr));
@@ -129,23 +131,28 @@ export class Renderer {
         ctx.font = `${this.fontPx}px ${this.fontFamily}`;
         ctx.textBaseline = "alphabetic";
 
+        const sel = this.span();
+
         for (let row = y; row < y1; row++) {
+            const b = this.bounds(sel, row, cols);
             for (let col = x; col < x1; col++) {
                 const c = cells + (row * cols + col) * CELL_U32;
                 const under = cursor && col === cx && row === cy;
-                this.cell(col, row, u32[c], u32[c + 1], under);
+                const marked = b !== null && col >= b[0] && col <= b[1];
+                this.cell(col, row, u32[c], u32[c + 1], under !== marked);
             }
         }
     }
 
-    cell(col, row, ch, attr, under) {
+    cell(col, row, ch, attr, flip) {
         let fg = attr & 0xff;
         let bg = (attr >>> 8) & 0xff;
         const attrs = (attr >>> 16) & 0xff;
 
-        // The cursor is drawn, never stored: it reverses the cell it sits on.
+        // The cursor and the selection are drawn, never stored: each reverses
+        // the cells it covers, so a cursor inside a selection is a hole in it.
         const reverse = (attrs & ATTR_REVERSE) !== 0;
-        if (reverse !== under)
+        if (reverse !== flip)
             [fg, bg] = [bg, fg];
 
         const px = col * this.cellW;
@@ -173,5 +180,135 @@ export class Renderer {
         const u32 = this.u32();
         const base = this.info >>> 2;
         this.present(0, 0, u32[base + S_COLS], u32[base + S_ROWS]);
+    }
+
+    // --- Selection. A drag on the page names cells here; the kernel is never
+    // told, because a selection is a view over the grid rather than input
+    // (Concept.md §3.5).
+
+    // Device pixels to a cell, clamped: a drag that leaves the canvas names an
+    // edge cell rather than nothing.
+    at(px, py) {
+        const u32 = this.u32();
+        const base = this.info >>> 2;
+        const cols = u32[base + S_COLS];
+        const rows = u32[base + S_ROWS];
+        return {
+            col: Math.min(cols - 1, Math.max(0, Math.floor(px / this.cellW))),
+            row: Math.min(rows - 1, Math.max(0, Math.floor(py / this.cellH))),
+        };
+    }
+
+    // `phase` is "start", "move" or "end". A drag that never left its cell is a
+    // click, and a click clears rather than selecting the one cell under it.
+    select(phase, px, py) {
+        if (!this.info)
+            return;
+        const was = this.sel;
+        const p = this.at(px, py);
+        if (phase === "start")
+            this.sel = { ar: p.row, ac: p.col, br: p.row, bc: p.col };
+        else if (!this.sel)
+            return;
+        else
+            this.sel = { ...this.sel, br: p.row, bc: p.col };
+
+        const s = this.sel;
+        if (phase === "end" && s.ar === s.br && s.ac === s.bc)
+            this.sel = null;
+        this.refresh(was, this.sel);
+    }
+
+    // The whole grid, for the select-all chord. There is no scrollback, so
+    // "all" is what is on the screen and nothing more.
+    all() {
+        if (!this.info)
+            return;
+        const u32 = this.u32();
+        const base = this.info >>> 2;
+        const was = this.sel;
+        this.sel = { ar: 0, ac: 0, br: u32[base + S_ROWS] - 1, bc: u32[base + S_COLS] - 1 };
+        this.refresh(was, this.sel);
+    }
+
+    // → true if there was one to drop, so the worker tells the page only when
+    // something changed.
+    clear() {
+        if (!this.sel)
+            return false;
+        const was = this.sel;
+        this.sel = null;
+        this.refresh(was, null);
+        return true;
+    }
+
+    // The anchor and the head in reading order, since a drag may go either way.
+    span() {
+        const s = this.sel;
+        if (!s)
+            return null;
+        const back = s.br < s.ar || (s.br === s.ar && s.bc < s.ac);
+        return back
+            ? { r0: s.br, c0: s.bc, r1: s.ar, c1: s.ac }
+            : { r0: s.ar, c0: s.ac, r1: s.br, c1: s.bc };
+    }
+
+    // The first and last column a selection covers on a row, or null when it
+    // covers none of it. Linear, not rectangular: it runs to the end of its
+    // first row and starts at the beginning of its last, as a terminal's does,
+    // and both ends are inclusive. One rule, so the paint and the text cannot
+    // disagree about what is selected.
+    bounds(s, row, cols) {
+        if (!s || row < s.r0 || row > s.r1)
+            return null;
+        return [row === s.r0 ? s.c0 : 0, row === s.r1 ? s.c1 : cols - 1];
+    }
+
+    // The selected cells as text. Trailing blanks go, so copying a line of a
+    // mostly empty screen gives a line rather than a row of spaces.
+    text() {
+        const s = this.span();
+        if (!s)
+            return "";
+        const u32 = this.u32();
+        const base = this.info >>> 2;
+        const cols = u32[base + S_COLS];
+        const cells = u32[base + S_CELLS] >>> 2;
+
+        const lines = [];
+        for (let row = s.r0; row <= s.r1; row++) {
+            const [first, last] = this.bounds(s, row, cols);
+            let line = "";
+            for (let col = first; col <= last; col++) {
+                const ch = u32[cells + (row * cols + col) * CELL_U32];
+                line += ch === 0 ? " " : String.fromCodePoint(ch);
+            }
+            lines.push(line.replace(/\s+$/, ""));
+        }
+
+        // Trailing blank rows are the grid's padding, not content: a drag past
+        // the last line of output, and select-all on a mostly empty screen,
+        // must not hand over a screenful of newlines. Blank rows *between*
+        // lines are content and stay.
+        while (lines.length && lines[lines.length - 1] === "")
+            lines.pop();
+        return lines.join("\n");
+    }
+
+    // Repaint the rows two selections cover between them. A whole-grid repaint
+    // per mouse move would do; this is one rectangle through the damage path
+    // that already exists.
+    refresh(was, now) {
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (const s of [was, now]) {
+            if (!s)
+                continue;
+            lo = Math.min(lo, s.ar, s.br);
+            hi = Math.max(hi, s.ar, s.br);
+        }
+        if (lo > hi)
+            return;
+        this.present(0, lo, this.u32()[(this.info >>> 2) + S_COLS], hi - lo + 1);
     }
 }

@@ -218,6 +218,9 @@ main way to damage the design. Full statements in Concept.md §2.
    three more `host_svc` operations, not a fourth import.
 3. **The terminal is a cell grid in linear memory, not a byte stream.** No ANSI escapes, no
    VT100 emulation, no xterm.js. Colours are struct fields and cursor addressing is indexing.
+   Mouse selection and copy live entirely on the page and in `web/render.js` for the same reason
+   — the grid is already shared, so a selection needs no import, no export and no syscall, and
+   there is no mouse anywhere in the ABI (Concept.md §3.5).
 
 Further constraints that are easy to violate by habit:
 
@@ -390,6 +393,9 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   resume-side twin of `CancelToken` and would have to reach every awaitable.
 - **Resize drops rows from the top rather than re-wrapping logical lines**, which §3.5 had
   promised to M7.
+- **A mouse selection does not survive output.** It is dropped by the next keystroke and by a
+  resize, and output scrolling under it leaves the highlight on cells that have since changed.
+  Holding one needs the per-row continuation bit the re-wrap above is waiting for.
 - **No per-process root.** A process has its own working directory now, but once a path is
   absolute `open` resolves it with the kernel's full authority. A per-process mount view is a
   milestone's worth of work in the VFS. `cd` is still a builtin because what it moves is the

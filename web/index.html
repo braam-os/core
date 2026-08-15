@@ -17,7 +17,14 @@
         color: #cccccc;
         font: 13px/1.5 'Andale Mono', 'DejaVu Sans Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    #screen { flex: 1 1 auto; display: block; width: 100%; min-height: 0; }
+    #screen {
+        flex: 1 1 auto;
+        display: block;
+        width: 100%;
+        min-height: 0;
+        cursor: text;
+        touch-action: none; /* a drag over the grid selects; it does not scroll */
+    }
     #status {
         flex: 0 0 auto;
         margin: 0;

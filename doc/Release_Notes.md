@@ -7,6 +7,93 @@ of the two needs amending.
 
 ---
 
+## Selecting with the mouse
+
+The terminal is a cell grid in shared memory, which means the page can read what is on the screen
+without asking anyone. So a mouse selection costs **nothing in the kernel**: no import, no export,
+no field in the `Screen` descriptor, no key, no syscall, and no way for a program to find out that
+one exists. `web/braam.js` turns a drag into device pixels, `web/render.js` turns those into cells,
+and the text crosses back to the page when the drag settles. Concept.md §3.5 says so now.
+
+The alternative was a mouse event alongside `key()`, which several people would call the obvious
+design — a terminal that has a mouse usually tells its programs about it. It buys nothing here.
+Nothing in userland wants a click: there is no `less` mouse mode, no menu, no button. What was
+asked for was **selection**, and selection is a view over the grid, not input. Putting it in the
+kernel would have meant a selection in the descriptor, a rule about who may clear it, and a claim
+to arbitrate two programs wanting it — which is §3.5's terminal-claims machinery again, for a
+highlight the renderer can draw by swapping two colours.
+
+**Swapping two colours is exactly what it does.** The cursor was already drawn and never stored,
+by reversing the cell it sits on; a selection reverses the cells it covers, through the same
+parameter. The two XOR rather than OR, so the cursor inside a selection is a hole in it — which is
+the classic behaviour, and it falls out of the arithmetic rather than being arranged.
+
+### Ctrl+C, twice overloaded
+
+There is no second copy key to give it. `Ctrl+Shift+C` is Chrome's inspector and cannot be taken;
+a menu is not something a canvas has. So the chord is overloaded the way Windows Terminal
+overloads it: **`Ctrl+C` copies when there is a selection and interrupts when there is not.** For
+that to be safe rather than a trap, a copy has to clear the selection — otherwise the second
+`^C` in a row would silently fail to reach a runaway program, which is the one thing `^C` must
+never do. A click that never left its cell clears too, which gives an obvious escape.
+
+The write goes through `navigator.clipboard.writeText` **in the keydown handler**, not through
+`Sys::Clip` and `web/svc.js`. That looks like a duplicate of the clipboard service and is not one:
+a service reply reaches the page a turn or more after the keystroke, and by then the transient
+activation that permits a clipboard write is gone — the same asymmetry §A.2 records for reading,
+where the way out was to wait for a `paste`. There is no equivalent trick for writing, so the text
+has to already be on the page when the chord arrives. That is why the worker posts the selection
+across when a drag ends rather than when a copy is asked for, and why the page keeps a copy of it.
+
+The `copy` event was the other candidate — it needs no permission at all. It is not reliably
+dispatched to a focused canvas with no document selection behind it, and when it is not, the chord
+would be swallowed with nothing copied and no interrupt sent. `writeText` inside a gesture is
+supported everywhere and fails loudly.
+
+### Select all, which Ctrl+A cannot be
+
+`Ctrl+A` is the line editor's beginning-of-line, and unlike `Ctrl+C` it has **no disambiguator**:
+copy could be overloaded because "is there a selection?" answers which of the two was meant, and
+there is no such question for select-all. So it is the platform's own chord instead — `Cmd+A`, or
+`Ctrl+Shift+A` where there is no `Cmd`. `Cmd+A` was free for the taking: `Key::printable()`
+excludes `MOD_META`, so a `Cmd` chord already reached the kernel and did nothing at all. The
+Ctrl+Shift form is the weaker half of the pair, since Firefox and Chrome both bind it to browser
+UI that a page cannot intercept; where that happens the Mac chord is the only one, which is worth
+knowing but not worth a third binding to work around.
+
+Selecting all made a smaller decision visible: **trailing blank rows do not travel with a
+selection.** The grid is a fixed rectangle, so select-all on a screen with three lines of output
+on it would otherwise hand over three lines and thirteen newlines, and a drag past the last line
+of output would do the same on a smaller scale. Blank rows *between* lines are content and stay;
+it is only the run at the end that goes.
+
+### What it costs to repaint
+
+A selection changes on every mouse move that crosses a cell boundary, and the highlight is painted
+by the same `present()` the kernel's damage rectangle drives — so the renderer repaints the row
+span the old and new selections cover between them. Over-painting a few rows during a drag is
+cheaper than reasoning about the symmetric difference of two linear spans, and it goes through the
+path that already existed rather than a second one.
+
+The selection dies on the next keystroke and on a resize, because the grid has no line model and
+no scrollback (§3.5): the cells it names mean something else as soon as anything scrolls. Holding
+a selection across output would need the per-row continuation bit that resize re-wrapping has been
+waiting for since M7, and it should land with that or not at all.
+
+### The renderer finally has a test
+
+`web/render.js` had none — there is no canvas in Node, and it was the one shipping file with no
+coverage at all. The selection is arithmetic over the grid, which is testable with a fake `ctx`
+that records what it was asked to fill, so `test/run.mjs` now drives a `Renderer` over **the real
+screen** the smoke test has just filled by running `echo hello`, and asserts what the drag reads
+back, which cells came out reversed, and that select-all and a drag over everything agree. Both
+halves of the first pair earn their place: the first version
+checked only the text, and a deliberate break of the highlight logic passed it. Painting and text
+now share one `bounds()` so they cannot disagree about what is selected, and mutating it fails the
+suite.
+
+---
+
 ## The shell is a program
 
 `/bin/sh` is a binary in `/bin` that init runs. `src/user/shell.cpp`, `edit.cpp`, `job.cpp` and
