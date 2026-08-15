@@ -87,6 +87,15 @@ it. That pacing is why `key()` now returns 1 or 0 rather than nothing — the ri
 paste is longer — which is the one signature change on the boundary; the export list, the import
 list and the §4.3 table are all untouched. A waiting `pbpaste` still takes the gesture instead.
 
+**And the prompt says where you are.** `home $` — the working directory's basename, plain white
+on blue, then a black space and the bright white `$`. Nothing was added for it: `Prompt` in
+`src/sh/edit.h` grew a third field, `anchor` a third styled run, and `interactive()` calls
+`cwd_get()` once per line rather than caching what `cd` returns, because a stale prompt is
+believed. The basename comes from `path_basename`, which already answers `/` at the root, and it
+points into a `String` the loop body owns — `Prompt`'s `Str`s are non-owning and now one of them
+is not a literal. `test/run.mjs` composes the expected prompt from the directory it is in rather
+than spelling it.
+
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
 stable: amend it only when a design decision changes, and then in the same commit that changes

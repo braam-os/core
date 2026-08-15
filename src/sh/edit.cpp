@@ -14,9 +14,9 @@ bool is_word(char32_t c)
 
 // One run of the prompt: the colour, then the bytes. Empty text sets the style
 // and writes nothing, which is how the default goes back on afterwards.
-Task<Result<void>> put_styled(u8 fg, Str s)
+Task<Result<void>> put_styled(u8 fg, u8 bg, Str s)
 {
-    if (Task<Result<void>> t = style_set(fg, COLOR_BLACK, 0)) {
+    if (Task<Result<void>> t = style_set(fg, bg, 0)) {
         if (Result<void> r = co_await t; r.is_err())
             co_return Err(r.error());
     } else
@@ -133,7 +133,18 @@ Task<Result<void>> LineEditor::anchor(Prompt prompt)
     if (!prompt.status.empty()) {
         if (!out.append(prompt.status))
             co_return Err(Error::NoMemory);
-        if (Task<Result<void>> w = put_styled(COLOR_RED, out.str())) {
+        if (Task<Result<void>> w = put_styled(COLOR_RED, COLOR_BLACK, out.str())) {
+            if (Result<void> r = co_await w; r.is_err())
+                co_return Err(r.error());
+        } else
+            co_return Err(Error::NoMemory);
+        out.clear();
+    }
+
+    if (!prompt.dir.empty()) {
+        if (!out.append(prompt.dir))
+            co_return Err(Error::NoMemory);
+        if (Task<Result<void>> w = put_styled(COLOR_WHITE, COLOR_BLUE, out.str())) {
             if (Result<void> r = co_await w; r.is_err())
                 co_return Err(r.error());
         } else
@@ -143,7 +154,7 @@ Task<Result<void>> LineEditor::anchor(Prompt prompt)
 
     if (!out.append(prompt.text))
         co_return Err(Error::NoMemory);
-    if (Task<Result<void>> w = put_styled(COLOR_WHITE | COLOR_BRIGHT, out.str())) {
+    if (Task<Result<void>> w = put_styled(COLOR_WHITE | COLOR_BRIGHT, COLOR_BLACK, out.str())) {
         if (Result<void> r = co_await w; r.is_err())
             co_return Err(r.error());
     } else
@@ -151,7 +162,7 @@ Task<Result<void>> LineEditor::anchor(Prompt prompt)
 
     // Back to the default, so what is typed under it is ordinary text and so
     // that a program the line starts inherits nothing.
-    if (Task<Result<void>> w = put_styled(COLOR_WHITE, Str())) {
+    if (Task<Result<void>> w = put_styled(COLOR_WHITE, COLOR_BLACK, Str())) {
         if (Result<void> r = co_await w; r.is_err())
             co_return Err(r.error());
     } else

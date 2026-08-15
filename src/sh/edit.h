@@ -27,6 +27,7 @@ struct Line {
 // storage and must outlive the read_line that draws them.
 struct Prompt {
     Str status; // the last command's failure, in red; empty when it succeeded
+    Str dir;    // the working directory's basename, white on blue; empty when unknown
     Str text;   // the prompt proper, in bright white
 };
 

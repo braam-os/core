@@ -1,6 +1,7 @@
 #include "shell.h"
 
 #include "edit.h"
+#include "fs/path.h"
 #include "job.h"
 #include "kernel/fmt.h"
 #include "kernel/string.h"
@@ -67,7 +68,22 @@ Task<i32> interactive()
         Buf<16> failed;
         prompt_for(failed, status);
 
-        Task<Result<Line>> t = ed.read_line(Prompt{ failed.str(), "$ " });
+        // Asked for rather than remembered: cd is a builtin, but nothing says
+        // it is the only thing that ever moved us. The basename points into
+        // cwd, which outlives the read_line that draws it.
+        String cwd;
+        Str dir;
+        if (Task<Result<String>> t = cwd_get())
+            if (Result<String> r = co_await t; r.is_ok()) {
+                cwd = move(r.value());
+                dir = path_basename(cwd.str());
+            }
+
+        // Sized rather than pointed at: a literal picked at run time would ask
+        // for strlen, which nothing here provides.
+        Str text = dir.empty() ? "$ "_s : " $ "_s;
+
+        Task<Result<Line>> t = ed.read_line(Prompt{ failed.str(), dir, text });
         Result<Line> r       = t ? co_await t : Err(Error::NoMemory);
         if (r.is_err())
             co_return r.error() == Error::Cancelled ? 0 : 1;

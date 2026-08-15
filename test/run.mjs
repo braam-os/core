@@ -102,6 +102,16 @@ function rows(s) {
     return Array.from({ length: s.rows }, (_, y) => row(s, y));
 }
 
+// The prompt is the last status in red, the cwd's basename white on blue, then
+// the $ in bright white. The suite cds, so it tracks where the shell in front
+// of it is; the boot cwd is /home.
+let cwd = "/home";
+
+function prompt(status = 0) {
+    const name = cwd.slice(cwd.lastIndexOf("/") + 1) || "/";
+    return `${status ? `[${status}] ` : ""}${name} $`;
+}
+
 // Named keys, from the enum in src/kernel/key.h — keep the two in step.
 const NAMED = 0x110000;
 const KEY = {
@@ -258,8 +268,18 @@ if (mode === "--kernel") {
         fail(`the motd did not print at boot: ${JSON.stringify(rows(s))}`);
     if (cell(s, 0, motd_y).fg !== 2)
         fail(`the motd is colour ${cell(s, 0, motd_y).fg}, expected green`);
-    if (cell(s, 0, s.cursor_y).fg !== 15)
-        fail(`the prompt is colour ${cell(s, 0, s.cursor_y).fg}, expected bright white`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`the boot prompt is ${row(s, s.cursor_y)}, expected ${prompt()}`);
+    // The directory is white on blue, the space beside it is not, and the $ is
+    // bright white: three runs, three Sys::Style calls. COLOR_WHITE is 7,
+    // COLOR_BLUE is 4 and COLOR_BLACK is 0.
+    const dir_end = prompt().length - 2; // "home" is columns 0..3
+    if (cell(s, 0, s.cursor_y).fg !== 7 || cell(s, 0, s.cursor_y).bg !== 4)
+        fail(`the cwd is ${JSON.stringify(cell(s, 0, s.cursor_y))}, expected white on blue`);
+    if (cell(s, dir_end, s.cursor_y).bg !== 0)
+        fail(`the space before the $ is on ${cell(s, dir_end, s.cursor_y).bg}, expected black`);
+    if (cell(s, dir_end + 1, s.cursor_y).fg !== 15 || cell(s, dir_end + 1, s.cursor_y).bg !== 0)
+        fail(`the $ is ${JSON.stringify(cell(s, dir_end + 1, s.cursor_y))}, expected 15 on 0`);
 
     const type = (text) => {
         for (const ch of text)
@@ -288,8 +308,8 @@ if (mode === "--kernel") {
     s = submit("echo hello", 1040);
     if (!rows(s).includes("hello"))
         fail(`echo did not print: ${JSON.stringify(rows(s))}`);
-    if (row(s, s.cursor_y) !== "$")
-        fail(`the prompt after a success is ${row(s, s.cursor_y)}, expected $`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`the prompt after a success is ${row(s, s.cursor_y)}, expected ${prompt()}`);
 
     // The renderer's selection, read off the real grid rather than a mock of
     // one. A drag names cells in device pixels and the text it gives back is
@@ -397,7 +417,7 @@ if (mode === "--kernel") {
         s = descriptor(addr);
         if (!rows(s).includes("z".repeat(80)))
             fail(`the pasted line did not run: ${JSON.stringify(rows(s))}`);
-        if (row(s, s.cursor_y) !== "$")
+        if (row(s, s.cursor_y) !== prompt())
             fail(`the paste left ${row(s, s.cursor_y)}, expected a fresh prompt`);
     }
 
@@ -408,24 +428,27 @@ if (mode === "--kernel") {
     // M3, second criterion, first half: a nonzero exit code is observable —
     // the shell carries it in the next prompt.
     s = submit("false", 1060);
-    if (!rows(s).includes("[1] $"))
-        fail(`a failing program left ${row(s, s.cursor_y)}, expected [1] $`);
-    // And it is red, while the $ beside it is bright white: two runs, two
-    // Sys::Style calls. COLOR_RED is 1.
+    if (!rows(s).includes(prompt(1)))
+        fail(`a failing program left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
+    // And it is red, ahead of the cwd on blue and the bright white $: three
+    // runs, three Sys::Style calls. COLOR_RED is 1.
     if (cell(s, 0, s.cursor_y).fg !== 1)
         fail(`the status is colour ${cell(s, 0, s.cursor_y).fg}, expected red`);
-    if (cell(s, 4, s.cursor_y).fg !== 15)
-        fail(`the $ after a status is colour ${cell(s, 4, s.cursor_y).fg}, expected bright white`);
+    if (cell(s, 4, s.cursor_y).bg !== 4)
+        fail(`the cwd after a status is on ${cell(s, 4, s.cursor_y).bg}, expected blue`);
+    const dollar = prompt(1).length - 1;
+    if (cell(s, dollar, s.cursor_y).fg !== 15)
+        fail(`the $ after a status is colour ${cell(s, dollar, s.cursor_y).fg}, expected white`);
 
     s = submit("nosuch", 1070);
     if (!rows(s).some((line) => line.startsWith("braam: nosuch: not found")))
         fail(`an unknown command said nothing: ${JSON.stringify(rows(s))}`);
-    if (!rows(s).includes("[127] $"))
-        fail(`an unknown command left ${row(s, s.cursor_y)}, expected [127] $`);
+    if (!rows(s).includes(prompt(127)))
+        fail(`an unknown command left ${row(s, s.cursor_y)}, expected ${prompt(127)}`);
 
     s = submit("true", 1080);
-    if (row(s, s.cursor_y) !== "$")
-        fail(`a succeeding program left ${row(s, s.cursor_y)}, expected $`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`a succeeding program left ${row(s, s.cursor_y)}, expected ${prompt()}`);
 
     // M3, second criterion, second half: Up recalls history, Home reaches the
     // start of the recalled line, and ^C abandons it.
@@ -438,14 +461,16 @@ if (mode === "--kernel") {
     press(KEY.HOME);
     run(1100);
     s = descriptor(addr);
-    if (s.cursor_x !== 2)
-        fail(`Home left the cursor at column ${s.cursor_x}, expected 2`);
+    // The anchor is one past the prompt, whose trailing space row() trims.
+    const home_x = prompt().length + 1;
+    if (s.cursor_x !== home_x)
+        fail(`Home left the cursor at column ${s.cursor_x}, expected ${home_x}`);
 
     press("c".codePointAt(0), CTRL);
     run(1110);
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
 
     // M2's coverage: at most one present per tick, and between them they cover
     // every cell the editor drew and the cell the cursor left — that one has to
@@ -505,14 +530,14 @@ if (mode === "--kernel") {
     const listed = rows(s).filter((line) => line && !line.includes("$"));
     if (listed.join() !== "tail")
         fail(`ls /bin | grep ta printed ${JSON.stringify(listed)}, expected ["tail"]`);
-    if (row(s, s.cursor_y) !== "$")
-        fail(`a pipeline that matched left ${row(s, s.cursor_y)}, expected $`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`a pipeline that matched left ${row(s, s.cursor_y)}, expected ${prompt()}`);
 
     // The status of a pipeline is its last command's: grep reports 1 when
     // nothing matched, and quote removal reaches argv on the way in.
     s = submit("ls /bin | grep zzz", 1150);
-    if (!rows(s).includes("[1] $"))
-        fail(`an empty pipeline left ${row(s, s.cursor_y)}, expected [1] $`);
+    if (!rows(s).includes(prompt(1)))
+        fail(`an empty pipeline left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
     s = submit("echo 'a b' | wc", 1160);
     if (!rows(s).includes("1 2 4"))
         fail(`echo 'a b' | wc printed ${JSON.stringify(rows(s))}, expected 1 2 4`);
@@ -527,18 +552,29 @@ if (mode === "--kernel") {
 
     // ...and it follows `cd`, since that is what a process inherits.
     submit("cd /bin", 1167);
+    cwd = "/bin";
     s = submit("clear", 1168);
     s = submit("pwd", 1169);
     if (!rows(s).includes("/bin"))
         fail(`pwd after cd printed ${JSON.stringify(rows(s))}, expected /bin`);
 
+    // The prompt names the basename, so the root is the one directory with no
+    // name of its own — path_basename answers "/" for it rather than nothing.
+    s = submit("cd /", 1169.1);
+    cwd = "/";
+    if (row(s, s.cursor_y) !== "/ $" || row(s, s.cursor_y) !== prompt())
+        fail(`cd / left ${row(s, s.cursor_y)}, expected "/ $"`);
+
     // A relative path from a program resolves against that inherited cwd, not
     // against the root: `ls .` in /bin has to find the binaries.
+    submit("cd /bin", 1169.15);
+    cwd = "/bin";
     s = submit("clear", 1169.2);
     s = submit("ls . | grep wc", 1169.4);
     if (!rows(s).includes("wc"))
         fail(`ls . in /bin printed ${JSON.stringify(rows(s))}, expected wc`);
     submit("cd /home", 1169.6);
+    cwd = "/home";
 
     // M5, first criterion, first half: a redirection that really writes, an
     // append that follows it, and a file argument that reads it back.
@@ -554,8 +590,8 @@ if (mode === "--kernel") {
     s = submit("echo hi > /bin/wc", 1174);
     if (!rows(s).some((line) => line.startsWith("braam: /bin/wc: ")))
         fail(`a read-only redirection said nothing: ${JSON.stringify(rows(s))}`);
-    if (!rows(s).includes("[1] $"))
-        fail(`a refused redirection left ${row(s, s.cursor_y)}, expected [1] $`);
+    if (!rows(s).includes(prompt(1)))
+        fail(`a refused redirection left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
 
     // Coverage that used to live in test_shell, moved here when its programs
     // became binaries: a filter stopping early, a three-stage pipeline, and
@@ -595,7 +631,7 @@ if (mode === "--kernel") {
     press("d".codePointAt(0), CTRL);
     run(1175.1);
     s = descriptor(addr);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`^D did not end cat's input: ${JSON.stringify(rows(s))}`);
 
     submit("rm -r /home/d", 1175.2);
@@ -647,8 +683,8 @@ if (mode === "--kernel") {
     if (run(1200) !== -1)
         fail("^C left the pipeline's timer armed");
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C on a pipeline left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on a pipeline left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
 
     // The keyboard came back: the pump was its only receiver while the job
     // ran, and the shell has to be able to read it again afterwards.
@@ -795,8 +831,8 @@ if (mode === "--kernel") {
     if (run(3033) !== -1)
         fail("^C left the chat receiver scheduled");
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C on chat left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on chat left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
     if (!net.sockets[1].closed)
         fail("chat did not drop its socket on the way out");
 
@@ -818,7 +854,7 @@ if (mode === "--kernel") {
     s = descriptor(addr);
     if (!net.sockets[2].closed)
         fail("chat did not close its socket at end of input");
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`^D on chat left ${JSON.stringify(rows(s))}, expected a bare prompt`);
 
     // M6, third criterion: /mnt/import takes what the picker hands over, and
@@ -877,8 +913,8 @@ if (mode === "--kernel") {
     if (run(3059) !== -1)
         fail("^C left the paste wait scheduled");
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C on pbpaste left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on pbpaste left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
     net.paste("too late");
     run(3060);
     net.clipDenied = false;
@@ -924,7 +960,7 @@ if (mode === "--kernel") {
     press("q".codePointAt(0), CTRL); // quit
     run(3074);
     s = descriptor(addr);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`edit did not give the screen back: ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 3075);
@@ -950,7 +986,7 @@ if (mode === "--kernel") {
     press("q".codePointAt(0));
     run(3080);
     s = descriptor(addr);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`less did not give the screen back: ${JSON.stringify(rows(s))}`);
 
     // Two claimants at once, which spawning made natural and a pipeline of two
@@ -975,7 +1011,7 @@ if (mode === "--kernel") {
     s = submit("sleep 5000 &", 3082);
     if (!rows(s).some((line) => line.startsWith("[1] ")))
         fail(`& said nothing: ${JSON.stringify(rows(s))}`);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`& did not come back to a prompt: ${JSON.stringify(rows(s))}`);
 
     s = submit("jobs", 3083);
@@ -1004,13 +1040,13 @@ if (mode === "--kernel") {
     press(KEY.ENTER);
     run(3089);
     s = descriptor(addr);
-    if (row(s, s.cursor_y) === "$")
+    if (row(s, s.cursor_y) === prompt())
         fail(`fg came straight back to a prompt: ${JSON.stringify(rows(s))}`);
     press("c".codePointAt(0), CTRL);
     run(3090);
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C during fg left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C during fg left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
     s = submit("jobs", 3091);
     if (rows(s).some((line) => line.includes("running")))
         fail(`^C during fg left the job running: ${JSON.stringify(rows(s))}`);
@@ -1058,7 +1094,7 @@ if (mode === "--kernel") {
         fail(`hog reported ${JSON.stringify(hogged)}`);
     if (!rows(s).includes("hog: memory.grow refused past the cap"))
         fail(`memory.grow was not capped: ${JSON.stringify(rows(s))}`);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`hog exited ${row(s, s.cursor_y)}, expected a bare prompt`);
 
     // M8, second criterion: the pid a process sees is the one the host bound
@@ -1093,8 +1129,8 @@ if (mode === "--kernel") {
     if (run(9022) !== -1)
         fail("^C left the process scheduled");
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C on a process left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on a process left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
     if (others() !== 0)
         fail(`${others()} instances outlived their processes`);
 
@@ -1104,8 +1140,8 @@ if (mode === "--kernel") {
     s = submit("/share/motd", 9031);
     if (!rows(s).some((line) => line.startsWith("braam: /share/motd: not executable")))
         fail(`a non-binary was not refused: ${JSON.stringify(rows(s))}`);
-    if (!rows(s).includes("[126] $"))
-        fail(`a non-binary left ${row(s, s.cursor_y)}, expected [126] $`);
+    if (!rows(s).includes(prompt(126)))
+        fail(`a non-binary left ${row(s, s.cursor_y)}, expected ${prompt(126)}`);
 
     // help lists what is runnable, whatever tier it runs at.
     addr = instance.exports.resize(100, 48);
@@ -1130,7 +1166,7 @@ if (mode === "--kernel") {
     s = submit("spin 1", 9051);
     if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
         fail(`a tier-3 program printed ${JSON.stringify(rows(s))}`);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`spin 1 exited ${row(s, s.cursor_y)}, expected a bare prompt`);
     if (net.terminated.length !== 0)
         fail("a process that exited had its worker terminated rather than pooled");
@@ -1153,8 +1189,8 @@ if (mode === "--kernel") {
     if (run(9062) !== -1)
         fail("^C left the process scheduled");
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C on a spinning process left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on a spinning process left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
     if (net.terminated.length !== 1)
         fail(`${net.terminated.length} workers were terminated, expected 1`);
     if (others() !== 0)
@@ -1204,7 +1240,7 @@ if (mode === "--kernel") {
     s = submit("timeout 10000 echo child", 9101);
     if (!rows(s).includes("child"))
         fail(`a spawned child printed ${JSON.stringify(rows(s))}, expected child`);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`timeout over a fast child left ${row(s, s.cursor_y)}, expected a bare prompt`);
     if (others() !== 0)
         fail(`${others()} instances outlived timeout`);
@@ -1220,7 +1256,7 @@ if (mode === "--kernel") {
         fail(`timeout over a slow child left ${others()} instances, expected 2`);
     run(9200); // past the delay: the alarm fires here
     s = descriptor(addr);
-    if (!rows(s).includes("[124] $"))
+    if (!rows(s).includes(prompt(124)))
         fail(`timeout did not fire: ${JSON.stringify(rows(s))}`);
     if (others() !== 0)
         fail(`${others()} instances outlived a fired timeout`);
@@ -1239,13 +1275,13 @@ if (mode === "--kernel") {
     // shell — two Waits deep, since `false` is a process of its own.
     s = submit("clear", 9120);
     s = submit("timeout 10000 false", 9121);
-    if (!rows(s).includes("[1] $"))
+    if (!rows(s).includes(prompt(1)))
         fail(`a child's status did not reach the shell: ${JSON.stringify(rows(s))}`);
 
     // A name that is not a command is the parent's diagnostic, not a crash.
     s = submit("clear", 9130);
     s = submit("timeout 10000 nosuchthing", 9131);
-    if (!rows(s).includes("[127] $"))
+    if (!rows(s).includes(prompt(127)))
         fail(`spawning a missing command gave ${JSON.stringify(rows(s))}, expected 127`);
 
     // A builtin is the shell's own state and cannot be spawned into a process.
@@ -1257,11 +1293,13 @@ if (mode === "--kernel") {
     // The child inherits the parent's cwd, which the parent inherited from the
     // shell — the whole chain, asserted in one line.
     submit("cd /bin", 9150);
+    cwd = "/bin";
     s = submit("clear", 9151);
     s = submit("timeout 10000 pwd", 9152);
     if (!rows(s).includes("/bin"))
         fail(`a child's inherited cwd printed ${JSON.stringify(rows(s))}, expected /bin`);
     submit("cd /home", 9153);
+    cwd = "/home";
 
     // A pipe between a process and its child. `watch` moves the write end into
     // the child, so the child exiting is what closes the channel and gives the
@@ -1278,8 +1316,8 @@ if (mode === "--kernel") {
     if (run(9147) !== -1)
         fail("^C on watch left the scheduler with work to do");
     s = descriptor(addr);
-    if (!rows(s).includes("[130] $"))
-        fail(`^C on watch left ${row(s, s.cursor_y)}, expected [130] $`);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on watch left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
     if (others() !== 0)
         fail(`${others()} instances outlived watch`);
 
@@ -1342,7 +1380,7 @@ if (mode === "--kernel") {
         fail(`the tier-2 fallback printed ${JSON.stringify(rows(s))}`);
     if (net.bound.length !== 0)
         fail("the fallback still bound a worker");
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`the fallback exited ${row(s, s.cursor_y)}, expected a bare prompt`);
 
     // The builtins are the shell's own state, so they are not files: `cd` is
@@ -1369,7 +1407,7 @@ if (mode === "--kernel") {
     s = submit("clear", 9094);
     s = submit("jobs > /home/j", 9095);
     s = submit("cat /home/j", 9096);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`a redirected builtin left ${row(s, s.cursor_y)}, expected a bare prompt`);
 
     // /bin/sh: the shell as an ordinary program, running as a child of the
@@ -1380,8 +1418,9 @@ if (mode === "--kernel") {
     s = submit("sh", 9201);
     // Two prompts on one screen: the resident shell's, with `sh` typed at it,
     // and the one the child drew for itself.
-    if (!rows(s).includes("$ sh") || row(s, s.cursor_y) !== "$")
-        fail(`sh drew ${JSON.stringify(rows(s))}, expected its own prompt under "$ sh"`);
+    // The child inherits the cwd, so both prompts read the same.
+    if (!rows(s).includes(`${prompt()} sh`) || row(s, s.cursor_y) !== prompt())
+        fail(`sh drew ${JSON.stringify(rows(s))}, expected its own prompt under "${prompt()} sh"`);
 
     // Its line editor: typing, Home, and a character inserted at the front.
     type("cho hi");
@@ -1409,6 +1448,7 @@ if (mode === "--kernel") {
     // what it spawns — a child of a child of the resident shell.
     s = submit("clear", 9207);
     s = submit("cd /share", 9208);
+    cwd = "/share"; // the child's, not the resident shell's
     s = submit("pwd", 9209);
     if (!rows(s).includes("/share"))
         fail(`cd in sh left ${JSON.stringify(rows(s))}, expected /share`);
@@ -1422,8 +1462,8 @@ if (mode === "--kernel") {
     press("c".codePointAt(0), CTRL);
     run(9212);
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.startsWith("[130] $")))
-        fail(`^C in sh left ${JSON.stringify(rows(s))}, expected sh's [130] prompt`);
+    if (!rows(s).some((line) => line.startsWith(prompt(130))))
+        fail(`^C in sh left ${JSON.stringify(rows(s))}, expected sh's ${prompt(130)}`);
 
     // Cooked input reaches a child of sh: the pump cooks into the console, and
     // sh gave the console to `cat` by letting go of the keyboard.
@@ -1469,7 +1509,7 @@ if (mode === "--kernel") {
     press("q".codePointAt(0));
     run(9219);
     s = descriptor(addr);
-    if (row(s, s.cursor_y) !== "$")
+    if (row(s, s.cursor_y) !== prompt())
         fail(`less did not give sh its screen back: ${JSON.stringify(rows(s))}`);
 
     // And ^C on one, which is the harder half: the claim is the kernel's, on the
@@ -1489,6 +1529,7 @@ if (mode === "--kernel") {
     // which is still where it was, because the `cd` above moved the child's
     // working directory and nobody else's (Concept.md §5.1).
     s = submit("exit", 9213);
+    cwd = "/home";
     s = submit("clear", 9214);
     s = submit("pwd", 9215);
     if (rows(s).includes("/share"))

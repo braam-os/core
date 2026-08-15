@@ -7,6 +7,67 @@ of the two needs amending.
 
 ---
 
+## A prompt that says where you are
+
+The prompt now names the working directory: the basename, plain white on blue, then a space and
+the bright white `$`.
+
+```
+home $ _
+```
+
+It cost no operation. `Sys::Style` was already there for the red `[N]`, and `Sys::Chdir` already
+answers "where am I" — the shell asks the same question `pwd` does, through the same call. The
+change is a third run in `anchor` and a third field in `Prompt`, and the wasm ABI, the import
+list, the export list and the §4.3 table are all exactly as they were.
+
+**The basename, not the path.** The terminal is 80 columns at its widest and a prompt that grows
+with the depth of the tree eats the line being typed — and the line editor anchors on wherever
+the prompt ended, so a long one is not wrong, only cramped. The basename is what actually answers
+the question a prompt is asked. `path_basename` already returns `/` for the root, which is the
+one case where a bare name would have been empty, so the root reads `/ $` with no special case
+written for it.
+
+**Asked every prompt, not remembered.** The obvious optimisation is for `cd` to stash what
+`cwd_set` hands back — it already gets the resulting absolute path and throws it away. It was not
+done. `cd` being the only thing that moves the shell is true today and is not a property anything
+enforces; a cached prompt would go quietly stale the first time something else moved it, and
+staleness in a prompt is worse than a syscall, because a wrong prompt is believed. One
+`Sys::Chdir` per *line* is a park and a step against the six ticks a single keystroke already
+costs (§4.4), so it is not on any path that matters.
+
+**The space is outside the colour.** Three runs, not two: the directory on blue, then `" $ "` on
+black. Putting the space inside the coloured run would have been one fewer `String` and a blue
+block that runs one cell past the name, which reads as a trailing space in a highlight rather
+than as a separator. So the separator lives at the head of the bright white run, and the shell
+picks `"$ "` or `" $ "` depending on whether there is a directory to separate from — which is
+also the whole of the fallback: a `Sys::Chdir` that fails leaves the prompt exactly as it was
+before this change rather than leaving a hole where a name should be.
+
+**Two things about it are lifetime, not taste.** `Prompt` holds non-owning `Str`s and always has;
+until now every one of them pointed at a literal, and `dir` points into a `String` the loop body
+owns. That `String` must outlive the `read_line` that draws it — including the `^L` path, which
+re-runs `anchor` with the same `Prompt` — which is why it is declared in the loop body and not
+built into the call. `path_basename` returns a `Str` *into its argument*, so the two are one
+lifetime, not two.
+
+The second is a trap worth naming: `dir.empty() ? "$ " : " $ "` does not compile against a
+freestanding target. `Str`'s `const char *` constructor is `__builtin_strlen`, which folds for a
+literal and does not fold for a pointer chosen at run time — so the ternary emits a call to
+`strlen`, and `--allow-undefined` is deliberately absent (§C.3), so the link fails rather than
+the program. `"$ "_s` is the fix: the `operator""_s` in `str.h` is the sized constructor, and the
+choice happens between two finished `Str`s.
+
+**The smoke test now builds the prompt rather than spelling it.** Thirty-odd assertions compared
+the cursor row against `"$"` or `"[130] $"`, and the suite `cd`s half a dozen times, so the
+expected text is no longer constant. It tracks the directory it is in and a `prompt(status)` helper
+composes what should be on the row — which is a stronger assertion than the literal was, since it
+now also says the shell is where the test thinks it is. The colour checks got the same treatment:
+they were "column 0 is bright white", and they are now "the name is white on blue, the space
+after it is not, and the `$` is bright white", which is the thing the change is about.
+
+---
+
 ## Telling a CORS refusal from a dead network
 
 M6 gave `curl` one hint on `Error::Io` — "a cross-origin URL needs CORS" — because `fetch`
