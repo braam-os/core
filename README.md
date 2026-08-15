@@ -96,11 +96,11 @@ nothing but the origin's storage. `web/embed.html` does exactly that.
 
 ## Building
 
-Requires an LLVM with the wasm32 target, plus CMake, make and Node. On macOS that is
-`brew install llvm lld` — the linker is a separate formula. Nothing beyond the compiler is
-taken from it: no runtime and no headers are linked or included, which is also why
-[wasi-sdk](https://github.com/WebAssembly/wasi-sdk) at `/opt/wasi-sdk-33.0`, what CI uses,
-works interchangeably.
+Requires a clang with the wasm32 target, plus CMake, make and Node. On macOS that is
+`brew install llvm lld` — the linker is a separate formula; on Debian or Ubuntu, what CI
+installs, `apt install clang lld llvm`. Nothing beyond the compiler is taken from it: no
+runtime and no headers are linked or included, so any clang new enough for C++20 coroutines
+will do.
 
 ```
 make            # build the kernel, the binaries and the tests

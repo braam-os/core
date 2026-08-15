@@ -143,11 +143,11 @@ of its own (§4.2), and the kernel is merely waiting for a reply it can stop wai
 Target `wasm32-unknown-unknown`, freestanding. Any clang with the wasm32 target and `wasm-ld`
 will do, because we use it purely as a compiler: we link none of its runtime and, as it turns
 out, none of its headers either (see Appendix C). Homebrew's **`llvm`** and **`lld`** are the
-local default; CI pins **`/opt/wasi-sdk-33.0`** (clang 22.1.0-wasi-sdk), which is what
-Appendix C was verified against.
+local default and Debian's **`clang`**, **`lld`** and **`llvm`** are what CI installs; nothing
+is pinned, because nothing of a distribution's but the compiler is used.
 
 ```
-/opt/wasi-sdk-33.0/bin/clang++ \
+clang++ \
     --target=wasm32-unknown-unknown \
     -std=c++20 -Os \
     -nostdlib -nostdinc++ \
@@ -1119,21 +1119,21 @@ on both sides of the copy.
 
 ## Appendix C — Verified toolchain notes
 
-Verified against the installed `/opt/wasi-sdk-33.0` (clang 22.1.0-wasi-sdk, default target
-`wasm32-unknown-wasip1`, sysroot supplied by `bin/clang++.cfg`).
+Verified against a stock clang for `wasm32-unknown-unknown`, which has no sysroot of its own.
+First written against wasi-sdk 33 (clang 22.1.0), whose findings held unchanged when the build
+moved to the plain distribution clang Homebrew and Debian ship.
 
 ### C.1 libc++'s `<coroutine>` cannot be used freestanding
 
 It is often said that `<coroutine>` is header-only and compiler-intrinsic, so it works
 freestanding as soon as `operator new` exists. That is true of the *language feature* but not
-of this SDK's header. Compiling `#include <coroutine>` with
+of the header. Compiling `#include <coroutine>` with
 `--target=wasm32-unknown-unknown -nostdlib` fails, because libc++'s `<coroutine>` includes
 `__functional/hash.h` → `<cstring>` → `<cmath>`, which need libc declarations (`size_t`,
 `memcpy`, `FP_NAN`, …) that the bare `wasm32-unknown-unknown` target has no sysroot for.
 
-Note also that this SDK stores libc++ headers **per target** under
-`share/wasi-sysroot/include/<triple>/{eh,noeh}/c++/v1`, and there is no `unknown-unknown`
-variant. The generic `include/c++/v1` directory exists but is empty.
+A distribution that carries a wasm sysroot at all carries it per target, and none of them has
+an `unknown-unknown` variant: the generic `include/c++/v1` is empty where it exists.
 
 ### C.2 What does work
 
@@ -1163,7 +1163,7 @@ compiles until the first coroutine, which then fails to instantiate it.
 Building the nucleus corrected three flags. The command line as used is:
 
 ```
-/opt/wasi-sdk-33.0/bin/clang++ \
+clang++ \
     --no-default-config \
     --target=wasm32-unknown-unknown \
     -std=gnu++20 -Os \
@@ -1181,8 +1181,8 @@ Building the nucleus corrected three flags. The command line as used is:
   import_name(...)))`, so nothing is left to resolve — and without the flag, an accidental libc
   dependency is a link error instead of a runtime trap. `memcpy`/`memset` do not leak in:
   bulk-memory is on by default and LLVM lowers them inline.
-- **`--no-default-config` and `--stack-first` are new.** The first suppresses the SDK's config
-  file, which injects a wasi sysroot. The second puts the shadow stack below the data segment,
+- **`--no-default-config` and `--stack-first` are new.** The first suppresses any
+  `bin/clang++.cfg` a distribution ships, which is how a sysroot gets injected. The second puts the shadow stack below the data segment,
   so overflow traps rather than corrupting globals (§8.4).
 - `gnu++20` rather than `c++20`, because `TRY()` is a statement expression.
 

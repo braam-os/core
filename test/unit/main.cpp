@@ -78,7 +78,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_channel();
     test_io();
     test_screen();
-    test_text(); // after screen: it round-trips through the grid
+    test_text();    // after screen: it round-trips through the grid
     test_tty();     // after screen: FullScreen snapshots the grid
     test_console(); // after tty: the pump routes through its claims
     test_pane();

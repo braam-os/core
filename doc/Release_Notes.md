@@ -7,6 +7,39 @@ of the two needs amending.
 
 ---
 
+## Plain clang, and no SDK
+
+wasi-sdk is gone from the build. It was never used as an SDK — §3.1 has said from M0 that the
+toolchain is a compiler and nothing else, `-nostdlib -nostdinc++` being the whole of the
+relationship — so what it actually contributed was a pinned tarball for CI, downloaded and
+cached on every run, and a config file we had to pass `--no-default-config` to suppress. That is
+a hundred megabytes and a cache key to obtain a clang that Debian ships as `clang`.
+
+CI now runs `apt-get install clang lld llvm clang-format` and builds with no configure flags at
+all: the toolchain file finds the tools itself. The pin was worth something — a tarball cannot
+drift under an upgrade the way a rolling keg can — but what it was insuring against is a
+compiler that miscompiles a freestanding wasm module, and against that a version the
+distribution tests is at least as good a bet as one nobody else builds this way.
+
+The toolchain file stopped composing paths out of a prefix and started calling `find_program`
+for each of clang, clang++, llvm-ar, llvm-ranlib and wasm-ld, so `BRAAM_LLVM` became a hint
+rather than the answer. Homebrew is why the hint survives at all: its llvm keg is not on PATH,
+so `/usr/local/opt/llvm` and `/opt/homebrew/opt/llvm` are still probed first, while its `lld`
+is, which is exactly the split the old code special-cased for `wasm-ld` alone. Every tool is
+now checked the same way and a missing one is named at configure time. `BRAAM_WASI_SDK`, the
+alias kept for a rename two milestones ago, went with it.
+
+The formatting check left CI altogether, because it turned out to be a check on the *version* of
+clang-format as much as on the tree: Debian's is older than Homebrew's, and three places in
+`curl.cpp` and `main.cpp` were formatted the way only the newer one formats them. `.clang-format`
+is still authoritative and those three are now written the way both versions agree on — one of
+them a line over the 100-column limit that the newer clang-format declines to break — but which
+clang-format a contributor happens to have is no longer a way to fail the build.
+
+`--no-default-config` stays. Its justification was wasi-sdk's `clang++.cfg`, but any
+distribution may ship one, and a sysroot injected behind the flags is exactly the failure the
+flag makes impossible.
+
 ## The Linux console's sixteen colours
 
 `web/render.js` shipped a palette of nobody's in particular — a softened set picked to look

@@ -168,32 +168,30 @@ warning rather than reaching for `-DBRAAM_WERROR=OFF`, which exists for bisectin
 
 `CMAKE_ARGS` passes flags to the configure step, which only happens on a fresh tree or after
 `make clean` — so `make CMAKE_ARGS="-DBRAAM_WERROR=OFF"` on an already-configured tree does
-nothing. `-DBRAAM_LLVM=<path>` relocates the toolchain (`-DBRAAM_WASI_SDK=` is the former name,
-kept as an alias); CI passes only that, since the warning settings are the defaults. The build
-produces `build/kernel.wasm`, a separate `build/test/tests.wasm`, and a ready-to-serve
+nothing. `-DBRAAM_LLVM=<path>` relocates the toolchain; CI passes nothing at all, since the
+warning settings are the defaults and clang is on its PATH. The build produces `build/kernel.wasm`, a separate `build/test/tests.wasm`, and a ready-to-serve
 `build/web/`.
 
 Note that `make -jN` does **not** reach the compiler: make's jobserver descriptors do not
 survive the intervening cmake process, so the wrapper passes `-j $(JOBS)` explicitly. Change
 `JOBS`, not `-j`.
 
-`BRAAM_LLVM` is used as a clang distribution only. **Nothing from its runtime or its headers is
-linked or included** — `-nostdinc++` is not optional, and `--no-default-config` keeps a config
-file (wasi-sdk ships one) from injecting a sysroot. libc++'s `<coroutine>` cannot be used
-freestanding either way (it pulls in `<cstring>`/`<cmath>`, which need a sysroot the bare
-`wasm32-unknown-unknown` target does not have). A hand-written shim over the `__builtin_coro_*`
-intrinsics replaces it, at [src/kernel/coroutine.h](src/kernel/coroutine.h).
+The toolchain is a clang distribution only. **Nothing from its runtime or its headers is linked
+or included** — `-nostdinc++` is not optional, and `--no-default-config` keeps a config file
+from injecting a sysroot. libc++'s `<coroutine>` cannot be used freestanding either way (it
+pulls in `<cstring>`/`<cmath>`, which need a sysroot the bare `wasm32-unknown-unknown` target
+does not have). A hand-written shim over the `__builtin_coro_*` intrinsics replaces it, at
+[src/kernel/coroutine.h](src/kernel/coroutine.h).
 
-Any LLVM with the wasm32 target therefore works, and two are supported. Locally, **Homebrew**:
-`brew install llvm lld` — `lld` is a separate formula and the `llvm` keg ships no linker at all,
-so `wasm-ld` comes from it, and the toolchain file fails at configure time saying so if it is
-missing. In **CI**, wasi-sdk 33, unpacked to `/opt/wasi-sdk-33.0` and passed explicitly, because
-a pinned tarball cannot drift under a `brew upgrade` the way a rolling keg can. With no
-`-DBRAAM_LLVM`, the toolchain file probes `/usr/local/opt/llvm`, `/opt/homebrew/opt/llvm`, then
-`/opt/wasi-sdk-33.0`, so a Homebrew machine needs no flag. Both produce a passing build within
-~100 bytes of each other. Note that neither provides compiler-rt for `wasm32-unknown-unknown`;
-that is invisible only because `-nostdlib` links no builtins, so a construct that needs one
-(128-bit division, an outlined `memcpy`) fails on both.
+Any clang with the wasm32 target therefore works, and it is plain clang everywhere — there is no
+SDK. Locally, **Homebrew**: `brew install llvm lld`, `lld` being a separate formula since the
+`llvm` keg ships no linker at all. In **CI**, Debian's `clang lld llvm`, unversioned. The
+toolchain file finds each tool with `find_program`, probing `/usr/local/opt/llvm` and
+`/opt/homebrew/opt/llvm` first because Homebrew keeps its keg off PATH, and it fails at
+configure time naming whichever of clang, clang++, llvm-ar, llvm-ranlib or wasm-ld is missing.
+Note that neither distribution provides compiler-rt for `wasm32-unknown-unknown`; that is
+invisible only because `-nostdlib` links no builtins, so a construct that needs one (128-bit
+division, an outlined `memcpy`) fails on both.
 
 Two link flags from the original Appendix C line are deliberately **absent**, and adding either
 back would be a regression: `--export-dynamic` (unreliable — exports are named individually

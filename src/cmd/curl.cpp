@@ -54,10 +54,10 @@ Task<i32> proc_main(Args args)
             co_await e;
         if (got.error() == Error::Perm)
             co_await write_all(SYS_STDERR,
-                               "curl: response is not accessible because the server did not grant cross-origin access\n");
+                               "curl: response is not accessible because the server did not grant "
+                               "cross-origin access\n");
         else if (got.error() == Error::Io)
-            co_await write_all(SYS_STDERR,
-                               "curl: no answer\n");
+            co_await write_all(SYS_STDERR, "curl: no answer\n");
         co_return 1;
     }
 

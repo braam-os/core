@@ -5,10 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-env:
-  WASI_SDK_VERSION: "33.0"
-  WASI_SDK_DIR: /opt/wasi-sdk-33.0
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,40 +19,23 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Cache wasi-sdk
-        id: wasi-sdk-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.WASI_SDK_DIR }}
-          key: wasi-sdk-${{ env.WASI_SDK_VERSION }}-x86_64-linux
-
-      - name: Install wasi-sdk
-        if: steps.wasi-sdk-cache.outputs.cache-hit != 'true'
+      # The distribution's clang, unversioned: llvm-ar and llvm-ranlib come from
+      # llvm, wasm-ld from lld. Nothing else from any of them is used.
+      - name: Install clang
         run: |
           set -euo pipefail
-          tag="wasi-sdk-${WASI_SDK_VERSION%%.*}"
-          url="https://github.com/WebAssembly/wasi-sdk/releases/download/${tag}/wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz"
-          curl -fsSL "$url" -o /tmp/wasi-sdk.tar.gz
-          # The tarball unpacks to wasi-sdk-<version>-<arch>-<os>/, so strip
-          # that level rather than depend on its name: WASI_SDK_DIR is what
-          # the cache key, the toolchain default and a local install all use.
-          sudo mkdir -p "$WASI_SDK_DIR"
-          sudo tar -xzf /tmp/wasi-sdk.tar.gz -C "$WASI_SDK_DIR" --strip-components=1
-          "$WASI_SDK_DIR/bin/clang++" --version
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm
 
       - name: Toolchain versions
-        run: cmake --version | head -1; make --version | head -1; node --version
-
-      - name: Check formatting
-        run: |
-          "$WASI_SDK_DIR/bin/clang-format" --dry-run -Werror \
-            $(find src test -name '*.cpp' -o -name '*.h')
+        run: clang++ --version | head -1; cmake --version | head -1; make --version | head -1; node --version
 
       # Same entry points a developer uses; the generator is Unix Makefiles,
-      # so nothing beyond cmake, make and node is needed. BRAAM_WERROR is on by
-      # default, so CI passes only the toolchain.
+      # so nothing beyond clang, cmake, make and node is needed. BRAAM_WERROR is
+      # on by default and the toolchain file finds clang on PATH, so CI passes
+      # no configure flags at all.
       - name: Build
-        run: make CMAKE_ARGS="-DBRAAM_LLVM=$WASI_SDK_DIR"
+        run: make
 
       - name: Test
         run: make run
