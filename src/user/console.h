@@ -27,20 +27,23 @@ constexpr usize KEY_WAIT = 64;
 // cancelled by it.
 constexpr usize CONSOLE_FG_MAX = 8; // Pipeline::MAX_STAGES
 
-// False when there are more pids than room. Arming also re-arms the cooked
-// input below, so a ^D ends one command's input rather than the console.
-bool console_fg_set(const u32 *pids, usize n);
-
-// One more, for a shell that puts a pipeline in front a stage at a time —
-// which is what Sys::Fg does, since the op word carries one pid. The input is
-// re-armed by the first of them and not by the rest.
-bool console_fg_add(u32 pid);
+// One pid, for a shell that puts a pipeline in front a stage at a time — which
+// is what Sys::Fg does, since the op word carries one. False when there are
+// more than room. The first arms the cooked input as well, so a ^D ends one
+// command's input rather than the console, and the rest do not.
+bool console_fg_add(u32 pid, u32 by);
 
 void console_fg_clear();
 
 usize console_fg_count();
 
 bool console_fg_has(u32 pid);
+
+// Who put what is in front there. The foreground belongs to whoever armed it:
+// a shell arms its stages one at a time and is not the keyboard's owner while
+// it does — it lets go before it spawns — so this is what says the second
+// stage is the same caller as the first (exec.cpp, Sys::Fg).
+u32 console_fg_owner();
 
 // How many times ^C has reached a foreground. The shell samples it around a
 // pipeline rather than being told, because the pump outlives every job now and

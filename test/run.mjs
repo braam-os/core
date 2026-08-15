@@ -1137,6 +1137,27 @@ if (mode === "--kernel") {
     if (others() !== 0)
         fail(`${others()} instances outlived their processes`);
 
+    // And ^C on a pipeline, which is the harder half of Sys::Fg: the shell arms
+    // its stages one at a time, having let the keyboard go before it spawned —
+    // so by the second call something is in front and the caller owns neither
+    // the keys nor what is there. Both stages have to be cancelled, or the
+    // prompt comes back with one still reading.
+    type("cat | wc");
+    press(KEY.ENTER);
+    if (run(9023) !== -1)
+        fail("a two-stage pipeline did not park");
+    if (others() !== 2)
+        fail(`${others()} instances for a two-stage pipeline, expected 2`);
+    s = submit("clear", 9024); // the ^C below needs the stages still running
+    press("c".codePointAt(0), CTRL);
+    if (run(9025) !== -1)
+        fail("^C on a pipeline left the scheduler with work to do");
+    s = descriptor(addr);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on a pipeline left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
+    if (others() !== 0)
+        fail(`${others()} stages outlived a ^C on the pipeline`);
+
     // A file that is not a program is refused before anything runs, and says
     // so differently from a name that is not there at all.
     s = submit("clear", 9030);
@@ -1558,6 +1579,97 @@ if (mode === "--kernel") {
         fail(`${others()} instances outlived the workers holding them`);
     net.release();
 
+    // The shell's own instance going away, which is what a lost worker will do
+    // to /bin/sh once it is a tier-3 binary: init notices its child *died*
+    // rather than exited and starts another (Concept.md §4). Killed from the
+    // host, since `kill` refuses anything that is not a child of the caller.
+    //
+    // The shell's pid is init's — it runs inside init's task rather than a job
+    // of its own — and /proc says so: a cwd is what only a program has. The tty
+    // pump is spawned first, so init is 2.
+    s = submit("clear", 9076);
+    s = submit("cat /proc/2", 9076.1);
+    if (!rows(s).some((line) => line.startsWith("name  init")))
+        fail(`/proc/2 is not init: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith("cwd   /home")))
+        fail(`/proc/2 has no cwd, so no process is there: ${JSON.stringify(rows(s))}`);
+
+    // Killed with state on it: a job in its table, and a foreground armed. A
+    // pipeline rather than one command, because a single child clears the
+    // console on its way out and a stage does not — the shell clears it after
+    // collecting, and that is the line the dead shell never reaches. It is
+    // parked on Sys::Wait meanwhile, so it learns nothing until the stage it is
+    // waiting for finishes, which is what the second run() is for.
+    s = submit("clear", 9076.2);
+    s = submit("sleep 60000 &", 9076.3);
+    if (!rows(s).some((line) => /^\[\d+\] \d+$/.test(line)))
+        fail(`the doomed shell did not announce the job: ${JSON.stringify(rows(s))}`);
+    type("sleep 1 | wc");
+    press(KEY.ENTER);
+    run(9076.4);
+
+    const live = net.proc.live();
+    net.proc.kill(2);
+    if (net.proc.live() !== live - 1)
+        fail("pid 2 is not the shell, so the case below would assert nothing");
+    run(9078); // the timer fires, the child exits, and the shell steps to collect it
+
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
+        fail(`a shell whose instance went away said ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`the replacement shell left ${row(s, s.cursor_y)}, expected a bare prompt`);
+    if (net.proc.live() !== 1)
+        fail(`${net.proc.live()} processes after the replacement, expected the shell alone`);
+
+    // ^C at its prompt, which is what init clearing the console foreground
+    // buys, and it has to be the *first* thing the replacement is asked to do:
+    // the pump cancels whatever is in front rather than asking whether it is
+    // still alive, and any command run here would clear the stale set on its
+    // way out. Without the clear the ^C is swallowed and the typed line
+    // survives it, which is what the second half asserts.
+    type("junk");
+    press("c".codePointAt(0), CTRL);
+    run(9079);
+    s = descriptor(addr);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on the replacement left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
+    s = submit("echo clean", 9079.1);
+    if (!rows(s).includes("clean"))
+        fail(`the abandoned line was still in the editor: ${JSON.stringify(rows(s))}`);
+
+    // A fresh shell, not the one that died: its table is empty, and what the
+    // dead one backgrounded went with it — a process's children are cancelled
+    // by its destructor.
+    s = submit("clear", 9079.2);
+    s = submit("jobs", 9079.3);
+    if (rows(s).some((line) => line.includes("sleep")))
+        fail(`the replacement inherited a job: ${JSON.stringify(rows(s))}`);
+
+    // And the other half of the console: the replacement arming a foreground of
+    // its own, and taking the screen back from a full-screen child.
+    type("sleep 60000");
+    press(KEY.ENTER);
+    run(9079.6);
+    press("c".codePointAt(0), CTRL);
+    run(9079.7);
+    s = descriptor(addr);
+    if (!rows(s).includes(prompt(130)))
+        fail(`^C on the replacement's foreground left ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 9079.8);
+    type("less /share/doc/README");
+    press(KEY.ENTER);
+    run(9079.9);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.includes("/share/doc/README") && line.includes("q quits")))
+        fail(`less under the replacement painted ${JSON.stringify(rows(s))}`);
+    press("q".codePointAt(0));
+    run(9080);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`less did not give the replacement its screen back: ${JSON.stringify(rows(s))}`);
+
     // The two ways the tier is lost, last of all: both give it up for the rest
     // of the run, and with every program a tier-3 binary that would leave
     // everything after them running one isolation weaker than it ships.
@@ -1570,10 +1682,10 @@ if (mode === "--kernel") {
     // waited for and would never have seen again. The screen is cleared before
     // the tier is broken, since `clear` is a program too and would otherwise be
     // the one that crashed.
-    s = submit("clear", 9076);
+    s = submit("clear", 9086);
     net.broken = true;
     net.proc.dropWorkers();
-    s = submit("spin 1", 9077);
+    s = submit("spin 1", 9087);
     if (!rows(s).some((line) => line.startsWith("braam: /bin/spin: crashed")))
         fail(`a worker that never loaded printed ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt(132))
@@ -1582,8 +1694,8 @@ if (mode === "--kernel") {
         fail("a worker that never loaded left tier 3 on");
 
     const made = net.links.length;
-    s = submit("clear", 9078);
-    s = submit("spin 1", 9079);
+    s = submit("clear", 9088);
+    s = submit("spin 1", 9089);
     if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
         fail(`the command after a broken worker printed ${JSON.stringify(rows(s))}`);
     if (net.links.length !== made)
@@ -1595,36 +1707,14 @@ if (mode === "--kernel") {
     net.workers = false;
     net.proc.dropWorkers();
     net.bound.length = 0;
-    s = submit("clear", 9080);
-    s = submit("spin 1", 9081);
+    s = submit("clear", 9090);
+    s = submit("spin 1", 9091);
     if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
         fail(`the tier-2 fallback printed ${JSON.stringify(rows(s))}`);
     if (net.bound.length !== 0)
         fail("the fallback still bound a worker");
     if (row(s, s.cursor_y) !== prompt())
         fail(`the fallback exited ${row(s, s.cursor_y)}, expected a bare prompt`);
-
-    // The shell's own instance going away, which is what a lost worker will do
-    // to /bin/sh once it is a tier-3 binary: init notices its child *died*
-    // rather than exited and starts another (Concept.md §4). Killed from the
-    // host, since `kill` refuses anything that is not a child of the caller.
-    s = submit("clear", 9090);
-    if (net.proc.live() !== 1)
-        fail(`${net.proc.live()} processes at a bare prompt, expected the shell alone`);
-    net.proc.kill(0); // init runs the shell with a default Executable, so pid 0 is it
-    if (net.proc.live() !== 0)
-        fail("pid 0 is not the shell, so the case below would assert nothing");
-
-    press(KEY.ENTER); // the shell steps to answer it, and learns it is gone
-    run(9091);
-    s = descriptor(addr);
-    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
-        fail(`a shell whose instance went away said ${JSON.stringify(rows(s))}`);
-    if (row(s, s.cursor_y) !== prompt())
-        fail(`the replacement shell left ${row(s, s.cursor_y)}, expected a bare prompt`);
-    s = submit("echo alive", 9092);
-    if (!rows(s).includes("alive"))
-        fail(`the replacement shell ran nothing: ${JSON.stringify(rows(s))}`);
 
     // exit ends the shell, and nothing runs after it. Last, for that reason.
     s = submit("clear", 9097);

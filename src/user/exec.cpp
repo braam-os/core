@@ -1646,8 +1646,12 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             // go of the keyboard before it spawns — the child would otherwise
             // lose the race for it — so "holds the keys" cannot be the whole
             // rule; "and nobody is in front" is what stops a background program
-            // taking ^C away from whatever is.
-            if (tty_keys_owner() != p.pid && !console_fg_has(p.pid) && console_fg_count()) {
+            // taking ^C away from whatever is. Nor is it enough: a pipeline is
+            // armed a stage at a time, so what is in front by the second call
+            // is what this caller put there, and the foreground belongs to
+            // whoever armed it.
+            if (tty_keys_owner() != p.pid && !console_fg_has(p.pid) && console_fg_count() &&
+                console_fg_owner() != p.pid) {
                 status = -i32(Error::Perm);
                 break;
             }
@@ -1665,7 +1669,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             // Added rather than replacing, because the op word carries one pid
             // and a pipeline is up to eight of them: a shell puts its stages in
             // front one call at a time, and ^C reaches all of them.
-            status = console_fg_add(want) ? 0 : -i32(Error::NoMemory);
+            status = console_fg_add(want, p.pid) ? 0 : -i32(Error::NoMemory);
             break;
         }
 

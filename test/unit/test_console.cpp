@@ -179,10 +179,11 @@ void test_console()
     CHECK(vpid != 0);
     settle();
     CHECK(alive);
-    CHECK(console_fg_set(&vpid, 1));
+    CHECK(console_fg_add(vpid, 1));
     CHECK_EQ(console_fg_count(), 1u);
     CHECK(console_fg_has(vpid));
     CHECK(!console_fg_has(vpid + 1000));
+    CHECK_EQ(console_fg_owner(), 1u); // whoever armed it, not what is in front
 
     dpid = sched_spawn(drain());
     CHECK(dpid != 0);
@@ -201,12 +202,14 @@ void test_console()
     CHECK_EQ(console_interrupts(), before + 1);
     CHECK(!alive);
 
-    // More pids than there is room for is refused rather than truncated.
-    u32 many[CONSOLE_FG_MAX + 1] = {};
-    CHECK(!console_fg_set(many, CONSOLE_FG_MAX + 1));
-    CHECK(console_fg_set(many, CONSOLE_FG_MAX));
+    // One more than there is room for is refused rather than dropped.
+    console_fg_clear();
+    for (usize i = 0; i < CONSOLE_FG_MAX; i++)
+        CHECK(console_fg_add(u32(i + 1), 1));
+    CHECK(!console_fg_add(CONSOLE_FG_MAX + 1, 1));
     console_fg_clear();
     CHECK_EQ(console_fg_count(), 0u);
+    CHECK_EQ(console_fg_owner(), 0u);
 
     sched_reset();
 }

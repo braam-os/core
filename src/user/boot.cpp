@@ -203,7 +203,7 @@ Task<void> boot_filesystem()
         co_await t;
 }
 
-Task<i32> init_task()
+Task<i32> init_task(const u32 &pid)
 {
     // The mounts come first, and they always did — but the shell used to do
     // them. It cannot any more: it is a file in /bin, and /bin is one of them.
@@ -229,6 +229,11 @@ Task<i32> init_task()
             no_shell(found.error());
             co_return 1;
         }
+        // Init's own, and every replacement takes it again: the record under it
+        // is removed and the host is told before this loop comes round, since
+        // ~End calls proc_remove and proc_kill, and proc_kill is a host_svc
+        // with nothing to await.
+        exe.pid = pid;
 
         // Only now, with a shell that is going to run: a system with no prompt
         // coming should show why, not a greeting above a dead terminal. Once,

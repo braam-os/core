@@ -7,6 +7,69 @@ of the two needs amending.
 
 ---
 
+## The shell gets a pid, and `Sys::Fg` gets the rule it meant
+
+Init ran `/bin/sh` from a default-constructed `Executable` and nothing ever filled `exe.pid` in, so
+the shell answered to **0** — which is this system's word for *no pid*. `sched_spawn` returns 0
+when it fails, `tty_keys_owner()` and `tty_screen_owner()` return 0 for "nobody holds it",
+`SYS_WAIT_ANY` is 0, `Fg(0)` means "clear the foreground", and `link.pid = 0` is `web/proc.js`'s
+"no process in this worker". One process answering to all of that is a collision waiting for T8,
+which puts a worker behind that pid for the first time.
+
+The shell now takes **init's** pid, because that is what it is: a process running inside init's
+task rather than a job of its own. `main.cpp` passes a namespace-scope `u32` to `init_task` by
+reference and fills it in once `sched_spawn` has said what it is — the same trick `exec.cpp` uses
+to hand a stage its pid, and it works for the same reason: a `Task` is lazy, so the body has not
+looked yet. Every replacement shell takes that pid again, which is safe because the record under it
+is gone first: `~End` calls `proc_remove` and then `proc_kill`, and `proc_kill` is a bare `host_svc`
+with nothing to await, so the host's entry is deleted inside that call rather than a tick later.
+
+`/proc/<init>` grows a `cwd` line as a result, which is right — that job *is* the shell for all but
+its first few ticks — and it is what `test/run.mjs` now asserts before killing the shell, so the
+literal 2 in that case is justified rather than assumed.
+
+### What the pid was hiding
+
+`Sys::Fg` refuses a caller that does not own the terminal: *holding the raw keys, or being in front
+itself, or nobody being in front*. A shell satisfies none of those from its second pipeline stage
+onwards — it lets go of the keyboard before it spawns (a full-screen child claims the keys in its
+first step, so handing them over afterwards is a race the child loses), and by then stage one is in
+front. It passed anyway, because `tty_keys_owner()` returned 0 for "nobody" and the shell's pid was
+also 0. **The check was being satisfied by a coincidence of sentinels**, and giving the shell a real
+pid turned `^C` on a two-stage pipeline into a prompt with a stage still reading.
+
+The repair is the clause the rule was missing: *or what is in front is what you put there*. The
+console records who armed the foreground — one `u32`, set when the set goes from empty and cleared
+with it — and `console_fg_owner()` is the fourth clause. That is a rule that says what it means,
+rather than one inferred from a keyboard the caller has deliberately let go of. Concept.md §4.3 and
+System_Calls.md both say so now.
+
+Nothing had covered it: every `^C` case in the suite was a single-stage command, and arming stage
+one is allowed whatever the guard says. `cat | wc` with a `^C` is the new case, and it fails
+without the clause.
+
+`console_fg_set` — the array form — went with the change. It had no caller but its own unit test,
+left over from when the shell was kernel code, and a second path into the same state is a second
+path to keep consistent.
+
+### The replaced shell, covered rather than eyeballed
+
+T7's respawn case proved a replacement appears. It now proves the replacement is a *whole* shell:
+its job table is empty and what the dead one backgrounded went with it, `^C` at its prompt abandons
+the line, `^C` on a foreground it armed itself cancels it, and `less` takes and gives back the
+screen. It also moved ahead of the two tier-loss cases, so all of that runs at the tier the system
+ships rather than at the tier-2 fallback.
+
+Two things about that case are worth knowing before editing it. The shell has to be killed while a
+**pipeline** is in front, not a single command: a lone foreground child clears the console on its
+way out (`~Report`), while a pipeline's stages do not — nothing removes one pid from the set, so
+the shell clearing it after collecting is the only thing that ever does, and that is precisely the
+line the dead shell never reaches. And the `^C` has to be the **first** thing asked of the
+replacement, because any command it runs would clear the stale set on its own way out. Both were
+found by disabling init's `console_fg_clear()` and watching the case still pass.
+
+---
+
 ## Init replaces a shell that died
 
 [doc/TODO.md](TODO.md) T7, and the design question T8 is waiting on: what happens to `/bin/sh`

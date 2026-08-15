@@ -18,4 +18,7 @@ constexpr Str MOTD = "/share/motd";
 
 Task<void> boot_filesystem();
 
-Task<i32> init_task();
+// `pid` is init's own, which is the shell's: it runs inside init's task rather
+// than a job of its own. Read a tick after this is called, so the caller may
+// fill it in once sched_spawn has told it what the pid is.
+Task<i32> init_task(const u32 &pid);

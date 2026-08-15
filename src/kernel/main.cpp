@@ -13,6 +13,7 @@
 #include "sched.h"
 #include "screen.h"
 #include "str.h"
+#include "traits.h"
 #include "user/boot.h"
 #include "user/console.h"
 #include "user/exec.h"
@@ -21,6 +22,17 @@
 // Runs the static constructors. --no-entry leaves it uncalled, so the kernel
 // calls it itself. The symbol is hidden, so this adds no export.
 extern "C" void __wasm_call_ctors();
+
+namespace {
+
+// The shell's pid, which is init's: /bin/sh is a process inside init's task
+// rather than a job of its own. Written once sched_spawn has said what it is
+// and read a tick later, when the body first runs — a Task is lazy, so nothing
+// has looked yet. Zero is what sched_spawn returns when it fails and what the
+// terminal claims mean by "nobody", so a process must not answer to it.
+u32 g_init_pid = 0;
+
+} // namespace
 
 BRAAM_EXPORT("init") void init(u32 heap_base)
 {
@@ -63,7 +75,9 @@ BRAAM_EXPORT("init") void init(u32 heap_base)
 
     // The mounts, and then /bin/sh — a program like any other, with no shell
     // left in here to be the exception (Concept.md §4).
-    if (!sched_spawn(init_task(), "init"))
+    Task<i32> t = init_task(g_init_pid);
+    g_init_pid  = sched_spawn(move(t), "init");
+    if (!g_init_pid)
         panic("braam: init would not spawn");
 }
 

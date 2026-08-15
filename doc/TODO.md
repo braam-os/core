@@ -352,6 +352,23 @@ either side so it cannot quietly stop testing anything.
 **What T8 can now rely on:** losing the tier under a running `/bin/sh` costs a shell rather than
 the session, whichever way the worker goes.
 
+**And the shell has a pid.** Init ran it with a default-constructed `Executable`, so it answered to
+0 — which is what `sched_spawn` returns on failure, what the terminal claims mean by "nobody", what
+`SYS_WAIT_ANY` is, and what `link.pid = 0` means in `web/proc.js`. T8 puts a worker behind that pid,
+so the collision was worth closing first: the shell takes init's pid now, since it is a process
+inside init's task rather than a job of its own.
+
+That turned up one thing the sentinel was hiding. `Sys::Fg` refuses a caller that does not own the
+terminal, and a shell owns none of it from its second pipeline stage onwards — it lets go of the
+keys before spawning, and stage one is in front by then. It passed only because
+`tty_keys_owner()` and its own pid were both 0. The rule gained the clause it meant — *or what is in
+front is what you put there*, recorded by the console and read through `console_fg_owner()` — and
+`cat | wc` with a `^C` is the case that would have caught it. §4.3 and System_Calls.md say so.
+
+The respawn case also moved ahead of the two tier-loss cases and grew `jobs`, `^C` at the prompt,
+`^C` on a foreground of its own, and `less`: the replacement is a whole shell, asserted at the tier
+the system ships rather than at the fallback.
+
 ## T8. Flip the shell
 
 After T7 and not before.

@@ -106,6 +106,13 @@ the documents the change made false. What did move is the test driver's model of
 spawning program binds its own worker before its child's, and the two cases that give the tier up
 run last so that everything before them runs at the tier it ships at.
 
+**And the shell got a pid.** It answered to 0, which is what `sched_spawn` returns on failure and
+what the terminal claims mean by "nobody" — so `Sys::Fg`'s "nobody holds the keys" clause passed for
+a coincidence of sentinels rather than for a reason, and T8 was about to put a worker behind that
+pid. It takes init's pid now, and the rule gained the clause it meant: the foreground belongs to
+whoever armed it. `cat | wc` with a `^C` is the case that would have caught the difference, and
+nothing like it existed.
+
 **And init started replacing the shell.** doc/TODO.md T7, the design question T8 waits on: a
 tier-3 process dies with its worker and there is no falling a running one back, so once `/bin/sh`
 is one of them a lost worker would be the session rather than a command. `init_task` is a loop
@@ -346,6 +353,19 @@ Further constraints that are easy to violate by habit:
   not.** The foreground is a set of pids armed with `Sys::Fg`; a shell arms its stages before it
   waits, and at a prompt arms nothing, so the interrupt arrives as an ordinary key and abandons
   the line. Without that split a shell that is a process would be killed by its own `^C`.
+
+  **The foreground belongs to whoever armed it**, which is the fourth clause of `Sys::Fg`'s
+  authorisation and the only one that lets a shell arm a *pipeline*: it lets the keyboard go
+  before it spawns, so from the second stage on it holds neither the keys nor a place in the set
+  it is filling (§4.3). Nothing removes one pid from that set either — the shell clears it after
+  collecting, and init clears it between shells, and those are the only two things that do.
+
+  **0 is not a pid.** It is what `sched_spawn` returns on failure, what `tty_keys_owner()` and
+  `tty_screen_owner()` mean by "nobody", what `SYS_WAIT_ANY` is, what `Fg(0)` means, and what
+  `link.pid = 0` means in `web/proc.js`. `/bin/sh` used to answer to it — init ran it from a
+  default-constructed `Executable` — which made `Sys::Fg`'s "nobody holds the keys" clause pass
+  for the wrong reason. It takes init's pid now, since it is a process inside init's task rather
+  than a job of its own, and `/proc/<init>` shows its cwd for the same reason.
 
   Each of the two routes has **one holder, and a second claim is `Err(Perm)` rather than a
   nested one**, named by the pid that took it. A claim clears its route only if it is still the

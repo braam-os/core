@@ -684,8 +684,10 @@ has the alternate screen paints its own cells and names their colours in them.
 them all on `^C`, and delivers the interrupt as an ordinary key to whoever holds the raw route
 when the set is empty (Concept.md §3.5). Each call *adds* one pid, because the op word carries
 one and a pipeline is up to eight; `Fg(0)` clears the set. The caller must own the terminal —
-holding the raw keys, or being in front itself, or nobody being in front — and the pid must be
-one of its own children, exactly as `Kill` requires. `/bin/sh` is the caller, and the reason the
+holding the raw keys, being in front itself, nobody being in front, or having armed what is in
+front — and the pid must be one of its own children, exactly as `Kill` requires. The last clause
+is what lets a shell arm a pipeline: it lets go of the keys before it spawns, so from the second
+stage on it owns none of the other three. `/bin/sh` is the caller, and the reason the
 operation exists: without it a shell that is a process is cancelled by the interrupt meant for
 the command it just ran.
 

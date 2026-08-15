@@ -13,6 +13,7 @@ namespace {
 // block built on first use rather than a namespace-scope Channel.
 u32 g_fg[CONSOLE_FG_MAX];
 usize g_fg_n      = 0;
+u32 g_fg_by       = 0; // who armed it
 u32 g_interrupts  = 0;
 Pipe *g_cooked_in = nullptr;
 
@@ -40,30 +41,22 @@ void rearm()
 
 } // namespace
 
-bool console_fg_set(const u32 *pids, usize n)
-{
-    if (n > CONSOLE_FG_MAX)
-        return false;
-    for (usize i = 0; i < n; i++)
-        g_fg[i] = pids[i];
-    g_fg_n = n;
-    rearm();
-    return true;
-}
-
-bool console_fg_add(u32 pid)
+bool console_fg_add(u32 pid, u32 by)
 {
     if (g_fg_n >= CONSOLE_FG_MAX)
         return false;
-    if (!g_fg_n)
+    if (!g_fg_n) {
+        g_fg_by = by;
         rearm();
+    }
     g_fg[g_fg_n++] = pid;
     return true;
 }
 
 void console_fg_clear()
 {
-    g_fg_n = 0;
+    g_fg_n  = 0;
+    g_fg_by = 0;
 }
 
 usize console_fg_count()
@@ -77,6 +70,11 @@ bool console_fg_has(u32 pid)
         if (g_fg[i] == pid)
             return true;
     return false;
+}
+
+u32 console_fg_owner()
+{
+    return g_fg_n ? g_fg_by : 0;
 }
 
 u32 console_interrupts()

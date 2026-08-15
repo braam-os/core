@@ -697,10 +697,13 @@ prompt is a program now, and both are the terminal rather than the process:
 
 `fg` is authorised the way `kill` is, and then some: the pid must be a child of the caller, and
 the caller must have the terminal already — it holds the raw keys, or it is itself in front, or
-nobody is. That last clause is not slack. A shell must let go of the keyboard *before* it spawns,
-because a child is a scheduler job that runs as soon as the shell next parks and a full-screen
-program claims the keys in its very first step; handing them over afterwards is a race the child
-loses.
+nobody is, or **what is in front is what it put there**. The last two clauses are not slack. A
+shell must let go of the keyboard *before* it spawns, because a child is a scheduler job that runs
+as soon as the shell next parks and a full-screen program claims the keys in its very first step;
+handing them over afterwards is a race the child loses. And it arms a pipeline a stage at a time,
+so from the second call onwards something *is* in front and the shell holds neither the keys nor a
+place in the set it is filling. The foreground therefore belongs to whoever armed it, and the
+console records that rather than inferring it from who holds the keyboard.
 
 **A colour took one more: `style`.** The table is thirty-five, and `PROC_ABI` is 5. §2.3 says the
 terminal is a cell grid rather than a byte stream, so a colour cannot be written *in* the bytes —
