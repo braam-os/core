@@ -7,6 +7,116 @@ of the two needs amending.
 
 ---
 
+## An SDK after all
+
+"Plain clang, and no SDK" below is about the *toolchain* — that nothing is taken from a
+distribution but the compiler. This is the other sense of the word, and it was missing: there
+was no way to write a program for Braam without being inside this repository. The recipe that
+turns `echo.cpp` into `/bin/echo` was an inline `foreach` body in `src/cmd/CMakeLists.txt`, the
+include path was `${CMAKE_SOURCE_DIR}/src`, and there was no `install()` anywhere in the tree.
+
+Nothing about the system required that. `exec_resolve` reads an image through the ordinary VFS
+against the caller's working directory, and `exec_meta` accepts anything with a well-formed
+stamp at the current `PROC_ABI` — so a `.wasm` that arrives at runtime, through `import` or
+down a `curl`, is already a command. What was missing was only the means to produce one. `make
+install` and `braam-sdk-<version>.zip` are that means, and the whole of it is headers, two
+static libraries, a CMake package and `stamp.py`.
+
+### One recipe, not a copy of it
+
+`braam_add_program()` in `cmake/BraamProgram.cmake` is the old loop body, moved. `src/cmd/`
+calls it for all thirty-two programs and the SDK installs the same file, so an out-of-tree
+program is built by the same code rather than by a description of it that can fall behind. The
+one thing the in-tree call site still adds is the tier map; the one thing it lost is the
+per-binary size budget, removed separately.
+
+That refactor is verifiable in a way a rewritten recipe would not be: `hello.wasm` built out of
+tree against an unpacked archive is byte-identical to the same file built in tree.
+
+### What is installed, and what is not
+
+`braam_proc` and `braam_ui`, and no more. `braam_core`, `braam_fs`, `braam_svc` and `braam_user`
+each carry a host import, and `test/run.mjs` asserts that no binary imports anything but
+`env.memory`, `kernel.sys` and `kernel.sys_async` — so shipping them would offer a consumer a
+link that produces a binary the kernel refuses to run.
+
+Headers go to `include/braam/` rather than `include/`, because the directories under them are
+`kernel/`, `fs/`, `proc/` and `ui/`, and those cannot be dropped into `/usr/local/include`.
+Whole directories are installed rather than the include closure of `proc/io.h`: the closure is
+a list, and a list would fall behind. Layout inside is load bearing — an include within a
+directory is a bare name — so the four keep their shape and the SDK's single `-I` is
+`include/braam`.
+
+The paths are fixed rather than `GNUInstallDirs`, because the same tree is zipped and unpacked
+anywhere and the package finds itself by walking up from `lib/cmake/braam`; a distribution that
+said `lib64` would break that walk for no gain.
+
+### Three things that only bite out of tree
+
+The interesting part of the work was not the `install()` rules; it was discovering what the
+project had been supplying to its own targets without saying so.
+
+**The C++ standard.** `CMAKE_CXX_STANDARD 20` is a project setting, so a consumer got the
+compiler's default and failed inside `task.h`, where `Task` is a coroutine type. It is now
+`target_compile_features(braam_flags INTERFACE cxx_std_20)`: a property of the headers, which
+is what it always was.
+
+**The build type.** Freestanding, an unoptimised build does not link — `__builtin_strlen` on a
+literal and an outlined `memcpy` become calls to functions nothing provides. In tree that was
+invisible because the root defaulted `CMAKE_BUILD_TYPE` to `MinSizeRel`. The default moved into
+the toolchain file, where it applies to everyone who uses the toolchain, and it is a `CACHE`
+entry without `FORCE` so `-DCMAKE_BUILD_TYPE=` from the command line still wins.
+
+**`-Werror`.** Inherited from an installed interface it is hostile: a consumer's code would be
+held to this tree's warning policy by a library it linked. It is now
+`$<BUILD_INTERFACE:-Werror>`, so the tree stays warning-clean and the SDK stays polite.
+
+There is a fourth, smaller: `find_package(braam)` cannot search under
+`CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY` with no root path. Rather than invent a root, the
+installed toolchain file sets `braam_DIR` to its own directory when `braamConfig.cmake` sits
+beside it — which is true of the installed copy and false of the one in the source tree, so one
+file serves both.
+
+### `stamp.py --sysabi`
+
+The stamp carries the process ABI, and `stamp.py` reads `PROC_ABI` out of `sysabi.h` rather
+than restating it — that is what makes a stale binary say `built for another process ABI`
+instead of crashing. The installed copy has no `src/` tree to read, so the header is named on
+the command line and the recipe always passes it. The alternative, baking the number into the
+installed script, would have reintroduced exactly the copy the original design avoided.
+
+### An example that cannot rot
+
+`examples/hello/` is installed as the worked example *and* built by the ordinary build, from
+one `CMakeLists.txt` that finds the SDK only if the targets are not already defined. A sample
+that is not compiled is a sample that is wrong within a few commits.
+
+What this does not do is prove the *installed* tree is complete — that would take a test that
+installs to a temporary prefix and builds against it, which is a nested configure on every
+`make run`. The judgement was that the example's in-tree build catches source rot, which is
+frequent, and that install rules change rarely enough to check by hand at release time.
+
+### Two archives
+
+`make release` now emits `braam-sdk-<version>.zip` beside the site's. A directory inside the
+site archive was the alternative and was rejected: the site is what a web root serves, and an
+install tree is not part of it. The SDK archive is staged by installing into `build/sdk`, so
+the zip and `make install` cannot disagree about what the SDK is, and `release.py` grew only
+`--name` and `--require` to describe a tree that is not a site.
+
+## No budget for a program
+
+The per-binary lines in `tools/size_budget.txt` are gone, along with the POST_BUILD check
+behind them. What they were for was making §4.4's duplication visible — every binary carries
+its own allocator, string types and coroutine runtime — but `bundle.bin` already shows that in
+one number, and it is the number that matters, since the archive is awaited before the first
+prompt. Thirty-two limits underneath it caught nothing the archive's own limit would not, and
+each was a line to edit whenever a program legitimately grew.
+
+Two entries remain, `kernel.wasm` and `bundle.bin`. CI still reports every binary's size into
+the job summary, now with `--report`, under which a file with no budget is printed rather than
+refused: measured, not bounded.
+
 ## Plain clang, and no SDK
 
 wasi-sdk is gone from the build. It was never used as an SDK — §3.1 has said from M0 that the

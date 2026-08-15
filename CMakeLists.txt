@@ -8,9 +8,8 @@ if(NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "wasm32")
         "  cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/wasm32-unknown-unknown.cmake")
 endif()
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "" FORCE)
-endif()
+# The build type comes from the toolchain file, which defaults it to MinSizeRel
+# for everyone who uses it: an unoptimised freestanding build does not link.
 
 option(BRAAM_WERROR "Treat warnings as errors" ON)
 
@@ -20,14 +19,31 @@ set(CMAKE_CXX_EXTENSIONS ON)          # statement expressions, used by TRY()
 
 set(BRAAM_STACK_SIZE 131072 CACHE STRING "Shadow stack size in bytes")
 
+# Where `make install` puts the SDK, relative to the prefix. Fixed paths, not
+# GNUInstallDirs: the tree is zipped and unpacked anywhere, and the package
+# finds itself by walking up from lib/cmake/braam.
+set(BRAAM_INSTALL_INCLUDEDIR  include/braam)
+set(BRAAM_INSTALL_LIBDIR      lib/braam)
+set(BRAAM_INSTALL_CMAKEDIR    lib/cmake/braam)
+set(BRAAM_INSTALL_LIBEXECDIR  libexec/braam)
+set(BRAAM_INSTALL_EXAMPLESDIR share/braam/examples)
+set(BRAAM_INSTALL_DOCDIR      share/doc/braam)
+
 # Flags shared by every wasm target.
 add_library(braam_flags INTERFACE)
+
+# On the interface, not just the project: Task is a coroutine type, so a
+# consumer at the compiler's default would fail inside task.h.
+target_compile_features(braam_flags INTERFACE cxx_std_20)
+
 target_compile_options(braam_flags INTERFACE
     -fno-exceptions -fno-rtti -fno-threadsafe-statics
     -ffunction-sections -fdata-sections
     -Wall -Wextra -Wshadow)
+# Build-interface only: the SDK must not impose this tree's warning policy on
+# a consumer's code.
 if(BRAAM_WERROR)
-    target_compile_options(braam_flags INTERFACE -Werror)
+    target_compile_options(braam_flags INTERFACE $<BUILD_INTERFACE:-Werror>)
 endif()
 
 # No --allow-undefined: an accidental libc dependency must fail at link.
@@ -39,7 +55,10 @@ target_link_options(braam_flags INTERFACE
     -Wl,--stack-first
     -Wl,-z,stack-size=${BRAAM_STACK_SIZE})
 
-target_include_directories(braam_flags INTERFACE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/gen)
+target_include_directories(braam_flags INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/gen>
+    $<INSTALL_INTERFACE:${BRAAM_INSTALL_INCLUDEDIR}>)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -62,7 +81,21 @@ add_subdirectory(src/ui)
 add_subdirectory(src/user)
 add_subdirectory(src/proc)
 add_subdirectory(src/sh)
+
+# The program recipe, shared with the SDK: it names the targets a consumer
+# imports, so this tree aliases them to the same names.
+add_library(braam::proc  ALIAS braam_proc)
+add_library(braam::ui    ALIAS braam_ui)
+add_library(braam::flags ALIAS braam_flags)
+set(BRAAM_STAMP ${CMAKE_SOURCE_DIR}/tools/stamp.py)
+set(BRAAM_SYSABI ${CMAKE_SOURCE_DIR}/src/kernel/sysabi.h)
+include(cmake/BraamProgram.cmake)
+
 add_subdirectory(src/cmd)
+
+# Built like any other program, and not packed into the bundle: it is the SDK's
+# worked example, and compiling it here is what keeps it from rotting.
+add_subdirectory(examples/hello)
 
 # kernel.wasm — main.cpp holds the exports, so it links into the executable
 # directly; --gc-sections would not pull it out of an archive.
@@ -94,13 +127,15 @@ foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
                 $<TARGET_FILE:bin_${prog}> ${BRAAM_BUNDLE_STAGE}/bin/${prog})
 endforeach()
 
+# The kernel and the boot archive. A program is measured but not bounded: what
+# one costs is §4.4's duplication, which the archive's number already shows.
 set(BRAAM_SIZE_BUDGET_CHECK
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
     --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt
-    $<TARGET_FILE:kernel> ${BRAAM_BINARIES} ${CMAKE_BINARY_DIR}/web/bundle.bin)
+    $<TARGET_FILE:kernel> ${CMAKE_BINARY_DIR}/web/bundle.bin)
 
-# Only the kernel here: the binaries are checked by their own POST_BUILD, and
-# BRAAM_SIZE_BUDGET_CHECK covers everything from the `size` test.
+# Only the kernel here: BRAAM_SIZE_BUDGET_CHECK covers the archive too, from
+# the `size` test, and it cannot run before the archive is packed.
 add_custom_command(TARGET kernel POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
             --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt $<TARGET_FILE:kernel>
@@ -127,16 +162,65 @@ add_custom_target(serve
     USES_TERMINAL
     COMMENT "Serving ${CMAKE_BINARY_DIR}/web at http://localhost:8080/")
 
-# The deployable archive: build/web/ as it stands, under one versioned
-# directory. Not in ALL — an ordinary build should not repack it.
+# The SDK — doc/Programming_Manual.md. Two libraries and no more: braam_core,
+# braam_fs, braam_svc and braam_user each carry a host import no binary may have.
+install(TARGETS braam_proc braam_ui braam_flags
+        EXPORT braam-targets
+        ARCHIVE DESTINATION ${BRAAM_INSTALL_LIBDIR})
+set_target_properties(braam_proc  PROPERTIES EXPORT_NAME proc)
+set_target_properties(braam_ui    PROPERTIES EXPORT_NAME ui)
+set_target_properties(braam_flags PROPERTIES EXPORT_NAME flags)
+install(EXPORT braam-targets
+        NAMESPACE braam::
+        DESTINATION ${BRAAM_INSTALL_CMAKEDIR})
+
+# Whole directories rather than proc/io.h's include closure, which would fall
+# behind. Layout preserved: an include within a directory is a bare name.
+foreach(dir kernel fs proc ui)
+    install(DIRECTORY src/${dir}/
+            DESTINATION ${BRAAM_INSTALL_INCLUDEDIR}/${dir}
+            FILES_MATCHING PATTERN "*.h")
+endforeach()
+# Generated, and kernel/version.h includes it: the SDK names the revision it
+# was cut from.
+install(FILES ${BRAAM_REVISION_HEADER} DESTINATION ${BRAAM_INSTALL_INCLUDEDIR}/kernel)
+
+include(CMakePackageConfigHelpers)
+set(BRAAM_CONFIG ${CMAKE_BINARY_DIR}/gen/cmake/braamConfig.cmake)
+configure_package_config_file(
+    cmake/braamConfig.cmake.in ${BRAAM_CONFIG}
+    INSTALL_DESTINATION ${BRAAM_INSTALL_CMAKEDIR}
+    PATH_VARS BRAAM_INSTALL_INCLUDEDIR BRAAM_INSTALL_LIBEXECDIR BRAAM_INSTALL_EXAMPLESDIR)
+install(FILES ${BRAAM_CONFIG}
+              cmake/BraamProgram.cmake
+              cmake/wasm32-unknown-unknown.cmake
+        DESTINATION ${BRAAM_INSTALL_CMAKEDIR})
+
+install(PROGRAMS tools/stamp.py DESTINATION ${BRAAM_INSTALL_LIBEXECDIR})
+install(DIRECTORY examples/hello DESTINATION ${BRAAM_INSTALL_EXAMPLESDIR})
+install(FILES doc/Programming_Manual.md LICENSE DESTINATION ${BRAAM_INSTALL_DOCDIR})
+
+# Two archives, each under one versioned directory: the site, and the SDK. Not
+# in ALL — an ordinary build should not repack them. The SDK is staged by
+# installing into build/sdk, so the zip and `make install` cannot disagree; like
+# build/web/, that stage is never emptied, so release from a clean tree.
 add_custom_target(release
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/release.py
             ${CMAKE_BINARY_DIR}/web ${CMAKE_BINARY_DIR}
             --version-file ${BRAAM_VERSION_SOURCE}
             --extra ${CMAKE_SOURCE_DIR}/LICENSE
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR}
+            --prefix ${CMAKE_BINARY_DIR}/sdk
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/release.py
+            ${CMAKE_BINARY_DIR}/sdk ${CMAKE_BINARY_DIR}
+            --version-file ${BRAAM_VERSION_SOURCE}
+            --name braam-sdk
+            --require ${BRAAM_INSTALL_CMAKEDIR}/braamConfig.cmake
+            --require ${BRAAM_INSTALL_LIBDIR}/libbraam_proc.a
+            --require ${BRAAM_INSTALL_INCLUDEDIR}/proc/io.h
     DEPENDS web
     VERBATIM
-    COMMENT "Packing ${CMAKE_BINARY_DIR}/web into a deployable archive")
+    COMMENT "Packing the site and the SDK into deployable archives")
 
 include(CTest)
 if(BUILD_TESTING)

@@ -987,9 +987,13 @@ only such case.
 
 ### Building it
 
-One line in `src/cmd/CMakeLists.txt`'s `BRAAM_BIN_LIST`, and the loop does the rest: link against
-`braam_proc`, `--import-memory` with `--initial-memory` set from `BRAAM_BIN_INITIAL_PAGES`, then
-`tools/stamp.py` and a size-budget check.
+One line in `src/cmd/CMakeLists.txt`'s `BRAAM_BIN_LIST`, and `braam_add_program` does the rest:
+link against `braam_proc`, `--import-memory` with `--initial-memory` set from
+`BRAAM_BIN_INITIAL_PAGES`, then `tools/stamp.py`.
+
+That is the in-tree half. The same function is installed by `make install` and shipped in
+`braam-sdk-<version>.zip`, so a program can be built outside this repository and dropped onto a
+running system without rebuilding it — [Programming_Manual.md](Programming_Manual.md) is that story.
 
 `--import-memory` with no declared maximum is what makes the 16 MB cap the kernel's decision.
 `-Wl,--max-memory=16777216` would also work and would be the *binary's* number; this way a binary
@@ -997,7 +1001,7 @@ cannot ask for more by being compiled differently.
 
 ### Asking for tier 3
 
-One more line:
+One more line, which the recipe turns into `TIER 3`:
 
 ```cmake
 set(BRAAM_BIN_TIER_spin 3)

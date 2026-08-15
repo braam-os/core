@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check wasm binaries against the recorded size budgets."""
+"""Check wasm binaries against the recorded size budgets.
+
+With --report, a file with no budget is printed rather than refused: the
+programs are measured and not bounded, and CI reports every one of them.
+"""
 
 import argparse
 import os
@@ -23,6 +27,7 @@ def read_budgets(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--budgets", required=True)
+    ap.add_argument("--report", action="store_true", help="an unbudgeted file is not an error")
     ap.add_argument("binaries", nargs="+")
     args = ap.parse_args()
 
@@ -34,6 +39,9 @@ def main():
         size = os.path.getsize(path)
         limit = budgets.get(name)
         if limit is None:
+            if args.report:
+                print(f"{name} {size:,} bytes")
+                continue
             print(f"{name}: no budget recorded in {args.budgets}", file=sys.stderr)
             failed = True
             continue

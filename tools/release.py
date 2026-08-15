@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Pack a built site into a deployable archive.
+"""Pack a built tree into a versioned archive: the site, or the SDK.
 
-    release.py <webdir> <outdir> --version-file <version.h> [--extra <file>...]
+    release.py <dir> <outdir> --version-file <version.h>
+               [--name <stem>] [--require <path>...] [--extra <file>...]
 
-The archive is braam-<version>.zip, holding one directory of that name, so it
+The archive is <stem>-<version>.zip, holding one directory of that name, so it
 unpacks beside whatever else a web root already has. Entries are sorted and
 timestamped alike, so one tree gives one archive, byte for byte.
 """
@@ -33,19 +34,22 @@ def collect(root: Path, extras):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("webdir", type=Path)
+    ap.add_argument("root", type=Path)
     ap.add_argument("outdir", type=Path)
     ap.add_argument("--version-file", type=Path, required=True)
+    ap.add_argument("--name", default="braam")
+    ap.add_argument("--require", action="append", default=None)
     ap.add_argument("--extra", type=Path, action="append", default=[])
     args = ap.parse_args(argv[1:])
 
-    files = collect(args.webdir, args.extra)
+    required = REQUIRED if args.require is None else args.require
+    files = collect(args.root, args.extra)
     names = {name for name, _ in files}
-    missing = [name for name in REQUIRED if name not in names]
+    missing = [name for name in required if name not in names]
     if missing:
-        sys.exit(f"release.py: {args.webdir} is not a built site: no {', '.join(missing)}")
+        sys.exit(f"release.py: {args.root} is incomplete: no {', '.join(missing)}")
 
-    prefix = f"braam-{version_of(args.version_file)}"
+    prefix = f"{args.name}-{version_of(args.version_file)}"
     out = args.outdir / f"{prefix}.zip"
     out.parent.mkdir(parents=True, exist_ok=True)
 

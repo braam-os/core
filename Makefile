@@ -17,7 +17,11 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 # macOS ships `open`, most Linux desktops `xdg-open`.
 BROWSER := $(firstword $(foreach c,open xdg-open,$(shell command -v $(c) 2>/dev/null)))
 
-.PHONY: all run serve wsd release clean
+# Where `make install` puts the SDK: the system prefix if it is ours to write
+# to, the user's otherwise. Override with PREFIX=<dir>.
+PREFIX ?= $(shell test -w /usr/local && echo /usr/local || echo $(HOME)/.local)
+
+.PHONY: all run serve wsd install release clean
 
 all: $(BUILD)/CMakeCache.txt
 	@cmake --build $(BUILD) -j $(JOBS)
@@ -35,8 +39,13 @@ endif
 	 trap "kill $$! 2>/dev/null" EXIT INT TERM; \
 	 cmake --build $(BUILD) --target serve
 
-# build/web/ as a zip, to unpack on a web server. Pack a clean tree: the web
-# target copies into build/web/ and never deletes from it.
+# The SDK — headers, the two libraries a program links, the CMake package and
+# the hello example. See doc/Programming_Manual.md.
+install: all
+	@cmake --install $(BUILD) --prefix $(PREFIX)
+
+# build/web/ as a zip, to unpack on a web server, and the SDK as a second one.
+# Pack a clean tree: both stages are copied into and never deleted from.
 release: all
 	@cmake --build $(BUILD) --target release
 

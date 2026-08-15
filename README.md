@@ -106,7 +106,8 @@ will do.
 make            # build the kernel, the binaries and the tests
 make run        # run the tests
 make serve      # serve the site and open it in a browser
-make release    # pack the site as build/braam-<version>.zip
+make install    # install the SDK, to /usr/local or ~/.local
+make release    # pack the site and the SDK as build/*.zip
 make clean
 ```
 
@@ -116,7 +117,7 @@ the configure step looks for it.
 
 `make run` is three CTest cases, and they run on every build: `smoke` asserts the exact
 import and export surface of `kernel.wasm` and of each binary and then boots the kernel under
-Node, `unit` runs the in-wasm unit tests, and `size` enforces the per-binary budgets in
+Node, `unit` runs the in-wasm unit tests, and `size` holds the kernel and the boot archive to
 [tools/size_budget.txt](tools/size_budget.txt). The host side is faked in
 [test/](test/) — including the tier-3 worker protocol, which CI runs end to end over a link
 with no thread in it.
@@ -127,6 +128,35 @@ exactly that directory as `build/braam-<version>.zip`, which unpacks to one
 `braam-<version>/` directory — put it in a web root and the site is at
 `https://example.org/braam-<version>/`. Nothing in it configures the server: the loader falls
 back to a buffered instantiate where the host does not serve `.wasm` as `application/wasm`.
+It also packs `build/braam-sdk-<version>.zip`, which is the section below.
+
+## Writing a program
+
+Every command is a wasm binary, and nothing about building one is private to this
+repository. `make install` puts an SDK under `/usr/local` or `~/.local` — the headers, the
+two libraries a program links, a CMake package and the toolchain file — and
+`braam-sdk-<version>.zip` is the same tree, relocatable, so unpacking it anywhere is enough.
+
+```cpp
+#include "proc/io.h"
+
+Task<i32> proc_main(Args args)
+{
+    co_await write_all(SYS_STDOUT, "Hello, world!\n");
+    co_return 0;
+}
+```
+
+```cmake
+find_package(braam REQUIRED)
+braam_add_program(NAME hello SOURCES hello.cpp)
+```
+
+The result is a 6 KB module, and it does not have to be in the system image to run: `exec`
+resolves a path through the ordinary filesystem, so `import` the file through the browser's
+picker and run `/mnt/import/hello.wasm`, or `curl` it into `/home` and run it there.
+[doc/Programming_Manual.md](doc/Programming_Manual.md) is the guide, and
+[examples/hello/](examples/hello/) is the worked example the SDK installs.
 
 ## Layout
 
@@ -141,6 +171,7 @@ back to a buffered instantiate where the host does not serve `.wasm` as `applica
 | [src/sh/](src/sh/) | the shell: grammar, line editor, job runtime, builtins |
 | [src/cmd/](src/cmd/) | one file per program; every program is a binary, `sh` included |
 | [web/](web/) | the page, the worker, the renderer, the host side of every ABI |
+| [examples/](examples/) | a program built against the installed SDK |
 
 ## Documentation
 
@@ -151,7 +182,8 @@ its plan. [doc/Release_Notes.md](doc/Release_Notes.md) explains, per milestone, 
 that exists looks the way it does — comments in the source say *what*, and that file says
 *why*. [doc/System_Calls.md](doc/System_Calls.md) is the one walkthrough: how a user process
 talks to the kernel, from the principles down to the wire, with sequence diagrams of the calls
-that actually happen and the whole syscall table in one place.
+that actually happen and the whole syscall table in one place. [doc/Programming_Manual.md](doc/Programming_Manual.md) is for
+writing a program of your own, outside this repository.
 
 ## Status
 

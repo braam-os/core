@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stamp a process binary with the metadata `exec` reads before it runs it.
 
-    stamp.py <file.wasm> --tier N --initial-pages N --max-pages N
+    stamp.py <file.wasm> --tier N --initial-pages N --max-pages N [--sysabi <h>]
 
 Appends a wasm custom section named "braam" holding six little-endian u32s, the
 ProcMeta of src/kernel/sysabi.h:
@@ -26,12 +26,12 @@ NAME = b"braam"
 SYSABI = Path(__file__).resolve().parent.parent / "src" / "kernel" / "sysabi.h"
 
 
-def abi() -> int:
+def abi(sysabi: Path) -> int:
     """PROC_ABI, read rather than restated: the number is what makes a stale
     binary a diagnostic, and a copy here that fell behind would stamp one."""
-    m = re.search(r"PROC_ABI\s*=\s*(\d+)", SYSABI.read_text())
+    m = re.search(r"PROC_ABI\s*=\s*(\d+)", sysabi.read_text())
     if not m:
-        sys.exit(f"stamp.py: no PROC_ABI in {SYSABI}")
+        sys.exit(f"stamp.py: no PROC_ABI in {sysabi}")
     return int(m.group(1))
 
 
@@ -77,8 +77,8 @@ def strip(data: bytes) -> bytes:
     return bytes(out)
 
 
-def section(tier: int, flags: int, initial_pages: int, max_pages: int) -> bytes:
-    meta = struct.pack("<IIIIII", MAGIC, abi(), tier, flags, initial_pages, max_pages)
+def section(sysabi: Path, tier: int, flags: int, initial_pages: int, max_pages: int) -> bytes:
+    meta = struct.pack("<IIIIII", MAGIC, abi(sysabi), tier, flags, initial_pages, max_pages)
     body = leb128(len(NAME)) + NAME + meta
     return b"\0" + leb128(len(body)) + body
 
@@ -90,11 +90,13 @@ def main(argv):
     ap.add_argument("--flags", type=int, default=0)
     ap.add_argument("--initial-pages", type=int, required=True)
     ap.add_argument("--max-pages", type=int, required=True)
+    # The installed SDK has no src/ tree, so it names the header it shipped.
+    ap.add_argument("--sysabi", type=Path, default=SYSABI)
     args = ap.parse_args(argv[1:])
 
     data = strip(args.binary.read_bytes())
     args.binary.write_bytes(
-        data + section(args.tier, args.flags, args.initial_pages, args.max_pages)
+        data + section(args.sysabi, args.tier, args.flags, args.initial_pages, args.max_pages)
     )
 
 

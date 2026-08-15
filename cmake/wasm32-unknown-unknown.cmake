@@ -44,6 +44,11 @@ set(CMAKE_RANLIB       "${BRAAM_RANLIB}")
 set(CMAKE_C_COMPILER_TARGET   wasm32-unknown-unknown)
 set(CMAKE_CXX_COMPILER_TARGET wasm32-unknown-unknown)
 
+# Optimised by default: -O0 emits the libcalls the optimiser folds away
+# (__builtin_strlen, an outlined memcpy), and nothing provides one. A cache
+# entry from the command line still wins.
+set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "")
+
 # The compiler probe must build a static library; linking an executable needs
 # flags that only the project sets.
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
@@ -64,3 +69,9 @@ set(BRAAM_WASM_FEATURES "-mreference-types -mbulk-memory -msign-ext -mmutable-gl
 set(CMAKE_C_FLAGS_INIT          "--no-default-config -nostdlib ${BRAAM_WASM_FEATURES}")
 set(CMAKE_CXX_FLAGS_INIT        "--no-default-config -nostdlib -nostdinc++ ${BRAAM_WASM_FEATURES}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "--no-default-config -nostdlib")
+
+# The installed copy sits beside braamConfig.cmake; the source tree's does not.
+# Named rather than searched for: PACKAGE mode above is ONLY, with no root path.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/braamConfig.cmake")
+    set(braam_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE PATH "the Braam SDK")
+endif()

@@ -1,44 +1,10 @@
-# Binary size budgets, in bytes. One "name = limit" per line; the name is the
-# binary's file name. Raising a number is a deliberate act — see Release_Notes.md.
+# Size budgets, in bytes. One "name = limit" per line; the name is the file's.
+# Raising a number is a deliberate act — see Release_Notes.md.
+#
+# No per-program entry: a program is measured but not bounded, and what one
+# costs is §4.4's duplication, which the archive below shows in one number.
 kernel.wasm = 262144
 
-# The boot archive: every binary, plus what ships beside them. It is awaited
-# before the first prompt, so it is boot latency as well as bytes — and it is
-# where §4.4's duplication shows up, one runtime copy per program.
+# The boot archive: every binary, plus what ships beside them. Awaited before
+# the first prompt, so it is boot latency as well as bytes.
 bundle.bin = 1048576
-
-# Process binaries (M8). Each carries its own copy of the allocator, the
-# coroutine runtime and the string types, which is the duplication Concept.md
-# §4.4 warns about — these numbers are how it stays visible.
-cat.wasm = 32768
-chat.wasm = 32768
-clear.wasm = 16384
-curl.wasm = 32768
-date.wasm = 32768
-df.wasm = 32768
-echo.wasm = 16384
-edit.wasm = 65536
-export.wasm = 32768
-false.wasm = 16384
-grep.wasm = 32768
-head.wasm = 32768
-hog.wasm = 16384
-import.wasm = 32768
-less.wasm = 65536
-ls.wasm = 32768
-mkdir.wasm = 16384
-mount.wasm = 32768
-pbcopy.wasm = 32768
-pbpaste.wasm = 16384
-pwd.wasm = 16384
-rm.wasm = 16384
-sh.wasm = 98304
-sleep.wasm = 16384
-spin.wasm = 16384
-tail.wasm = 32768
-timeout.wasm = 16384
-touch.wasm = 16384
-true.wasm = 16384
-version.wasm = 16384
-watch.wasm = 24576
-wc.wasm = 32768

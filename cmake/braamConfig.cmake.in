@@ -1,0 +1,17 @@
+@PACKAGE_INIT@
+
+# The Braam SDK. Paths are relative to this file, so an unpacked
+# braam-sdk-<version>.zip works with nothing installed.
+
+include(CMakeFindDependencyMacro)
+find_dependency(Python3 COMPONENTS Interpreter)
+
+set_and_check(BRAAM_INCLUDE_DIR "@PACKAGE_BRAAM_INSTALL_INCLUDEDIR@")
+set_and_check(BRAAM_STAMP       "@PACKAGE_BRAAM_INSTALL_LIBEXECDIR@/stamp.py")
+set_and_check(BRAAM_SYSABI      "@PACKAGE_BRAAM_INSTALL_INCLUDEDIR@/kernel/sysabi.h")
+set_and_check(BRAAM_EXAMPLES_DIR "@PACKAGE_BRAAM_INSTALL_EXAMPLESDIR@")
+
+include("${CMAKE_CURRENT_LIST_DIR}/braam-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/BraamProgram.cmake")
+
+check_required_components(braam)

@@ -135,12 +135,14 @@ make and node, with no ninja. The top-level `Makefile` wraps it and configures o
 make            # build kernel.wasm, the /bin binaries and tests.wasm
 make run        # ctest
 make serve      # serve build/web/ and open a browser
-make release    # pack build/web/ as build/braam-<version>.zip
+make install    # the SDK, to /usr/local if writable else ~/.local
+make release    # pack build/web/ and the SDK as build/*.zip
 make clean      # rm -rf build
 ```
 
 Overrides: `JOBS=1` for a serial build (the default is the CPU count), `GENERATOR=Ninja` if it
-is installed and you want the ~30% faster build, `BUILD=<dir>` for the build tree.
+is installed and you want the ~30% faster build, `BUILD=<dir>` for the build tree,
+`PREFIX=<dir>` for `install`.
 
 `build/web/` is assembled by its own always-run `web` target, not by the kernel's `POST_BUILD`,
 so editing a file under `web/` and running `make` refreshes what `make serve` serves. It is
@@ -160,7 +162,25 @@ revision 1.
 `make release` runs `tools/release.py` over `build/web/`, naming the archive after that same
 version — the script imports `version.py` rather than restating it, and both run at build time
 rather than at configure time. The archive is deterministic: sorted entries and one fixed
-timestamp, so the same tree gives the same bytes.
+timestamp, so the same tree gives the same bytes. It then installs into `build/sdk` and packs
+that as `braam-sdk-<version>.zip`, so the SDK archive and `make install` cannot disagree; that
+stage is never emptied either.
+
+**The SDK is `make install` and that second archive** — [doc/Programming_Manual.md](doc/Programming_Manual.md) is the
+user-facing guide. It is headers (`include/braam/{kernel,fs,proc,ui}/`, whole directories, so
+no include closure to maintain), `libbraam_proc.a` and `libbraam_ui.a` and no other library —
+the rest carry host imports — the toolchain file, `stamp.py`, and a relocatable CMake package
+that finds its own prefix, so an unpacked zip is a working SDK with nothing installed. Three
+things the project used to supply implicitly are now on `braam_flags` or the toolchain, because
+a consumer had none of them: `cxx_std_20` (a coroutine `Task` will not parse without it),
+`CMAKE_BUILD_TYPE MinSizeRel` (at `-O0` a freestanding build calls libcalls nothing provides),
+and `-Werror` behind `$<BUILD_INTERFACE:>`.
+
+**The program recipe is `cmake/BraamProgram.cmake`, shared by `src/cmd/` and the SDK.**
+`braam_add_program(NAME … SOURCES … [TIER] [LIBS])` — one implementation, so an out-of-tree
+program is built by the same code rather than by a description of it. `examples/hello/` is the
+worked example the SDK installs *and* an ordinary build target, from one `CMakeLists.txt`, so
+it cannot rot; it is not packed into the bundle.
 
 The warning set is `-Wall -Wextra -Wshadow`, and `BRAAM_WERROR` is **ON by default** — so a
 warning is a build failure locally and in CI alike, and the tree is warning-clean. Fix the
@@ -207,7 +227,9 @@ link error rather than a runtime trap). See Concept.md §C.3.
 
 Verification is three CTest cases, run on every build: `smoke` asserts the exact import/export
 surface of `kernel.wasm` and of every binary, and that the kernel boots; `unit` runs
-`tests.wasm` under Node; and `size` checks `tools/size_budget.txt`. New core code gets a case
+`tests.wasm` under Node; and `size` holds `kernel.wasm` and `bundle.bin` to
+`tools/size_budget.txt` — a program is measured but not bounded, so there is no per-binary
+budget and adding one back is a design change. New core code gets a case
 in [test/unit/](test/unit/). Behind those, the acceptance criteria in Milestones.md are the
 standing behavioural contract — a change that breaks one is a regression however green the
 three cases are, so re-check the criteria a change touches by hand at the prompt.
@@ -445,8 +467,8 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   bytes still cross the VFS on every `exec` and only the compile is saved.
 - **The boot archive is ~491 KB**, against 47 KB when four programs were binaries. That is §4.4's
   duplication: every binary carries the allocator, the string types and the coroutine runtime,
-  and `sh.wasm` is 81 KB of it. `bundle.bin` carries a size budget of its own, so the number
-  stays visible.
+  and `sh.wasm` is 86 KB of it. `bundle.bin` carries a size budget and the binaries under it do
+  not, so that one number is where the duplication stays visible.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything that is not a child of
   the caller, and a bare pid the shell never started is exactly that.
 - **No `/proc/jobs`.** The job table is the shell process's own memory, and no syscall shows one
@@ -474,8 +496,9 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   `ProcFs`, boot and init), `src/proc/` (a process binary's runtime, `screen.cpp` included),
   `src/sh/` (the shell: grammar, line editor, job runtime, builtins) and `src/cmd/` (one file per
   program, `sh.cpp` among them), `test/unit/`, `web/` (`proc.js` both halves of the process
-  protocol, `procworker.js` a tier-3 process's worker), `bundle/`, `tools/`, `cmake/`.
-  Concept.md §7. `braam_fs` and `braam_svc` are siblings above the kernel and below userland and
+  protocol, `procworker.js` a tier-3 process's worker), `bundle/`, `examples/` (a program built
+  against the installed SDK), `tools/`, `cmake/` (the toolchain file, `BraamProgram.cmake` and
+  the package config, all three installed). Concept.md §7. `braam_fs` and `braam_svc` are siblings above the kernel and below userland and
   must not depend upwards or on each other; anything needing the scheduler or the screen belongs
   in `src/user/`, which is why `ProcFs` lives there. **`braam_sh` links `braam_proc`**, so
   nothing in it may reach a kernel header that pulls in the scheduler — the exact-import

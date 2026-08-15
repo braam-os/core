@@ -1,0 +1,22 @@
+# hello — a Braam program
+
+Build it against an installed SDK, with the toolchain file the SDK ships:
+
+    cmake -B build -DCMAKE_TOOLCHAIN_FILE=<prefix>/lib/cmake/braam/wasm32-unknown-unknown.cmake
+    cmake --build build
+
+`build/hello.wasm` is the program: a wasm module importing `kernel.sys`,
+`kernel.sys_async` and `env.memory`, exporting `_start`, `_resume`, `_alloc` and
+`_free`, and carrying a `braam` custom section that says which process ABI it
+was built for.
+
+Run it on a Braam that is already up — no rebuild of the system:
+
+- **Through the file picker.** Type `import`, choose `hello.wasm`. It lands in
+  `/mnt/import/`. Then `/mnt/import/hello.wasm`.
+- **Over the network.** `curl https://example.com/hello.wasm > /home/hello`,
+  then `/home/hello`.
+
+Either way it prints `Hello, world!`, or `Hello, Serge!` if given a name.
+
+The full guide is `share/doc/braam/Programming_Manual.md`.
