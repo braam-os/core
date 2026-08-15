@@ -226,7 +226,7 @@ how much memory to give it. Both live in a wasm custom section named `braam`, si
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 5
+    u32 abi;            // PROC_ABI, currently 6
     u32 tier;           // Tier::Instance (2) or Tier::Worker (3)
     u32 flags;
     u32 initial_pages;
@@ -650,6 +650,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 68 | `ScreenClear` | — | — | 0 | — |
 | 69 | `Cursor` | bit 0 = set, else report | `u32 x, y, on` when setting | 0 | `u32 x`, `y`, `on`, `cols`, `rows` |
 | 70 | `Style` | `fg \| bg << 8 \| attrs << 16` | — | 0 | — |
+| 71 | `Echo` | bit 0 = show the cursor after | `u32 x, y, cur`, then the bytes | 0 | `u32 x`, `y`, `on`, `cols`, `rows`, `scrolled` |
 | 80 | `Pipe` | — | — | 0 | `u32 read fd`, `u32 write fd` |
 | 81 | `Spawn` | — | `u32 fd0, fd1, fd2`, then the argv blob | the child's pid | — |
 | 82 | `Wait` | a pid, or `SYS_WAIT_ANY` | — | the child's status, 0–255 | `u32 pid` |
@@ -664,11 +665,26 @@ program that never spawns anything still uses it. `pwd` is its caller.
 
 **`Cursor` is the scrolling screen's, not the alternate one's.** `Write` moves the cursor as a
 side effect — it goes through the same `screen_write` that wraps and scrolls — and reports a byte
-count, so a program that draws a prompt has no way to know where it ended up. Nothing counts
-scrolls either: the grid moves under a write and `cursor_y` does not change. So a line editor
-writes, asks, and infers the scroll from the shortfall. A *set* is refused with `Err(Perm)` while
-another process holds the alternate screen, for the reason `ScreenBlit` is; a get is always
-allowed. `/bin/sh` is the caller.
+count, so a program that draws a prompt has no way to know where it ended up. A *set* is refused
+with `Err(Perm)` while another process holds the alternate screen, for the reason `ScreenBlit` is;
+a get is always allowed. `/bin/sh` is the caller, at the two places a prompt starts — before it
+writes the prompt, and again to find the anchor the prompt ended on.
+
+**`Echo` is those two and a `Write` in one operation**, because a repaint is one change to the
+grid and was four round trips. The payload names the anchor and how many cells past it to leave
+the cursor; the operation moves the cursor there, writes the bytes through the same `Stream`
+`Write` uses, and puts the cursor `x + cur` cells past the anchor — carried up by whatever the
+write scrolled. `scrolled` is that number, and it is what the second `Cursor` call was for:
+nothing else counts scrolls, since the grid moves under a write and `cursor_y` does not change.
+`screen_scrolled()` is a counter the screen keeps, and the operation reports the difference across
+itself, so a resize that drops rows from the top is folded in the same way a scroll is.
+
+Its refusal and its rules are `Cursor`'s, and it needs no others: everything it can do, four calls
+could already do. What it buys is §4.4's cost paid once instead of four times — a keystroke is two
+round trips where it was five — and one *tick* instead of four, which is why the
+cursor no longer has to be hidden through a repaint. The grid is presented at the end of every
+tick, so four operations painted a keystroke three times and the cursor was visibly walking the
+line. `/bin/sh` is the caller.
 
 **`Style` is the colour `Write` cannot carry.** The grid is cells and not a byte stream
 (Concept.md §2.3), so there is no escape sequence to put in the bytes and the colour is an

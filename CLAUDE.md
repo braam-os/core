@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **The plan is finished: M0–M9 are all done.** Since then the kernel applet has been retired and
 then the shell followed it: every program is a binary, including `/bin/sh`, and thirty-two of
 them live in `src/cmd/` with the shell's own parts in `src/sh/`. There is no in-kernel program of
-any kind and no program registry. `kernel.wasm` is about 137 KB against a 256 KiB budget and
-`bundle.bin` is 491 KB; the wasm ABI is still six imports and nine exports, and the three CTest
+any kind and no program registry. `kernel.wasm` is about 141 KB against a 256 KiB budget and
+`bundle.bin` is 497 KB; the wasm ABI is still six imports and nine exports, and the three CTest
 cases pass. Work here is change to a working system, so the bar is that nothing above regresses,
 and Milestones.md is history rather than a to-do list.
 
@@ -96,11 +96,11 @@ points into a `String` the loop body owns — `Prompt`'s `Str`s are non-owning a
 is not a literal. `test/run.mjs` composes the expected prompt from the directory it is in rather
 than spelling it.
 
-**And every program took a worker.** doc/TODO.md T3: tier 3 is now the default
-`cmake/BraamProgram.cmake` gives a program, and `/bin/sh` is the one binary that asks for tier 2
-— so thirty-one of the thirty-two run in a worker of their own and can be killed rather than
+**And every program took a worker.** doc/TODO.md T3: tier 3 became the default
+`cmake/BraamProgram.cmake` gives a program, with `/bin/sh` the one binary still asking for tier 2
+— so thirty-one of the thirty-two ran in a worker of their own and could be killed rather than
 waited on. Nothing in C++ moved: the tier is a `u32` in the `braam` custom section and the same
-binary runs at either (§4.3), so this is `stamp.py`'s argument, `test/run.mjs`'s `want_tier`, and
+binary runs at either (§4.3), so this was `stamp.py`'s argument, `test/run.mjs`'s tier map, and
 the documents the change made false. What did move is the test driver's model of a worker:
 `net.hold(n)` in `test/fakeworker.mjs` counts binds now, because `clear` is a program too and a
 spawning program binds its own worker before its child's, and the two cases that give the tier up
@@ -121,6 +121,26 @@ left; one that **exited** is not, so `exit` still ends the session. `exec_proces
 `bool *died` because an `i32` cannot tell `exit 132` from a trap. It also found a bug that would
 have decided T7 by itself: `dropWorkers()` terminated a worker without failing the step in it,
 which is a kernel parked for ever rather than a process that died.
+
+**And a repaint became one syscall.** doc/TODO.md T8's first half: `echo` at 71 is the anchor, the
+bytes and the cursor in one operation, so the table is thirty-six and `PROC_ABI` is 6. A keystroke
+was five round trips — `key_read`, then `cursor`, `write`, `cursor`, `cursor` — and is two, for
+**one** change to the grid. It is also one *tick* rather than four: the grid is presented at the end
+of every tick, so a repaint painted three times and the cursor had to be hidden or it would be seen
+walking the line. `scrolled` in the reply is what the second `cursor` call was for, and it is a
+counter `src/kernel/screen.cpp` now keeps. `redraw()` in `src/sh/edit.cpp` is the only caller.
+
+**And then the shell took a worker.** doc/TODO.md T8, and there is no name left in §4's tier table:
+`set(BRAAM_BIN_TIER_sh 2)` is gone, `src/cmd/CMakeLists.txt` passes no `TIER` at all, and
+`stamp.py` requires one rather than defaulting to the answer nothing wants. What made it safe was
+T7 (init replaces a shell that died, so a lost worker costs a shell rather than the session) and
+what made it *affordable* was `echo` above. The bench arms turned over with it — `bundle.bin` is
+the `t3` arm now and `bundle3nosh.bin` is the twin that gets packed — and four cases in
+`test/run.mjs` changed meaning rather than merely numbers: `dropWorkers()` kills the shell too, so
+the held-step case asserts a session that came back rather than a prompt, and the broken-worker case
+empties the pool with a two-stage pipeline instead, because dropping the workers would have made it
+a case about init. The driver also had to learn that `RESPAWN_TRIES` deaths inside a second of
+*scheduler* time end the session: the tail's timestamps are seconds apart on purpose.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -273,16 +293,20 @@ service where that gap matters: a real WebSocket server, so `make serve` gives t
 conversation rather than a loopback.
 
 **`make bench` is the other counterweight, and it is a measurement rather than a test.** The cmake
-`bench` target packs two twins of the boot archive by re-stamping the staged binaries — one tier at
-each end, `bundle2.bin` and `bundle3.bin`, with the shipped `bundle.bin` as the middle arm; nothing
-is recompiled and `bundle.bin` is byte-identical — `web/bench.html` drives the shipped page against
+`bench` target packs two twins of the boot archive by re-stamping the staged binaries —
+`bundle2.bin` every program at tier 2 and `bundle3nosh.bin` the same but for `sh`, with the shipped
+`bundle.bin` as the third and every program at tier 3; nothing is recompiled and `bundle.bin` is
+byte-identical — `web/bench.html` drives the shipped page against
 all three, and `tools/bench.mjs` serves them and collects what the page posts into
 `build/bench-<engine>.json`. It answers what a fake cannot: what a syscall costs on a real
 `postMessage`. The counters behind it are unconditional and live in `makeProc`'s `stats()` and in
-`web/worker.js`; the figures are in doc/TODO.md T1 and T5. **The arm ids mean what they meant at
-T1** — `t2` every program at tier 2, `t3nosh` tier 3 but for the shell, `t3` all of it — so the two
-measurements can be read against each other; keep it that way, since T5's own code change was
-repairing an arm that had silently stopped being a control.
+`web/worker.js` — where `paint` and `tick` say how much of a keystroke is inside the kernel worker,
+and a `render` message turns drawing off for the A/B that says whether the rest is the canvas or the
+turn. The figures are in doc/TODO.md T1, T5 and T8. **The arm ids mean what they meant at
+T1** — `t2` every program at tier 2, `t3nosh` tier 3 but for the shell, `t3` all of it — so the
+three measurements can be read against each other; keep it that way even as *which* of them ships
+moves, since T5's own code change was repairing an arm that had silently stopped being a control,
+and T8 moved the shipped archive from `t3nosh` to `t3`.
 
 ## Architecture invariants
 
@@ -418,12 +442,12 @@ between the two isolated tiers from binary metadata, so userland does not notice
   `braam_sh` is an archive, and `--gc-sections` would drop an unreferenced registrar silently.
 - **Separate instance, shared worker** (M8) — address-space, capability, descriptor and
   memory-cap isolation. A binary in `/bin` carrying a `braam` custom section; `exec` reads
-  the tier out of it. `/bin/sh` is the only binary that asks for it: `set(BRAAM_BIN_TIER_sh 2)`
-  in `src/cmd/CMakeLists.txt`, because a prompt pays the tier several times a keystroke.
+  the tier out of it. **Nothing in the tree asks for it** since doc/TODO.md T8: it is §4's
+  fallback, and an option `braam_add_program` still offers an out-of-tree program.
 - **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
-  preempted: `worker.terminate()`. **This is the default** — `braam_add_program` stamps tier 3
-  unless a program asks for 2, so every program but the shell has one — and it runs at tier 2
-  where the host cannot make a worker. The protocol is one message each way per step, the tier
+  preempted: `worker.terminate()`. **This is what everything gets** — `braam_add_program` stamps
+  tier 3 unless a program asks for 2, and no program does — and it runs at tier 2 where the host
+  cannot make a worker. The protocol is one message each way per step, the tier
   rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and a tier-3 syscall
   costs two `postMessage` hops rather than a call: 34–45 µs measured, which doc/TODO.md T1 is
   the argument for paying everywhere and T5 re-measured unmoved after the flip.
@@ -529,15 +553,21 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
 - **Every command costs an instantiation and a worker** — roughly a millisecond, plus reading
   the image out of `BundleFs`, where an applet cost nothing. The host caches the compiled
   `Module` by path, so the bytes still cross the VFS on every `exec` and only the compile is
-  saved; the worker comes from the pool, and only a pipeline wider than `MAX_IDLE` or a killed
-  process makes the host start one.
+  saved; the worker comes from the pool, and only a pipeline wider than what is idle or a killed
+  process makes the host start one. The session holds one permanently, since the shell is a
+  tier-3 process for as long as the system is up.
 - **Every syscall a program makes is two `postMessage` hops**, 34–45 µs, since T3 put every
-  program in its own worker. `sh` is the exception and stays at tier 2 for it. Bulk I/O pays it
+  program in its own worker and T8 put the shell there too. Bulk I/O pays it
   per `SYS_CHUNK`, which is 512 bytes: doc/TODO.md T5 re-measured that at 6–13 ms more than tier 2
   for a quarter of a megabyte through three processes, and **decided against T6** — a bigger chunk
   or a batched step protocol — because nothing written for this system can perceive it. A workload
   that moves megabytes is what would reopen it, not a better figure.
-- **The boot archive is ~491 KB**, against 47 KB when four programs were binaries. That is §4.4's
+- **A whole line costs an order of magnitude more than a keystroke.** `anchor()` in
+  `src/sh/edit.cpp` is seven or eight round trips — two `cursor_get`s and three `style`+`write`
+  pairs for the coloured runs — and `interactive()` adds a `cwd_get` per line. T8 cut the
+  *keystroke* because that is what sustained typing pays; Enter to the next prompt was not what
+  the flip turned on, and is the next thing anyone will notice.
+- **The boot archive is ~497 KB**, against 47 KB when four programs were binaries. That is §4.4's
   duplication: every binary carries the allocator, the string types and the coroutine runtime,
   and `sh.wasm` is 86 KB of it. `bundle.bin` carries a size budget and the binaries under it do
   not, so that one number is where the duplication stays visible.
@@ -551,9 +581,10 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   and whatever the dead one had backgrounded went with it, since a process's children are cancelled
   by its destructor. Carrying any of it over means a shell that can be handed its predecessor's
   descriptors, which nothing in §4.3 offers.
-- **A keystroke at the prompt costs about six ticks**: `key_read`, then a repaint of four
-  syscalls, each a park and a step. It was one channel receive when the editor was kernel code.
-  Nothing about it is wrong; it is what §4.4's cost model looks like on the interactive path.
+- **A keystroke at the prompt costs two round trips**: `key_read`, then the `echo` that repaints.
+  It was five until T8 folded the repaint into one operation, and one channel receive when the
+  editor was kernel code. Nothing about it is wrong; it is what §4.4's cost model looks like on
+  the interactive path, and two is its floor without fusing the keyboard into the paint.
 - **The shell has no variables, no `-c`, no globbing and no scripts beyond `sh -s`.** None of it
   was blocked by the shell being kernel code, and none of it is blocked now.
 - **Two tier-3 fidelity losses (§4.3),** true of every program since T3 rather than of two: a

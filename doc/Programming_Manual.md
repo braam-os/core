@@ -284,11 +284,12 @@ a trap rather than a warning:
 A program runs in an instance of its own either way — address space, capabilities and
 descriptors are isolated at both tiers. Tier 3 puts it in a *worker* of its own, which buys one
 thing: `worker.terminate()`, a kill that does not need the program's cooperation. **It is what
-`braam_add_program` gives a program**, and what every program in `/bin` but the shell runs at.
+`braam_add_program` gives a program**, and what every program in `/bin` runs at — `/bin/sh`
+included, since a repaint became one syscall and a keystroke two.
 
-The cost is that every syscall becomes two `postMessage` hops rather than a call — 34–44 µs
-measured, paid per `SYS_CHUNK` — so a program that reads a large file pays it per 512 bytes,
-and one being typed into pays it several times a keystroke. A program in that position asks
+The cost is that every syscall becomes two `postMessage` hops rather than a call — 34–45 µs
+measured, paid per `SYS_CHUNK` — so a program that reads a large file pays it per 512 bytes, and
+one being typed into pays it per round trip its editor makes. A program in that position may ask
 for tier 2:
 
 ```cmake
@@ -296,8 +297,10 @@ braam_add_program(NAME repl SOURCES repl.cpp TIER 2)
 ```
 
 What it gives up is the kill: a tier-2 program that stops answering hangs the kernel's worker,
-so ask for it only where a runaway is not a possibility a user has to live with. A tier-3
-binary still runs at tier 2 where the host cannot make a worker, with no change to the program.
+so ask for it only where a runaway is not a possibility a user has to live with. Nothing in the
+system asks for it today — the shell was the last, and cutting the round trips it made was the
+cheaper answer than weakening its isolation. A tier-3 binary still runs at tier 2 where the host
+cannot make a worker, with no change to the program.
 
 ---
 

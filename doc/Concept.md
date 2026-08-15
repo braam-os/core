@@ -503,8 +503,8 @@ between them from a flag in the binary's metadata — userland does not notice.
 
 | Tier | Isolation | Spawn cost | Kill | Used for |
 |---|---|---|---|---|
-| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | the shell, and anything typed into |
-| **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | every other program |
+| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | the fallback below, and a binary that asks |
+| **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | every program, the shell included |
 
 **There is no third row, and the shell is not an exception to the two.** `/bin/sh` is a binary
 in `/bin` that init runs, and everything a prompt needs — a pipeline, a redirection, a job, a
@@ -536,12 +536,19 @@ answer, and it is bounded — three deaths in quick succession and init says so 
 shell that cannot get as far as a prompt would otherwise say it for ever.
 
 **Tier 3 is what a program gets unless it asks for less**, which is a decision taken once the
-tier had been measured: 34–44 µs a syscall round trip against §4.4's estimated 0.1 ms, so a
+tier had been measured: 34–45 µs a syscall round trip against §4.4's estimated 0.1 ms, so a
 command that is not interactive pays a few hundred microseconds for a kill switch it cannot be
-denied. `/bin/sh` is the one binary in the system that asks for tier 2, because a prompt pays the
-tier six times a keystroke and there is nobody to kill it for. The recipe that builds a program
-carries that default (`cmake/BraamProgram.cmake`), so an out-of-tree program follows the system's
-own answer.
+denied. The recipe that builds a program carries that default
+(`cmake/BraamProgram.cmake`), so an out-of-tree program follows the system's own answer.
+
+**And nothing asks for less, including the prompt.** `/bin/sh` was the one exception, on the
+argument that a prompt pays the tier several times a keystroke and there is nobody to kill it for.
+Half of that stopped being true at once — init replaces a shell that died, so the kill switch means
+something for `/bin/sh` too — and the other half was made false rather than argued with. A keystroke
+was five round trips because a repaint was four operations for one change to the grid; `echo`
+(§4.3) is those four, so it is two. That is the number the exception was worth, and with it gone
+there is no name in the tier at all: the tier is a claim a binary makes, and every binary in the
+system now makes the same one.
 
 **There was a third tier, and it is gone.** The **kernel applet** — a program as an in-kernel
 coroutine, sharing the kernel's heap and its whole authority — was how every program was written
@@ -623,6 +630,12 @@ terminated rather than pooled when it is killed, and the process's own memory cr
 so the kernel's page counts still decide the cap. A worker that has finished its process is
 clean — the instance is dropped and wasm cannot have touched the worker's own scope — so it goes
 back to the pool. One that was terminated is gone, which is the point.
+
+The pool is sized for a pipeline *above* what the session holds permanently, because the shell is
+one of these processes and never gives its worker back. That is also why the capability probe
+cannot ask whether anything is running: with a permanent tier-3 process the pool and the process
+table are never both empty, so what it asks instead is whether a worker got as far as announcing
+itself.
 
 ### 4.3 The kernel↔process ABI
 
@@ -715,6 +728,24 @@ back — and the prompt doing so is also what corrects a program that died mid-c
 refused while another process holds the alternate screen, for `cursor`'s reason: a program with
 the alternate screen paints cells and names their colours in them. `/bin/sh` is the caller, and
 `ScreenBlit` is why there is not a second one.
+
+**And a repaint took the last one: `echo`.** The table is thirty-six, and `PROC_ABI` is 6. It is
+`cursor`'s argument one step further on. A line editor's repaint was four operations — the cursor
+to the anchor, the bytes, `cursor` again to find out what had scrolled, and the cursor to where the
+caller wanted it — for **one** change to the grid. `echo` is all four: the anchor and a cursor
+offset in the payload, the bytes after them, and a reply that says where the cursor ended, what the
+geometry is, and how many rows the write carried the anchor up. That last number is the whole
+reason `cursor` was ever called twice, and it is a counter the screen was already in a position to
+keep.
+
+The cost being paid is §4.4's, per operation and not per byte, so a keystroke is what it falls on:
+one key was five round trips and is two. Two things follow from its being one operation rather than
+four. The grid is presented at the end of every tick, so four operations painted a keystroke three
+times and the cursor had to be *hidden* through them or it would be seen walking the line; one
+operation is one tick, and the intermediate states are never presented. And a repaint no longer
+straddles three windows in which another process could move the cursor under it. `/bin/sh` is the
+caller. A program that paints cells has `ScreenBlit`, which carries the cursor in the same payload
+as the cells for exactly this reason.
 
 All the rest are asynchronous, because the synchronous half is closed and stays closed. That costs a
 park and a step even for `wait` on a child that has already exited, which is the cost model of
@@ -829,12 +860,23 @@ section estimated. The tier-2 figure is 2–17 µs of work, plus whatever the ev
 `setTimeout(drain, 0)` waits — which is the larger half of it, and is a property of the host's
 scheduling rather than of the tier. doc/TODO.md T1 has the numbers and the method. That
 measurement is what turned the tier from a claim a binary makes into the default it gets: at those
-figures the only program that cannot afford it is the one being typed into.
+figures the only program that looked as though it could not afford the tier was the one being typed
+into.
 
 Re-measured at 0.2.47 with the default inverted, and the round trip did not move. What did move is
-that the `setTimeout` half largely went with the tier-2 programs: the shell is the only tier-2
-process left and takes 21 steps where a bulk command took 483. T5 has that, and the decision not to
-cut the number of round trips.
+that the `setTimeout` half largely went with the tier-2 programs: the shell was the only tier-2
+process left and took 21 steps where a bulk command took 483. T5 has that, and the decision not to
+cut the number of round trips in bulk I/O.
+
+**The prompt was the exception, and it was the *count* that made it one, not the tier.** A
+keystroke is round trips times what one costs, and the count was five for a single change to the
+grid — a key, then a repaint of four. `echo` (§4.3) made it two, which is the floor without fusing
+the keyboard into the paint, and only then was `/bin/sh` moved. So the cost model now says the same
+thing about every program in the system, which is what §4's table had always claimed and had one
+name against it. What is left on the interactive path is the *line*: `anchor()` costs seven or
+eight round trips and the working directory one more, so Enter to the next prompt is an order of
+magnitude more than a keystroke. It is paid once a line rather than once a key, which is why it was
+not what the flip turned on.
 
 The real cost is **duplication**: with no dynamic linking, every binary embeds its own copy
 of the allocator, the string types, and the coroutine runtime. Keep the process-side runtime

@@ -149,6 +149,17 @@ Task<Result<CursorAt>> cursor_get();
 
 Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on);
 
+// A repaint, in one call: the cursor to the anchor (x, y), the bytes, then the
+// cursor left `cur` cells past the anchor. `scrolled` is how far the anchor row
+// went up while the write was happening, which is the only thing a caller could
+// not work out for itself.
+struct Painted {
+    CursorAt cursor;
+    u32 scrolled = 0;
+};
+
+Task<Result<Painted>> cursor_echo(u32 x, u32 y, u32 cur, bool on, Str s);
+
 // The colours the next write paints with — COLOR_* and ATTR_* of screen.h. The
 // grid is cells, so a colour is not in the bytes; and it is sticky, so a
 // program that colours something puts the default back after it.

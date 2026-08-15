@@ -330,6 +330,31 @@ Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on)
     co_return co_await cursor(1, Str(reinterpret_cast<const char *>(head), sizeof(head)));
 }
 
+Task<Result<Painted>> cursor_echo(u32 x, u32 y, u32 cur, bool on, Str s)
+{
+    // The anchor, then the bytes, in one buffer — as Spawn's payload is. A copy
+    // of the line per repaint, against the round trips it replaces.
+    String payload;
+    u8 head[SYS_ECHO_HEAD * 4];
+    sys_put_u32(head, x);
+    sys_put_u32(head + 4, y);
+    sys_put_u32(head + 8, cur);
+    if (!payload.reserve(sizeof(head) + s.size()) ||
+        !payload.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) ||
+        !payload.append(s))
+        co_return Err(Error::NoMemory);
+
+    Result<SysReply> r = co_await sys_call(Sys::Echo, on ? 1 : 0, payload.str());
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 24)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return Painted{ CursorAt{ sys_get_u32(p), sys_get_u32(p + 4), sys_get_u32(p + 8) != 0,
+                                 Geometry{ sys_get_u32(p + 12), sys_get_u32(p + 16) } },
+                       sys_get_u32(p + 20) };
+}
+
 Task<Result<void>> style_set(u8 fg, u8 bg, u8 attrs)
 {
     Result<SysReply> r = co_await sys_call(Sys::Style, sys_style_pack(fg, bg, attrs));

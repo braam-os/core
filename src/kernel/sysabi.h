@@ -35,7 +35,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 5;
+constexpr u32 PROC_ABI       = 6;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -149,6 +149,19 @@ enum class Sys : u32 {
     // alternate screen — Cursor's rule, for Cursor's reason.
     Style, // arg = fg | bg << 8 | attrs << 16 (sys_style_pack)
 
+    // A line editor's whole repaint, in one operation: the cursor to the
+    // anchor, the bytes, and the cursor left `cur` cells past it — adjusted by
+    // whatever the write scrolled under it, which is what `scrolled` reports
+    // and what Cursor was being asked for. Cursor's rules, for Cursor's reason.
+    //
+    // Four operations were one screen change, and the grid is presented at the
+    // end of every tick — so a keystroke painted three times where it changes
+    // the grid once, and the cursor had to be hidden to keep it from being seen
+    // walking the line.
+    Echo, // arg bit 0 = the cursor is shown afterwards
+          //   payload = u32 x, y, cur, then the bytes
+          //   data    = u32 x, y, on, cols, rows, scrolled
+
     // Processes. A program that supervises another one cannot be a shell
     // builtin — the builtins are the six things no syscall could serve — so
     // this is what makes `timeout` and `watch` writable at all.
@@ -179,6 +192,9 @@ constexpr usize SYS_BLIT_HEAD = 7;
 
 // The three descriptor words Sys::Spawn's payload begins with, in u32s.
 constexpr usize SYS_SPAWN_HEAD = 3;
+
+// The anchor and cursor offset Sys::Echo's payload begins with, in u32s.
+constexpr usize SYS_ECHO_HEAD = 3;
 
 // Sys::Wait's "whichever finishes first". Zero is never a pid.
 constexpr u32 SYS_WAIT_ANY = 0;

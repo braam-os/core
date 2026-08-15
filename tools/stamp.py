@@ -86,7 +86,9 @@ def section(sysabi: Path, tier: int, flags: int, initial_pages: int, max_pages: 
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("binary", type=Path)
-    ap.add_argument("--tier", type=int, default=2)
+    # Required rather than defaulted: nothing in the system asks for tier 2 any
+    # more, so a default would be the answer no caller wants.
+    ap.add_argument("--tier", type=int, required=True)
     ap.add_argument("--flags", type=int, default=0)
     ap.add_argument("--initial-pages", type=int, required=True)
     ap.add_argument("--max-pages", type=int, required=True)

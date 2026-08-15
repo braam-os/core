@@ -125,6 +125,13 @@ const CTRL = 2;
 const module = new WebAssembly.Module(readFileSync(file));
 
 function instantiate() {
+    // A reload throws the kernel worker away and every nested worker with it,
+    // which is what `shutdown` is (web/proc.js). The process table is the
+    // *host's* and outlives the kernel here, so without this the outgoing
+    // shell's entry is overwritten by the incoming one at the same pid and the
+    // worker behind it is orphaned — never pooled, never terminated, and still
+    // counted. Harmless before the first boot, when there is nothing in it.
+    net.proc.shutdown();
     instance = new WebAssembly.Instance(module, imports);
     memory = instance.exports.memory;
     view = null;
@@ -154,10 +161,12 @@ const names = (list) => list.map((e) => `${e.module ? e.module + "." : ""}${e.na
 // queue after the drain that would have run it.
 let ticks = 0;
 
-// The shell is an instance now, and a live one for as long as the system is up,
-// so what every assertion below means by "live" is "besides the shell".
-// Subtracting it here rather than at sixteen call sites keeps them saying what
-// they were written to say.
+// The shell is an instance now, and a live one for as long as the system is up
+// — a worker of its own with it — so what every assertion below means by "live"
+// is "besides the shell". Subtracting it here rather than at sixteen call sites
+// keeps them saying what they were written to say. It is exactly one: init
+// replaces a shell that died before anything else runs, so the window in which
+// there is none is inside a single `run()`.
 const others = () => net.proc.live() - 1;
 
 function run(now) {
@@ -191,9 +200,8 @@ if (mode === "--kernel") {
     // the whole of "a process cannot issue a syscall on behalf of another".
     // A tier is the binary's claim and nothing more: the surface is the same
     // one at either, which is what lets `exec` pick without userland noticing.
-    // Every program asks for a worker of its own; the shell is the exception,
-    // because it is never killed and a prompt pays the tier per keystroke.
-    const want_tier = { "sh.wasm": 2 };
+    // Every program asks for a worker of its own, the shell included — there is
+    // no exception left to name (doc/TODO.md T8).
 
     for (const binary of binaries) {
         const bin = new WebAssembly.Module(readFileSync(binary));
@@ -221,11 +229,10 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 5)
+        if (m[0] !== 0x6d617262 || m[1] !== 6)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
-        const tier = want_tier[basename(binary)] || 3;
-        if (m[2] !== tier)
-            fail(`${basename(binary)} asks for tier ${m[2]}, expected ${tier}`);
+        if (m[2] !== 3)
+            fail(`${basename(binary)} asks for tier ${m[2]}, expected 3`);
         if (m[5] !== 256)
             fail(`${basename(binary)} asks for ${m[5]} pages, expected 256`);
     }
@@ -1176,11 +1183,15 @@ if (mode === "--kernel") {
             fail(`help did not list ${name}`);
     addr = instance.exports.resize(60, 16);
 
-    // M9. Every program is a tier-3 binary now, so everything above this line
-    // already ran in a worker of its own — those assertions are M4's to M8's,
-    // unedited, and this is the only line that notices.
+    // M9. Every program is a tier-3 binary, the shell included, so everything
+    // above this line already ran in a worker of its own — those assertions are
+    // M4's to M8's, unedited, and this is the only line that notices. It is a
+    // latch on "anything ran", which since T8 is the same sentence as "anything
+    // ran at tier 3": the shell binds one at boot, before a command is typed.
     if (!net.bound.length)
         fail("nothing ran at tier 3");
+    if (net.proc.stats().calls2)
+        fail(`${net.proc.stats().calls2} syscalls were answered at tier 2`);
 
     // A tier-3 program end to end: getpid answered inside its own worker, a
     // write relayed back through the kernel, an exit status carried on the
@@ -1195,15 +1206,24 @@ if (mode === "--kernel") {
     if (net.terminated.length !== 0)
         fail("a process that exited had its worker terminated rather than pooled");
     // Every hire this run has made, less the workers that went with the
-    // processes it killed: 8 and 7 here. The pool grows only for a pipeline
-    // wider than what is idle and shrinks only on a kill, so spin's own is in
-    // it — put back rather than terminated, which is the assertion above.
+    // processes it killed, less the one the shell is holding: 18, 16 and 1
+    // here. The pool grows only for a pipeline wider than what is idle and
+    // shrinks only on a kill, so spin's own is in it — put back rather than
+    // terminated, which is the assertion above. The shell's is not: it is a
+    // tier-3 process for as long as the system is up, so one worker is out of
+    // the pool from boot and each of the reboots above terminated the rest.
     if (net.proc.pooled() !== 1)
         fail(`the pool holds ${net.proc.pooled()} workers, expected one`);
 
     // M9, first criterion: a program that does not come back. The fake link
     // leaves its step undelivered, which is all the kernel ever sees of a real
     // loop — there is no reply, no timer, and nothing to cancel but the proxy.
+    //
+    // `net.hold(n)` counts binds from here (test/fakeworker.mjs), so what falls
+    // between a hold and the command it was aimed at is what has to be counted.
+    // The shell is not one of them: it binds at boot and at a respawn, never per
+    // command. `clear` and a spawning program's own worker are, which is why
+    // some of the holds below clear the screen first and some ask for the second.
     net.hold();
     type("spin");
     press(KEY.ENTER);
@@ -1360,8 +1380,9 @@ if (mode === "--kernel") {
     // on its own stack and never return.
     s = submit("spin 1", 9155);
     if (net.proc.pooled() !== 2)
-        fail(`the pool holds ${net.proc.pooled()} workers, expected two — 13 hired by`
-             + " here and 11 terminated with the processes above that were killed");
+        fail(`the pool holds ${net.proc.pooled()} workers, expected two — 23 hired by`
+             + " here, 20 terminated with the processes above that were killed, and one"
+             + " held by the shell for as long as the system is up");
 
     net.terminated.length = 0;
     s = submit("clear", 9160);
@@ -1555,11 +1576,67 @@ if (mode === "--kernel") {
     if (!rows(s).includes("back"))
         fail(`the resident shell did not come back: ${JSON.stringify(rows(s))}`);
 
+    // A prompt line long enough to wrap off the bottom of the screen, which is
+    // the one path `Sys::Echo`'s `scrolled` replaced: the anchor's row goes up
+    // *under* the write, and the editor has to follow it or every keystroke
+    // after it repaints a row that has moved. A narrow, short grid rather than
+    // a very long line, so the wrap is three rows and not thirty.
+    // The count rather than the layout: a repaint that painted from an anchor
+    // the scroll had moved would leave a stale row behind or blank a live one,
+    // and either shows up here. Fewer keys than the 64-slot ring holds, since
+    // `type` posts them all at once and `key()` refuses a full one.
+    addr = instance.exports.resize(20, 5);
+    s = submit("clear", 9230);
+    s = submit("echo a", 9230.1); // the anchor two rows down, so it survives
+    const xs = (t) => (rows(t).join("").match(/x/g) || []).length;
+    for (let i = 0; i < 56; i++)
+        press("x".codePointAt(0));
+    run(9230.2);
+    s = descriptor(addr);
+    if (xs(s) !== 56)
+        fail(`a line wrapped past the bottom shows ${xs(s)} of 56: `
+             + JSON.stringify(rows(s)));
+    if (s.cursor_y !== 4)
+        fail(`the wrapped line left the cursor on row ${s.cursor_y}, expected the last`);
+
+    // And a repaint of the same line after it has scrolled: backspace walks the
+    // cursor back over two row boundaries and blanks the tail by hand, which it
+    // can only do against an anchor that went up with the grid.
+    for (let i = 0; i < 30; i++)
+        press(KEY.BACKSPACE);
+    run(9230.3);
+    s = descriptor(addr);
+    if (xs(s) !== 26)
+        fail(`backspacing a wrapped line left ${xs(s)} of 26: ${JSON.stringify(rows(s))}`);
+
+    press("c".codePointAt(0), CTRL);
+    run(9230.35);
+    addr = instance.exports.resize(60, 16);
+    s = submit("clear", 9230.4);
+    s = submit("echo narrow", 9230.5);
+    if (!rows(s).includes("narrow"))
+        fail(`the shell did not survive the narrow screen: ${JSON.stringify(rows(s))}`);
+
+    // From here to `exit`, every case takes a worker away — and the shell is
+    // one of the processes holding one, so each of them kills it and init
+    // replaces what died (Concept.md §4). That bound is `RESPAWN_TRIES` deaths
+    // inside `RESPAWN_FLOOR_MS` of *scheduler* time (src/user/boot.cpp), and
+    // scheduler time here is whatever literal `run()` is passed. So the blocks
+    // below are a second or more apart on that clock rather than a millisecond,
+    // which is what keeps a shell that died from counting as a crash loop.
+    // Anything inserted here needs the same spacing, or the session ends at
+    // "the shell will not stay up" before `exit 7` is reached.
+
     // A worker taken away with a step still in it. `dropWorkers` is a host
     // letting go of the whole tier where `broke()` lets go of one link, and
     // either way the process has to be *failed* by whoever killed it: an
-    // unanswered request is a prompt that never comes back rather than a
-    // command that died.
+    // unanswered request the kernel is parked on is answered by nothing else.
+    //
+    // The shell holds a worker too now, so it goes with them and init starts
+    // another — which is what makes this the strongest form of the case. Before
+    // T8 a missed failure was a prompt that never came back; it is a whole
+    // session that never comes back now, since the shell parked on the step it
+    // was owed is the shell nobody will replace.
     s = submit("clear", 9075);
     net.hold();
     type("spin");
@@ -1573,22 +1650,36 @@ if (mode === "--kernel") {
     if (run(9075.2) !== -1)
         fail("dropping the workers left the kernel with work to do");
     s = descriptor(addr);
-    if (row(s, s.cursor_y) !== prompt(1))
-        fail(`a dropped worker left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
+    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
+        fail(`dropping the workers said ${JSON.stringify(rows(s))}`);
+    // A bare prompt, not `spin`'s status: the shell that would have printed it
+    // died in the same breath, and its replacement has no line to report.
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`a dropped worker left ${row(s, s.cursor_y)}, expected a bare prompt`);
     if (others() !== 0)
         fail(`${others()} instances outlived the workers holding them`);
     net.release();
 
-    // The shell's own instance going away, which is what a lost worker will do
-    // to /bin/sh once it is a tier-3 binary: init notices its child *died*
-    // rather than exited and starts another (Concept.md §4). Killed from the
-    // host, since `kill` refuses anything that is not a child of the caller.
+    // And the replacement got the tier back, because `dropWorkers` lets go of
+    // the workers rather than of the tier: a host that can still make one
+    // answers the next `exec` with it.
+    s = submit("clear", 9075.3);
+    s = submit("echo alive", 9075.4);
+    if (!rows(s).includes("alive"))
+        fail(`the shell after a dropped worker printed ${JSON.stringify(rows(s))}`);
+    if (!net.proc.stats().workers)
+        fail("dropping the workers gave the tier up as well");
+
+    // The shell's own worker going away, which is the thing T8 risks rather
+    // than a stand-in for it: init notices its child *died* rather than exited
+    // and starts another (Concept.md §4). Killed from the host, since `kill`
+    // refuses anything that is not a child of the caller.
     //
     // The shell's pid is init's — it runs inside init's task rather than a job
     // of its own — and /proc says so: a cwd is what only a program has. The tty
     // pump is spawned first, so init is 2.
-    s = submit("clear", 9076);
-    s = submit("cat /proc/2", 9076.1);
+    s = submit("clear", 11076);
+    s = submit("cat /proc/2", 11076.1);
     if (!rows(s).some((line) => line.startsWith("name  init")))
         fail(`/proc/2 is not init: ${JSON.stringify(rows(s))}`);
     if (!rows(s).some((line) => line.startsWith("cwd   /home")))
@@ -1600,23 +1691,29 @@ if (mode === "--kernel") {
     // collecting, and that is the line the dead shell never reaches. It is
     // parked on Sys::Wait meanwhile, so it learns nothing until the stage it is
     // waiting for finishes, which is what the second run() is for.
-    s = submit("clear", 9076.2);
-    s = submit("sleep 60000 &", 9076.3);
+    s = submit("clear", 11076.2);
+    s = submit("sleep 60000 &", 11076.3);
     if (!rows(s).some((line) => /^\[\d+\] \d+$/.test(line)))
         fail(`the doomed shell did not announce the job: ${JSON.stringify(rows(s))}`);
     type("sleep 1 | wc");
     press(KEY.ENTER);
-    run(9076.4);
+    run(11076.4);
 
     const live = net.proc.live();
+    net.terminated.length = 0;
     net.proc.kill(2);
     if (net.proc.live() !== live - 1)
         fail("pid 2 is not the shell, so the case below would assert nothing");
-    run(9078); // the timer fires, the child exits, and the shell steps to collect it
+    // The shell is a tier-3 process, so the kill reaches a worker rather than
+    // merely dropping the record. It is parked on Sys::Wait with no step
+    // outstanding, so this is the branch that has nothing to fail.
+    if (net.terminated.length !== 1)
+        fail(`killing the shell terminated ${net.terminated.length} workers, expected 1`);
+    run(11078); // the timer fires, the child exits, and the shell steps to collect it
 
     s = descriptor(addr);
     if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
-        fail(`a shell whose instance went away said ${JSON.stringify(rows(s))}`);
+        fail(`a shell whose worker went away said ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt())
         fail(`the replacement shell left ${row(s, s.cursor_y)}, expected a bare prompt`);
     if (net.proc.live() !== 1)
@@ -1630,19 +1727,19 @@ if (mode === "--kernel") {
     // survives it, which is what the second half asserts.
     type("junk");
     press("c".codePointAt(0), CTRL);
-    run(9079);
+    run(11079);
     s = descriptor(addr);
     if (!rows(s).includes(prompt(130)))
         fail(`^C on the replacement left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
-    s = submit("echo clean", 9079.1);
+    s = submit("echo clean", 11079.1);
     if (!rows(s).includes("clean"))
         fail(`the abandoned line was still in the editor: ${JSON.stringify(rows(s))}`);
 
     // A fresh shell, not the one that died: its table is empty, and what the
     // dead one backgrounded went with it — a process's children are cancelled
     // by its destructor.
-    s = submit("clear", 9079.2);
-    s = submit("jobs", 9079.3);
+    s = submit("clear", 11079.2);
+    s = submit("jobs", 11079.3);
     if (rows(s).some((line) => line.includes("sleep")))
         fail(`the replacement inherited a job: ${JSON.stringify(rows(s))}`);
 
@@ -1650,22 +1747,22 @@ if (mode === "--kernel") {
     // its own, and taking the screen back from a full-screen child.
     type("sleep 60000");
     press(KEY.ENTER);
-    run(9079.6);
+    run(11079.6);
     press("c".codePointAt(0), CTRL);
-    run(9079.7);
+    run(11079.7);
     s = descriptor(addr);
     if (!rows(s).includes(prompt(130)))
         fail(`^C on the replacement's foreground left ${JSON.stringify(rows(s))}`);
 
-    s = submit("clear", 9079.8);
+    s = submit("clear", 11079.8);
     type("less /share/doc/README");
     press(KEY.ENTER);
-    run(9079.9);
+    run(11079.9);
     s = descriptor(addr);
     if (!rows(s).some((line) => line.includes("/share/doc/README") && line.includes("q quits")))
         fail(`less under the replacement painted ${JSON.stringify(rows(s))}`);
     press("q".codePointAt(0));
-    run(9080);
+    run(11080);
     s = descriptor(addr);
     if (row(s, s.cursor_y) !== prompt())
         fail(`less did not give the replacement its screen back: ${JSON.stringify(rows(s))}`);
@@ -1678,24 +1775,32 @@ if (mode === "--kernel") {
     // the first step, so the process reads as a crash — and the tier is given
     // up there, because whether it works is a question about procworker.js and
     // not about what is running. Nothing else can ask it: `procs` is never
-    // empty once a tier-3 process is permanent, which is what the old latch
-    // waited for and would never have seen again. The screen is cleared before
-    // the tier is broken, since `clear` is a program too and would otherwise be
-    // the one that crashed.
-    s = submit("clear", 9086);
+    // empty once the shell is a tier-3 process, which is what the old latch
+    // waited for and would never have seen again.
+    //
+    // The pool is emptied by a *pipeline* rather than by `dropWorkers`, which
+    // would take the shell's worker with it and make this a case about init.
+    // One stage takes the last idle worker and the second has to hire, so the
+    // second is the one that gets the broken link — and the shell keeps the
+    // good worker it was already holding. The screen is cleared first, since
+    // `clear` is a program too and would otherwise be a third claimant.
+    s = submit("clear", 13086);
+    if (net.proc.pooled() !== 1)
+        fail(`the pool holds ${net.proc.pooled()} workers, expected one before the break`);
     net.broken = true;
-    net.proc.dropWorkers();
-    s = submit("spin 1", 9087);
-    if (!rows(s).some((line) => line.startsWith("braam: /bin/spin: crashed")))
+    s = submit("echo hi | cat", 13087);
+    if (!rows(s).some((line) => line.startsWith("braam: /bin/cat: crashed")))
         fail(`a worker that never loaded printed ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt(132))
         fail(`a crashed process left ${row(s, s.cursor_y)}, expected ${prompt(132)}`);
     if (net.proc.stats().workers)
         fail("a worker that never loaded left tier 3 on");
+    if (others() !== 0)
+        fail(`${others()} instances outlived a pipeline with a broken stage`);
 
     const made = net.links.length;
-    s = submit("clear", 9088);
-    s = submit("spin 1", 9089);
+    s = submit("clear", 13088);
+    s = submit("spin 1", 13089);
     if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
         fail(`the command after a broken worker printed ${JSON.stringify(rows(s))}`);
     if (net.links.length !== made)
@@ -1704,11 +1809,27 @@ if (mode === "--kernel") {
 
     // Where a worker cannot be made at all, a binary asking for tier 3 runs at
     // tier 2 — the same program, the same output, one isolation weaker (§4).
+    // The shell is one of them and dies here for the last time: the drop takes
+    // the worker it is holding, and the `exec` init answers with lands at tier
+    // 2, which is §4's promise coming out true for `/bin/sh` as it does for
+    // `spin`. Everything after this line runs at the weaker tier, which is why
+    // it is last but for `exit`.
+    s = submit("clear", 13089.4);
     net.workers = false;
     net.proc.dropWorkers();
+
+    // The kernel learns its shell is gone when it next tries to step it, and at
+    // a prompt that is the next key: nothing is outstanding to be failed, since
+    // the shell is parked on `key_read` and the *kernel* is holding that. So one
+    // keystroke is spent provoking it, and it goes with the shell it reached.
+    press("x".codePointAt(0));
+    run(13089.5);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
+        fail(`losing the workers said ${JSON.stringify(rows(s))}`);
+
     net.bound.length = 0;
-    s = submit("clear", 9090);
-    s = submit("spin 1", 9091);
+    s = submit("spin 1", 13091);
     if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
         fail(`the tier-2 fallback printed ${JSON.stringify(rows(s))}`);
     if (net.bound.length !== 0)
@@ -1717,11 +1838,11 @@ if (mode === "--kernel") {
         fail(`the fallback exited ${row(s, s.cursor_y)}, expected a bare prompt`);
 
     // exit ends the shell, and nothing runs after it. Last, for that reason.
-    s = submit("clear", 9097);
-    s = submit("exit 7", 9098);
+    s = submit("clear", 14097);
+    s = submit("exit 7", 14098);
     if (!rows(s).some((line) => line.startsWith("braam: the shell exited")))
         fail(`exit said nothing: ${JSON.stringify(rows(s))}`);
-    s = submit("echo after", 9099);
+    s = submit("echo after", 14099);
     if (rows(s).includes("after"))
         fail("a command ran after the shell exited");
 

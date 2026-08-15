@@ -1512,6 +1512,71 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             break;
         }
 
+        // A line editor's whole repaint. The cursor rules are Sys::Cursor's,
+        // the bytes go where Sys::Write's go, and `scrolled` is the answer the
+        // caller used to have to go back and ask Cursor for.
+        case Sys::Echo: {
+            u32 owner = tty_screen_owner();
+            if (owner && owner != p.pid) {
+                status = -i32(Error::Perm);
+                break;
+            }
+            if (payload.size() < SYS_ECHO_HEAD * 4 || !screen().cols) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u32 x   = sys_get_u32(c.stage);
+            u32 y   = sys_get_u32(c.stage + 4);
+            u32 cur = sys_get_u32(c.stage + 8);
+
+            // Dark for the write, whatever it is left as: one tick, so nothing
+            // between here and the placement below is ever presented.
+            screen_move(x, y);
+            screen_cursor(false);
+
+            u64 was    = screen_scrolled();
+            Str rest   = payload.substr(SYS_ECHO_HEAD * 4);
+            Stream out = p.io.out;
+            while (!rest.empty()) {
+                Result<usize> r = Err(Error::Again);
+                while (r.is_err() && r.error() == Error::Again)
+                    r = co_await out.write(rest);
+                if (r.is_err()) {
+                    if (r.error() == Error::Cancelled)
+                        co_return Err(Error::Cancelled);
+                    status = -i32(r.error());
+                    break;
+                }
+                if (r.value() == 0) {
+                    status = -i32(Error::Io);
+                    break;
+                }
+                rest = rest.substr(r.value());
+            }
+            if (!rest.empty())
+                break; // the loop above set the status
+
+            // Where the caller wants the cursor left, measured from the anchor
+            // and carried up by whatever the write scrolled under it.
+            u32 scrolled = u32(screen_scrolled() - was);
+            u32 off      = x + cur;
+            u32 row      = y + off / screen().cols;
+            screen_move(off % screen().cols, row >= scrolled ? row - scrolled : 0);
+            screen_cursor((sys_op_arg(c.op) & 1) != 0);
+
+            u8 head[24];
+            sys_put_u32(head, screen().cursor_x);
+            sys_put_u32(head + 4, screen().cursor_y);
+            sys_put_u32(head + 8, screen().cursor_on);
+            sys_put_u32(head + 12, screen().cols);
+            sys_put_u32(head + 16, screen().rows);
+            sys_put_u32(head + 20, scrolled);
+            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
         // Both ends in this process's table. Whichever is moved into a child is
         // closed here by the move, and that is what gives the other end an end
         // of input — there is no second copy left open to prevent it.

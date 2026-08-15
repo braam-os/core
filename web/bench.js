@@ -1,7 +1,7 @@
-// The tier measurement, doc/TODO.md T1 and T5. Boots the same kernel against
-// three boot archives — the one that ships, and the two twins `make bench`
-// packs, one tier at each end — runs the same four workloads against each, and
-// reports.
+// The tier measurement, doc/TODO.md T1, T5 and T8. Boots the same kernel
+// against three boot archives — the one that ships, which is every program at
+// tier 3, and the two twins `make bench` packs by re-stamping it — runs the
+// same four workloads against each, and reports.
 //
 // It is a page and not a Node driver on purpose: the numbers wanted are a
 // browser's postMessage, its microtask queue and its setTimeout clamp.
@@ -33,10 +33,12 @@ const EIGHT = ["sh", "edit", "less", "grep", "ls", "cat", "wc", "chat"]
 // `wc` prints one total line however many operands it was given.
 const COUNTS = /^\d+ \d+ \d+$/m;
 
+// The ids mean what they meant at T1, so the tables read straight against each
+// other; which of them ships has moved twice and is not part of what they name.
 const ARMS = {
     t2: { label: "tier 2, every program", bundle: "./bundle2.bin", tier3: false },
-    t3: { label: "tier 3, sh included", bundle: "./bundle3.bin", tier3: true },
-    t3nosh: { label: "tier 3, sh at tier 2 — as shipped", bundle: "./bundle.bin", tier3: true },
+    t3: { label: "tier 3, sh included — as shipped", bundle: "./bundle.bin", tier3: true },
+    t3nosh: { label: "tier 3, sh at tier 2", bundle: "./bundle3nosh.bin", tier3: true },
 };
 
 // Each arm twice, the second pass in reverse: JIT warm-up and thermal drift
@@ -136,6 +138,7 @@ function boot(bundle) {
         screen: () => ask("text", { kind: "selectall" }),
         key: (code, mods = 0) => term.worker.postMessage({ kind: "key", code, mods }),
         paste: (text) => term.worker.postMessage({ kind: "paste", codes: pasted(text) }),
+        render: (on) => term.worker.postMessage({ kind: "render", on }),
         dispose: () => term.dispose(),
     };
 }
@@ -200,7 +203,24 @@ function delta(a, b) {
         out[k] = b.proc[k] - a.proc[k];
     for (const k of DEFER)
         out[k] = b.defer[k] - a.defer[k];
+    // Inside the kernel worker rather than between the two: what the tick cost
+    // and what the canvas cost, so the rest is the boundary (doc/TODO.md T8).
+    out.repaints = b.repaints - a.repaints;
+    out.paint_n = b.paint.n - a.paint.n;
+    out.paint_ms = b.paint.ms - a.paint.ms;
+    out.tick_n = b.tick.n - a.tick.n;
+    out.tick_ms = b.tick.ms - a.tick.ms;
     out.trips = out.calls2 + out.calls3;
+    return out;
+}
+
+// A delta over a run of n keys, per key. `repaints` counts only the presents
+// the worker's one-slot sampler did not claim, so it is the paced run's second
+// and later paints; `paint_n` is all of them.
+function per(d, n) {
+    const out = {};
+    for (const [k, v] of Object.entries(d))
+        out[k] = v / n;
     return out;
 }
 
@@ -239,8 +259,9 @@ async function once(vm, w) {
 }
 
 // The keystroke, paced: one key in flight, so the 64-slot ring is never the
-// thing being timed. Two numbers come out of it, and they are not the same one
-// — a repaint is four syscalls, and the first of them damages the grid.
+// thing being timed. Two numbers come out of it, and they were far apart when a
+// repaint was four syscalls damaging the grid three times; since `Sys::Echo`
+// made it one they should not be, which is itself worth watching.
 //
 //   `first` — key to the first repaint, which is when the terminal has visibly
 //             answered, and is what the worker's one-slot sampler holds.
@@ -249,7 +270,7 @@ async function once(vm, w) {
 // Under Blink they are within half again of each other; under Gecko the second
 // is forty times the first, so reporting either alone would mislead.
 async function paced(vm, n) {
-    await vm.stats(true);
+    const a = await vm.stats(true);
     const first = [];
     const echo = [];
     for (let i = 0; i < n; i++) {
@@ -260,15 +281,18 @@ async function paced(vm, n) {
         first.push(s.keys[i]);
         echo.push(s.last_present - s.last_key);
     }
+    const b = await vm.stats();
     vm.key(0x63, CTRL); // abandon the line; at the prompt ^C kills nothing
     await quiesce(vm);
-    return { first, echo };
+    return { first, echo, d: per(delta(a, b), n) };
 }
 
 // And the same keys posted back to back, which is a different measurement: the
 // sampler holds one stamp, so this is wall time for the run and a count of what
 // survived the ring rather than a per-key latency.
-async function burst(vm, n) {
+async function burst(vm, n, dark) {
+    if (dark)
+        vm.render(false);
     const a = await vm.stats(true);
     for (let i = 0; i < n; i++)
         vm.key(0x61); // 'a'
@@ -276,7 +300,15 @@ async function burst(vm, n) {
     const line = last(await vm.screen());
     vm.key(0x63, CTRL);
     await quiesce(vm);
-    return { sent: n, echoed: (line.match(/a/g) || []).length, ms: b.last_present - a.now };
+    if (dark)
+        vm.render(true);
+    return {
+        sent: n,
+        echoed: (line.match(/a/g) || []).length,
+        ms: b.last_present - a.now,
+        dark: !!dark,
+        d: per(delta(a, b), n),
+    };
 }
 
 // ------------------------------------------------------------------- the run
@@ -360,7 +392,12 @@ async function arm(id, acc) {
         const k = await paced(vm, KEYS);
         acc.keys.push(...k.first);
         acc.echo.push(...k.echo);
+        acc.paced.push(k.d);
         acc.burst.push(await burst(vm, BURST));
+        // The same burst with nothing drawn. It is the A/B that says whether a
+        // keystroke's cost is the canvas commit or the turn that carries it,
+        // and it is last so that nothing measured before it ran blind.
+        acc.burst.push(await burst(vm, BURST, true));
         note(`${id} keys: ${median(acc.echo).toFixed(2)} ms to the full echo`);
 
         const last = await vm.stats();
@@ -422,6 +459,13 @@ function summarise(acc) {
         echo_iqr: iqr(acc.echo),
         echo_mean: acc.echo.reduce((a, b) => a + b, 0) / (acc.echo.length || 1),
         burst: acc.burst,
+        // What one paced keystroke cost, broken down: the round trips it made,
+        // and the two things inside the kernel worker that a tier-3 step puts
+        // in tasks of their own (doc/TODO.md T8).
+        key_cost: Object.fromEntries(
+            ["trips", "steps2", "steps3", "repaints", "paint_n", "paint_ms", "tick_n", "tick_ms",
+             "micro_n", "timer_n"]
+                .map((k) => [k, median(acc.paced.map((d) => d[k]))])),
         defer: acc.defer,
     };
 }
@@ -442,11 +486,31 @@ function table(report) {
     out.push("");
     for (const [id, a] of Object.entries(report.arms)) {
         const us = a.us_per_trip === null ? "n/a" : `${a.us_per_trip.toFixed(1)} us`;
-        const b = a.burst[0] || {};
+        const b = a.burst.find((x) => !x.dark) || {};
         out.push(`${id}: ${us}/round trip, key ${a.key_mean.toFixed(3)} ms to first paint, `
                  + `${a.echo_mean.toFixed(3)} to the echo (n ${a.key_n}), `
                  + `burst ${b.echoed}/${b.sent} in ${(b.ms || 0).toFixed(0)} ms`);
     }
+
+    // What a keystroke is made of, per key, and the same burst with nothing
+    // drawn beside the one that drew.
+    out.push("");
+    const cost = [["arm", "trips", "steps", "paints", "paint ms", "tick ms",
+                   "burst ms/key", "dark ms/key"]];
+    for (const [id, a] of Object.entries(report.arms)) {
+        const c = a.key_cost;
+        const lit = a.burst.find((x) => !x.dark);
+        const dark = a.burst.find((x) => x.dark);
+        const rate = (x) => (x ? (x.ms / x.sent).toFixed(3) : "n/a");
+        cost.push([id, c.trips.toFixed(1), (c.steps2 + c.steps3).toFixed(1),
+                   c.paint_n.toFixed(1), c.paint_ms.toFixed(3), c.tick_ms.toFixed(3),
+                   rate(lit), rate(dark)].map(String));
+    }
+    const cw = cost[0].map((_, i) => Math.max(...cost.map((r) => r[i].length)));
+    const lines = cost.map((r) => r.map((c, i) => c.padStart(cw[i])).join("  "));
+    lines.splice(1, 0, cw.map((n) => "-".repeat(n)).join("  "));
+    out.push(...lines);
+
     return out.join("\n");
 }
 
@@ -501,7 +565,7 @@ async function main() {
              + `runs ${RUNS}, warm-ups ${WARM}, do not switch away`);
         const id = ORDER[step];
         const acc = state.accs[id]
-            || (state.accs[id] = { id, work: {}, keys: [], echo: [], burst: [] });
+            || (state.accs[id] = { id, work: {}, keys: [], echo: [], burst: [], paced: [] });
 
         // A kernel that never finishes booting is the one failure that recurs,
         // and a fresh document is the only reliable way out of it: the handles

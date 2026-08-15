@@ -65,6 +65,11 @@ const Screen &screen();
 
 Cell *screen_cells();
 
+// Rows the grid has moved up, ever — a scroll's, and a resize's drop from the
+// top. Nothing else counts them, so a writer holding an anchor row takes the
+// difference across whatever it did to learn how far the anchor went.
+u64 screen_scrolled();
+
 void screen_style(u8 fg, u8 bg, u8 attrs);
 
 void screen_put(char32_t ch);

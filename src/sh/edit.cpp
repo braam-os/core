@@ -56,9 +56,8 @@ Task<Result<void>> LineEditor::place_cursor()
 }
 
 // One unconditional repaint from the anchor. There is no erase-to-end-of-line,
-// so the tail of a shortened line is blanked by hand — and the whole thing goes
-// out as a single write, because a syscall per character would be a round trip
-// per character.
+// so the tail of a shortened line is blanked by hand — and the whole thing is
+// one syscall, because a keystroke pays a round trip for each (§4.3).
 Task<Result<void>> LineEditor::redraw()
 {
     if (!cols_)
@@ -75,42 +74,22 @@ Task<Result<void>> LineEditor::redraw()
         if (!out.push(' '))
             co_return Err(Error::NoMemory);
 
-    usize total = buf_.size() > painted_ ? buf_.size() : painted_;
-    painted_    = buf_.size();
+    painted_ = buf_.size();
 
-    // Dark while painting. Each of these is a step of its own and the grid is
-    // presented at the end of every tick, so a visible cursor would be seen
-    // walking the line rather than arriving at the end of it.
-    if (Task<Result<CursorAt>> t = cursor_set(x0_, y0_, false)) {
-        if (Result<CursorAt> r = co_await t; r.is_err())
-            co_return Err(r.error());
-    } else
+    // Anchor, bytes and cursor in one operation, so one tick and one present:
+    // nothing hides the cursor because it is never seen walking the line, and
+    // nothing asks where the write ended because `scrolled` says.
+    Task<Result<Painted>> t = cursor_echo(x0_, y0_, cur_, true, out.str());
+    if (!t)
         co_return Err(Error::NoMemory);
+    Result<Painted> r = co_await t;
+    if (r.is_err())
+        co_return Err(r.error());
 
-    if (Task<Result<void>> t = write_all(SYS_STDOUT, out.str())) {
-        if (Result<void> r = co_await t; r.is_err())
-            co_return Err(r.error());
-    } else
-        co_return Err(Error::NoMemory);
-
-    // Nothing counts scrolls, so ask where the write ended: the shortfall
-    // against where it should have ended is exactly how far the grid moved.
-    if (total) {
-        Task<Result<CursorAt>> t = cursor_get();
-        if (!t)
-            co_return Err(Error::NoMemory);
-        Result<CursorAt> r = co_await t;
-        if (r.is_err())
-            co_return Err(r.error());
-        cols_ = r.value().at.cols;
-        rows_ = r.value().at.rows;
-
-        u32 want = y0_ + u32((x0_ + total - 1) / cols_);
-        if (r.value().y < want)
-            y0_ = want - r.value().y < y0_ ? y0_ - (want - r.value().y) : 0;
-    }
-
-    co_return co_await place_cursor();
+    cols_ = r.value().cursor.at.cols;
+    rows_ = r.value().cursor.at.rows;
+    y0_   = r.value().scrolled < y0_ ? y0_ - r.value().scrolled : 0;
+    co_return {};
 }
 
 // The prompt goes out first and the anchor is where it ends — on a column the

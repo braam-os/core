@@ -71,6 +71,29 @@ void test_screen()
     CHECK_EQ(s.cursor_x, 0);
     CHECK_EQ(s.cursor_y, 1);
 
+    // Rows off the top are counted, which is the only way a writer holding an
+    // anchor row learns that the anchor moved (Sys::Echo, Concept.md §4.3).
+    // Nothing else in the grid records a scroll: cursor_y does not change.
+    screen_reset();
+    screen_resize(2, 2);
+    CHECK_EQ(screen_scrolled(), u64(0));
+    screen_write("ab\ncd");
+    CHECK_EQ(screen_scrolled(), u64(0)); // filled it, nothing dropped yet
+    screen_write("\nef");
+    CHECK_EQ(screen_scrolled(), u64(1));
+    CHECK_EQ(s.cursor_y, 1);
+    screen_write("\ngh\nij");
+    CHECK_EQ(screen_scrolled(), u64(3));
+
+    // A resize that drops rows from the top is the grid moving up in exactly
+    // the same sense, so it counts the same way.
+    screen_reset();
+    screen_resize(4, 4);
+    screen_write("one\ntwo\nsix\nfor\n"); // the trailing newline scrolls once
+    CHECK_EQ(screen_scrolled(), u64(1));
+    CHECK(screen_resize(4, 2) != 0); // two of the four rows in use go
+    CHECK_EQ(screen_scrolled(), u64(3));
+
     // Backspace erases, and walks back over a row boundary.
     screen_reset();
     screen_resize(3, 2);

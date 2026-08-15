@@ -10,6 +10,13 @@ The order below is deliberate. Measurement comes before commitment, the pool is 
 everything starts competing for it, and the shell is last because it is the only step that
 amends the specification.
 
+**The "no C++ changes" claim held for thirty-one of the thirty-two, and not for the shell.** T8
+found that the prompt could not be moved at the price it was paying — five round trips a keystroke,
+which T1 and T5 had both measured and §4.4 had written down as the one program that could not
+afford the tier — so the round trips were cut before the stamp was flipped. That is `sysabi.h`,
+`exec.cpp`, `src/kernel/screen.*`, `src/proc/` and `src/sh/`, and `PROC_ABI` 5 → 6. Everything
+above still stands: the tier itself moved nothing.
+
 ## T1. Measure the two tiers, before anything moves
 
 The reason for today's split is the cost of a syscall, so that number decides how much of the
@@ -379,6 +386,84 @@ After T7 and not before.
 - Consider moving the default to tier 3 in `cmake/BraamProgram.cmake` here, so the SDK's example
   and an out-of-tree program follow the system's own answer.
 
+**Done — but the keystroke was cut first, and that was most of the work.** The bullets above are
+three lines of cmake and were the last thing done. What stood in the way was the table at the top
+of T5: a tier-3 shell at 0.27 / 2.58 / 6.20 ms a key sustained against 0.09 / 0.41 / 0.25, and
+§4.4 stating outright that *"the only program that cannot afford it is the one being typed into"*.
+Flipping the stamp alone would have shipped exactly that.
+
+**A keystroke was five round trips and is two**, which is the whole answer and is measured rather
+than counted — `calls2` across one key at the prompt in `test/run.mjs`'s driver reads 5 before and
+2 after. The five were `key_read`, then `redraw()`'s `cursor`, `write`, `cursor`, `cursor`: four
+operations for **one** change to the grid. `Sys::Echo` at 71 is those four, `PROC_ABI` is 6, and
+the §4.3 table is thirty-six. Two is the floor without fusing the keyboard into the paint, which
+would be a worse ABI than the one it saved. Release_Notes.md has the shape it took and the two
+cheaper alternatives that were not enough.
+
+It is also **three presents per key rather than one**. The grid is presented at the end of every
+tick, so four operations painted a keystroke three times, and the cursor had to be *hidden*
+through a repaint or it would be seen walking the line. That matters if what a tier-3 keystroke
+actually costs is the canvas commit rather than the transit — see the attribution below, which is
+the one thing here that is instrumented and not yet measured.
+
+**The flip.** `set(BRAAM_BIN_TIER_sh 2)` and its comment are gone, `src/cmd/CMakeLists.txt` passes
+no `TIER` at all, and `stamp.py`'s `--tier` is required rather than defaulting to 2. The default in
+`cmake/BraamProgram.cmake` was already 3 (T3 moved it there), so the third bullet was done in
+advance and the SDK needed nothing. No C++ moved and `bundle.bin` is the size it was.
+
+**The bench arms turned over.** `bundle.bin` is the `t3` arm now, so `bundle3.bin` would be a
+duplicate of it — the mirror of what T5 fixed for `bundle3nosh.bin`. `make bench` packs
+`bundle3nosh.bin` instead, which is one re-stamp of `sh` rather than a pass over thirty-two. The
+ids still mean what they meant at T1.
+
+**Four cases in `test/run.mjs` changed meaning rather than numbers**, all of them because
+`dropWorkers()` takes the shell's worker now: the held-step case asserts a session that came back
+rather than a prompt; the broken-worker case empties the pool with a two-stage pipeline, because
+dropping the workers would have made it a case about init and — as written — would have given the
+tier up before the command it was asserting about ever ran; `kill(2)` asserts a worker terminated;
+and the fallback case spends one keystroke provoking the death, since at a prompt the kernel learns
+its shell is gone only when it next tries to step it. The pool literals moved to 18/16 and 23/20,
+mostly because `instantiate()` now calls `net.proc.shutdown()` — the process table outlives the
+three kernels the driver boots, and the outgoing shell's worker was being orphaned.
+
+**And the driver learned about `RESPAWN_TRIES`.** Three shell deaths inside a second of *scheduler*
+time end the session, and scheduler time here is whatever literal `run()` is passed — the tail of
+the file killed the shell three times inside twelve milliseconds of it. Those blocks are seconds
+apart now, with a comment, because the next case inserted there needs the same spacing.
+
+### Still to measure
+
+`make bench` is instrumented for it and has not been run: `web/worker.js` counts `paint` and `tick`,
+`web/bench.js` takes a stats delta across `paced()` and `burst()` and reports trips, steps, paints
+and both inside-the-worker times per key, and a `render` message turns drawing off for one extra
+burst per arm. That A/B is what settles the question the arithmetic could not: **five round trips at
+the measured 34–45 µs is 0.25 ms, which is Blink's tier-3 figure to the clock and 13× short of
+Gecko's and 35× short of WebKit's.** So Blink's tier-3 keystroke *is* its round trips and the other
+two engines' is not, and the only per-turn asymmetry between the prompt's round trips and `wc`'s
+anywhere in the tree is that three of the five damage the grid and the kernel worker draws once per
+tick. If the dark burst drops to the lit one's figure, the residual is the canvas commit per task
+and the three-to-one present is what fixed it; if it does not, the bare worker↔worker turn is slow
+on this path and the round trips are, and the numbers should say so either way.
+
+The bar the flip was taken against, sustained typing, 64 keys back to back, ms per key:
+
+| | tier-2 shell (T5) | tier-3 shell as T5 measured | bar |
+|---|---|---|---|
+| Blink | 0.09–0.12 | 0.27–0.28 | ≤ 0.20 |
+| Gecko | 0.41–0.42 | 2.58–2.62 | ≤ 0.90 |
+| WebKit | 0.25–0.27 | 6.20–6.25 | ≤ 0.90 |
+
+plus zero dropped keystrokes and no regression beyond the clock on W0–W3 against T5's shipped row.
+"Under a frame" is not the bar: 6.2 ms a key is already under a frame and T5 called it a shell that
+feels slow, correctly.
+
+### What T8 did not fix
+
+`anchor()` is seven or eight round trips and `interactive()` adds a `cwd_get`, so **Enter to the
+next prompt is an order of magnitude more than a keystroke**. It is paid once a line rather than
+once a key, which is why it is not what the flip turned on — and it is the next thing anyone will
+notice.
+
 ## T9. Documentation, in the same commits as the code
 
 - **Concept.md §4** — the tier table's "Used for" column, which today reads *"every program, the
@@ -389,6 +474,25 @@ After T7 and not before.
 - **Release_Notes.md** — a new heading, with T1 and T5's figures in it, since the whole
   argument for the change is those two numbers.
 - **System_Calls.md** — only if T6 was done.
+
+**Done, in T8's commits rather than after them.** Two of the four items had drifted before anyone
+reached them, which is the argument for the rule: §4's "Used for" column no longer read what this
+list quotes, and the keystroke gap in CLAUDE.md said *six ticks* where the code made five calls.
+
+- **Concept.md §4** — the tier table's column, §4.2's pool paragraph (one worker is held for the
+  session, which is also why the capability probe cannot ask whether anything is running), and
+  §4.4's *"the only program that cannot afford it is the one being typed into"*, which is the
+  sentence the change falsifies and now says what actually made the prompt an exception: the
+  *count* of round trips, not the tier. §4.3 gained `echo`, in T8's first commit.
+- **CLAUDE.md** — the process model, the bench arms, and three known gaps: the instantiation
+  cost, the two-hop syscall, and the keystroke, which is two round trips and was five.
+- **Release_Notes.md** — two headings rather than one, since the keystroke and the flip are
+  separable and the first stands on its own.
+- **System_Calls.md** — T6 was not done, but the ABI moved anyway: the operation table, the
+  `Cursor` paragraph (a line editor no longer infers a scroll from a shortfall), an `Echo`
+  paragraph, and `PROC_ABI`.
+- **Programming_Manual.md §7**, which this list did not name and which said tier 3 was what every
+  program but the shell runs at, and cited the prompt as the case for asking for tier 2.
 
 ## What this does not fix
 

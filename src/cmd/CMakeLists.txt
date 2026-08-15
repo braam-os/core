@@ -6,20 +6,16 @@ set(BRAAM_BIN_LIST cat chat clear curl date df echo edit export false grep head 
                    timeout touch true version watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 
-# A worker of its own is what the recipe gives a program, so a command that
-# will not come back can be killed. The shell asks for tier 2 instead: it is
-# never killed, and a tier-3 prompt would pay two postMessage hops per
-# keystroke (doc/TODO.md T1).
-set(BRAAM_BIN_TIER_sh 2)
+# Every one of them takes a worker of its own, the shell included, which is what
+# the recipe gives a program and what nothing here asks out of (doc/TODO.md T8).
 
 # A program that is more than one translation unit names the library that holds
 # the rest of it. Only the shell is.
 set(BRAAM_BIN_LIB_sh braam_sh)
 
-# An undefined TIER or LIBS expands to nothing, which is the recipe's default.
+# An undefined LIBS expands to nothing, which is the recipe's default.
 foreach(prog IN LISTS BRAAM_BIN_LIST)
     braam_add_program(NAME ${prog}
                       SOURCES ${prog}.cpp
-                      TIER ${BRAAM_BIN_TIER_${prog}}
                       LIBS ${BRAAM_BIN_LIB_${prog}})
 endforeach()

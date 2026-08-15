@@ -24,6 +24,10 @@ bool g_dirty;
 // leaving a ghost behind.
 u32 g_drawn_x, g_drawn_y;
 
+// Rows the grid has moved up, ever. Nothing else counts them, and a writer
+// holding an anchor has no other way to learn its row went with them.
+u64 g_scrolled;
+
 bool sized()
 {
     return g_cells && g.cols && g.rows;
@@ -75,6 +79,7 @@ void scroll()
     clear_row(g_cells, g.cols, g.rows - 1);
     if (g_drawn_y)
         g_drawn_y--;
+    g_scrolled++;
     damage_all();
 }
 
@@ -123,6 +128,7 @@ u32 screen_resize(u32 cols, u32 rows)
                              keep_cols * sizeof(Cell));
 
         g.cursor_y = g.cursor_y - src0; // cursor_y is live - 1, so keep_rows - 1
+        g_scrolled += src0;             // rows off the top, as a scroll's are
         if (g.cursor_x > cols)
             g.cursor_x = cols;
     } else {
@@ -149,6 +155,11 @@ const Screen &screen()
 Cell *screen_cells()
 {
     return g_cells;
+}
+
+u64 screen_scrolled()
+{
+    return g_scrolled;
 }
 
 void screen_style(u8 fg, u8 bg, u8 attrs)
@@ -274,4 +285,5 @@ void screen_reset()
     g_attrs   = 0;
     g_dirty   = false;
     g_drawn_x = g_drawn_y = 0;
+    g_scrolled            = 0;
 }

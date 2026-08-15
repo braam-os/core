@@ -7,6 +7,131 @@ of the two needs amending.
 
 ---
 
+## The shell takes a worker
+
+doc/TODO.md T8, and the end of "every program at tier 3": `set(BRAAM_BIN_TIER_sh 2)` is gone,
+`src/cmd/CMakeLists.txt` passes no `TIER` at all, and there is no name left in §4's tier table.
+`stamp.py`'s `--tier` is required rather than defaulting to 2, which had become the answer no
+caller wants.
+
+**Two things had to be true first, and neither was about the stamp.** T7 made a lost worker cost a
+shell rather than the session — init replaces one that *died* — and the section above made a
+keystroke two round trips where it was five. The order was not incidental: T1 and T5 both measured
+a tier-3 shell at 2.6 ms a key in Gecko and 6.2 in WebKit while it was being typed into, and §4.4
+said in as many words that the prompt was the one program that could not afford the tier. Flipping
+the stamp on its own would have shipped that.
+
+**What the flip itself cost is nothing in C++.** The tier is a `u32` in a fixed-width custom
+section, so no binary moved a byte and `bundle.bin` is the size it was.
+
+### The bench arms turned over
+
+`bundle.bin` is now the `t3` arm — every program at tier 3 — so `bundle3.bin` would have been a
+duplicate of it, which is the mirror image of what T5 fixed for `bundle3nosh.bin`. The twin that is
+now missing is the one that does *not* ship, so `make bench` packs `bundle3nosh.bin` instead, and it
+takes a single re-stamp of `sh` rather than a pass over all thirty-two. The ids still mean what they
+meant at T1, which is the point of them: `t2`, `t3nosh`, `t3`. Which of them ships has moved twice
+and is not part of what they name.
+
+### Four test cases changed meaning, not numbers
+
+`dropWorkers()` takes the shell's worker now, and that is a different sentence in every case that
+called it.
+
+- **The held-step case is stronger than it was.** It asserts that a worker taken away with a step in
+  it has that step *failed* by whoever took it. Before T8 a missed failure was a prompt that never
+  came back; it is a session that never comes back now, because the shell parked for ever on a reply
+  is the shell nobody will replace. The expected screen is `braam: the shell died` and a **bare**
+  prompt rather than the killed command's status — the shell that would have printed the status died
+  in the same breath — followed by a command on the replacement, which proves the tier came back
+  too: `dropWorkers` lets go of the workers, not of the tier.
+- **The broken-worker case had stopped testing what it said.** As written it set `net.broken` and
+  then dropped the workers, which killed the shell into a world where every worker fails to load:
+  init would re-exec, the replacement would die at its first step, `broke()` would set `workers`
+  false, and the third shell would come up at tier 2 — so by the time the case ran its command the
+  tier was already off and the command *succeeded* where the assertion wanted a crash. It empties
+  the pool with a two-stage pipeline instead: one stage takes the last idle worker, the second has
+  to hire and gets the broken link, and the shell keeps the good worker it was already holding. The
+  case is about a program again.
+- **`net.proc.kill(2)` reaches a worker** rather than merely dropping a record, so it asserts
+  exactly one termination. That case is now literally what T8 risks instead of a stand-in for it.
+- **The fallback case is where the shell dies for the last time**, and it needed one keystroke it
+  did not need before: the kernel learns its shell is gone when it next tries to *step* it, and at a
+  prompt the shell is parked on `key_read` with nothing outstanding to fail. So a key is spent
+  provoking the death, and goes with the shell it reached.
+
+**And the driver had to learn about `RESPAWN_TRIES`.** Init gives up after three deaths inside a
+second of *scheduler* time, and scheduler time in `test/run.mjs` is whatever literal `run()` is
+passed. The tail of the file killed the shell three times inside twelve milliseconds of it, which
+ends the session at "the shell will not stay up" before `exit 7` is ever reached. The blocks are now
+seconds apart on that clock, with a comment saying why, because the next case inserted there will
+need the same spacing and nothing else would say so.
+
+One thing that is not a test change but reads like one: `instantiate()` calls `net.proc.shutdown()`
+now. `makeProc` is built once and outlives the three kernels the driver boots, and a reload throws
+every nested worker away — so without it the outgoing shell's record was overwritten by the incoming
+one at the same pid and its worker was orphaned, never pooled and never terminated. It moved the
+pool literals (18 hired and 16 terminated at the first, 23 and 20 at the second) as much as the flip
+did.
+
+### What did not change
+
+The wasm ABI, the §4.3 table, `web/proc.js`, `web/procworker.js`, and the process runtime. The two
+tier-3 fidelity losses (§4.3) stop being true of thirty-one programs and start being true of
+thirty-two: a binary that will not instantiate reads as a crash rather than a refusal, and
+`Sys::Now` is relative. Nothing calls `proc_now()`, so the second is still a constraint on what may
+be written next rather than a regression.
+
+## A repaint is one syscall
+
+doc/TODO.md T8's first half. T1 and T5 both measured the same thing and said it twice: a shell at
+tier 3 costs 0.27 ms a key in Blink, 2.6 in Gecko and 6.2 in WebKit while it is being typed into,
+against 0.09, 0.41 and 0.25 at tier 2. T5 called that "the strongest thing in this table" and §4.4
+went further — *"the only program that cannot afford it is the one being typed into"*. So the flip
+could not be a stamp change alone; the keystroke had to get cheaper first.
+
+**A keystroke was five round trips and is two**, measured rather than counted: the fake driver's
+`calls2` across one key at the prompt reads 5 before and 2 after. The five were `key_read`, then
+`redraw()`'s `cursor` to the anchor, `write` of the whole line, `cursor` again to find out what had
+scrolled, and `cursor` to put the cursor where the caller wanted it. Four operations, and **one**
+change to the grid.
+
+`Sys::Echo` at 71 is those four. Its payload is the anchor and how many cells past it to leave the
+cursor, then the bytes; its reply is where the cursor ended, the geometry, and `scrolled`. `PROC_ABI`
+is 6 and the §4.3 table is thirty-six.
+
+Three things are worth recording about the shape it took.
+
+- **`scrolled` is a counter, not an inference.** The old code wrote, asked where the write had ended,
+  and subtracted that from where it should have ended — the shortfall being how far the grid had
+  moved, since nothing counted scrolls. `screen_scrolled()` counts them now, and `Echo` reports the
+  difference across itself. A resize's drop from the top is folded in at the same point, because
+  that is also the grid moving up under an anchor, and the old inference could not see it at all
+  once `cols` had changed underneath.
+- **The dark-while-painting dance is gone.** `redraw()` hid the cursor before the write and showed
+  it after, and the comment said why: each call was a step of its own, the grid is presented at the
+  end of every tick, so a visible cursor would be *seen* walking the line. One operation is one
+  tick. There is nothing to hide from, and a keystroke now paints the screen once where it painted
+  it three times — which matters more than the round trips if what a tier-3 keystroke actually
+  costs turns out to be the canvas commit rather than the transit.
+- **It authorises nothing new.** Everything `Echo` does, four existing operations could already do,
+  to the same screen, under the same refusal: `Err(Perm)` while another process holds the alternate
+  screen, `Cursor`'s rule for `Cursor`'s reason. The bytes go through `p.io.out`, the same `Stream`
+  `Sys::Write` uses, so a redirected stdout behaves exactly as it did. What it removes is three
+  windows in which another process could move the cursor under a repaint in progress.
+
+The rejected alternatives, since both are cheaper and neither is enough. **Skipping the post-write
+`cursor` when the paint cannot reach the bottom row** is a real saving of one call in five and is
+subsumed by this. **An append-only fast path** — write the one new character, no cursor calls at
+all — is 5 → 2 for plain typing, but only for typing: backspace, the arrows, `^W`, `^U`, `^K` and
+history recall all stay at five, and it costs the invariant that `redraw()` is one unconditional
+repaint, which is what keeps the editor right across a resize, a `^L` and the deferred wrap column.
+
+**What is still five is a whole line.** `anchor()` costs seven or eight round trips — two
+`cursor_get`s and three `put_styled`s of a `style` and a `write` each — and `interactive()` adds a
+`cwd_get` per line. That is the Enter-to-next-prompt cost, and it is the next thing anyone will
+notice; it is not this change, because it is paid once a line rather than once a key.
+
 ## The shell gets a pid, and `Sys::Fg` gets the rule it meant
 
 Init ran `/bin/sh` from a default-constructed `Executable` and nothing ever filled `exe.pid` in, so

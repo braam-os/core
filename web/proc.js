@@ -38,7 +38,7 @@ const tierOf = (flags) => flags >>> 28;
 const MAX_IDLE = 4;
 
 // Workers hired before anything needs one: the capability probe, and one for
-// what the shell runs first.
+// the shell, which takes one at boot and holds it for the session.
 const PRE_HIRE = 2;
 
 // ------------------------------------------------------- the process's half
@@ -471,9 +471,10 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     // Letting go of the workers alone: the pool, and every process one is
     // holding. A tier-2 process is untouched, because there is no worker
     // between it and the kernel — which is the whole of §4's fallback, and is
-    // why this is not `shutdown`. A process losing its worker here is killed by
-    // it, step and all; init replaces a shell that died this way (Concept.md
-    // §4).
+    // why this is not `shutdown`. Since T8 that spares nothing at first: the
+    // shell holds a worker too and goes with the rest, and init replaces it —
+    // at tier 2, if that is all the host has left (Concept.md §4). A process
+    // losing its worker here is killed by it, step and all.
     function dropWorkers() {
         for (const link of idle) {
             stat.terminated++;

@@ -46,6 +46,18 @@ const KEY_SAMPLES = 256;
 const keys = [];
 const defer = { micro_ms: 0, micro_n: 0, timer_ms: 0, timer_n: 0 };
 
+// Where a keystroke's time goes, either side of the two boundaries a tier-3
+// step adds (doc/TODO.md T8): the kernel's own tick, and the draw into the
+// OffscreenCanvas. Cumulative, so a caller takes differences.
+const paint = { n: 0, ms: 0 };
+const tick = { n: 0, ms: 0 };
+
+// Drawing off, for the A/B that says whether a keystroke's cost is the canvas
+// or the turn. The grid is still damaged and still presented; only the pixels
+// are skipped, and renderer.text() reads the kernel's memory rather than them,
+// so a `selectall` still answers.
+let drawing = true;
+
 // The same handshake for the embedder's options, which decide where the module
 // is fetched from and therefore cannot be applied after boot has started.
 let configured = null;
@@ -132,8 +144,12 @@ async function boot() {
         } else {
             repaints++;
         }
-        if (renderer)
+        if (renderer && drawing) {
+            const at = performance.now();
             renderer.present(x, y, w, h);
+            paint.ms += performance.now() - at;
+            paint.n++;
+        }
     }, fs, svc);
 
     // Streaming needs an application/wasm content type; not every static host
@@ -202,7 +218,10 @@ function pump() {
         clearTimeout(timer);
         timer = null;
     }
-    const delay = self.kernel.tick(performance.now());
+    const at = performance.now();
+    const delay = self.kernel.tick(at);
+    tick.ms += performance.now() - at;
+    tick.n++;
     if (delay >= 0)
         timer = setTimeout(pump, delay);
 }
@@ -281,6 +300,9 @@ self.onmessage = ({ data }) => {
             last_key,
             last_present,
             defer: { ...defer },
+            paint: { ...paint },
+            tick: { ...tick },
+            drawing,
         });
         // Only the key samples, which a caller indexes by position. The
         // counters stay cumulative so a caller can take differences.
@@ -288,6 +310,12 @@ self.onmessage = ({ data }) => {
             keys.length = 0;
             key_at = 0;
         }
+        return;
+    }
+
+    // The other half of the measurement: the same run with nothing drawn.
+    if (data.kind === "render") {
+        drawing = !!data.on;
         return;
     }
 

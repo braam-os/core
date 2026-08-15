@@ -9,6 +9,10 @@
 // program that loops is modelled rather than run: `hold` leaves a step
 // undelivered, which is precisely what the kernel sees of a real one, and the
 // terminate that answers it is counted.
+//
+// Since T8 the shell is on the other end of one of these links too, and a
+// permanent one: a link taken away here is a session rather than a command, and
+// a `hold` that landed on the shell's pid would stop the driver dead.
 
 import { serveProc, workerOps, STEP } from "../web/proc.js";
 
