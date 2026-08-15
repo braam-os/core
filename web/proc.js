@@ -31,9 +31,15 @@ const initialOf = (flags) => flags & 0xffff;
 const maxOf = (flags) => (flags >>> 16) & 0xfff;
 const tierOf = (flags) => flags >>> 28;
 
-// How many workers stay hired with no process in them. The pool saves the cost
-// of starting one, not memory: a process's pages go when its instance does.
-const MAX_IDLE = 2;
+// How many workers stay hired with no process in them: a four-stage pipeline's
+// worth, so a pipeline neither hires nor terminates. The pool saves the cost of
+// starting one, not memory: a process's pages go when its instance does, which
+// is at the step that ended it and not at the next bind.
+const MAX_IDLE = 4;
+
+// Workers hired before anything needs one: the capability probe, and one for
+// what the shell runs first.
+const PRE_HIRE = 2;
 
 // ------------------------------------------------------- the process's half
 
@@ -45,11 +51,20 @@ export function serveProc(ops) {
     let instance = null;
     let started = false;
 
+    // The instance and its memory go together, and nothing reads either once a
+    // step has ended the process. A pooled worker keeps its `serveProc` until
+    // it is hired again, so this is what stops it holding the last process's
+    // pages until then.
+    function release() {
+        instance = null;
+        mem.bind(null);
+    }
+
     return {
         mem,
 
-        // Also the reset a pooled worker gets: the previous instance goes, and
-        // the whole of its memory with it.
+        // A worker out of the pool is already clean; this is the reset one gets
+        // anyway, since a bind must not inherit an instance either way.
         bind(module, initial, maximum) {
             instance = null;
             started = false;
@@ -95,11 +110,18 @@ export function serveProc(ops) {
                     ? instance.exports._resume(token >>> 0, ptr, payload.length)
                     : instance.exports._start(ptr, payload.length);
                 started = true;
-                return { result: out === 0 ? STEP.EXITED : STEP.SUSPENDED };
+                if (out === 0) {
+                    // The process is over, so its memory goes now rather than
+                    // at the next bind: a pooled worker holds its instance and
+                    // would pin as much as PROC_MAX_PAGES until it is hired.
+                    release();
+                    return { result: STEP.EXITED };
+                }
+                return { result: STEP.SUSPENDED };
             } catch {
                 // A trap is how a process reports a fatal error, and there is
                 // nothing left to resume: the instance goes.
-                instance = null;
+                release();
                 return { result: STEP.TRAPPED };
             }
         },
@@ -168,7 +190,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     const procs = new Map();   // pid -> the kernel's half of one process
     const queue = [];          // tier-2 steps, waiting for the kernel to unwind
     const idle = [];           // workers with no process in them
-    let workers = true;        // until one refuses to be made
+    let workers = true;        // until one refuses to be made, or none will load
 
     // What the tier costs, counted where it is spent (doc/TODO.md T1). A round
     // trip is one asynchronous call and the step that answers it, which is
@@ -212,6 +234,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             link.onmessage = ({ data }) => deliver(link, data);
             link.onerror = () => broke(link);
             link.pid = 0;
+            link.ready = false; // until it says so; see broke()
             stat.hired++;
             return link;
         } catch {
@@ -254,8 +277,17 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         link.pid = 0;
         stat.terminated++;
         link.terminate();
-        if (!idle.length && !procs.size)
-            workers = false; // it never worked; stop trying
+
+        // Whether to give the tier up is a question about the *script*, not
+        // about what is running: once a tier-3 process is permanent the pool
+        // and the process table are both non-empty forever, so a rule that
+        // waits for both to empty never fires. The answer is whether this
+        // worker got as far as announcing itself. One that did was loaded and
+        // has crashed, which is its process's business; one that did not is a
+        // `procworker.js` that will not load, and would otherwise be hired
+        // again on every `exec`.
+        if (!link.ready)
+            workers = false;
     }
 
     function spawn(r) {
@@ -362,8 +394,12 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     }
 
     function deliver(link, m) {
+        if (m.k === "ready") {
+            link.ready = true; // it loaded, which is all broke() needs to know
+            return;
+        }
         if (m.k !== "step")
-            return; // "ready" says the worker loaded, and nothing more
+            return;
         const p = procs.get(link.pid);
         if (p && p.link === link)
             finish(p, m);
@@ -468,11 +504,16 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         return { ...stat, workers, pooled: idle.length, live: procs.size };
     }
 
-    // One worker hired before anything needs it: the first `exec` of a tier-3
-    // binary then costs an instantiation rather than a worker start.
-    const first = hire();
-    if (first)
-        idle.push(first);
+    // Workers hired before anything needs one: the first `exec`s of a tier-3
+    // binary then cost an instantiation rather than a worker start. The pool
+    // grows past this by returning what it hired on demand, so PRE_HIRE is
+    // about the first command and MAX_IDLE about the rest.
+    for (let i = 0; i < PRE_HIRE; i++) {
+        const link = hire();
+        if (!link)
+            break;
+        idle.push(link);
+    }
 
     return { spawn, step, drain, kill, shutdown, dropWorkers, live, pooled, pending, stats };
 }

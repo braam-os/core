@@ -97,6 +97,33 @@ stage, and a four-stage pipeline would terminate and re-start workers on every r
 **Done when** the three tier-3 cases in `test/run.mjs` still pass and the pool assertions there
 say what the new numbers are.
 
+**Done.** `MAX_IDLE` is 4 — a four-stage pipeline's worth held with nothing running — and
+`PRE_HIRE` is 2. `pool()` keeps its shape: the pool fills only by returning what it hired on
+demand, so it self-tunes up to the peak concurrency a session reaches and the cap is where that
+stops. An unbounded pool was the alternative and is what the cap was written against.
+
+`cat /bin/sh | cat | wc` at tier 3 goes from **hired 1, reused 2, terminated 1** on every run to
+**hired 0, reused 3, terminated 0** from the second run on — the first still hires the third
+worker, and now keeps it. Measurable with `make bench`, whose W3 arm is that command and whose
+two warm-up runs come first, and not with `test/run.mjs`, where the stages are still tier 2 until
+T3.
+
+`broke()`'s latch now asks whether *this* worker ever announced itself, which is the question the
+old one was trying to ask through `!idle.length && !procs.size`. `{ k: "ready" }` was already on
+the wire and already documented as meaning nothing else; `deliver()` records it, and a worker that
+errors before sending it is a `procworker.js` that will not load. `test/run.mjs` has a case for it
+— the second command after a broken worker runs at tier 2 and hires nobody — over a new
+`net.broken` in `test/fakeworker.mjs`, since nothing had ever called `link.onerror`.
+
+One thing found on the way: a pooled worker was pinning its finished process's memory until the
+next bind, so `serveProc.step` now releases the instance and its memory on the step that ends the
+process, as the trap path already did. Four idle workers would otherwise have held four dead
+processes' pages.
+
+T1's every-64th `setTimeout(drain, 0)` finding is **not** part of this, by decision: it is a change
+to how the kernel worker yields, it wants a measurement of its own, and the pool does not depend
+on it.
+
 ## T3. Flip the thirty-one programs
 
 - `src/cmd/CMakeLists.txt`: tier 3 for everything but `sh`. If the list ends up being all of
@@ -111,8 +138,8 @@ say what the new numbers are.
 The driver already pumps both tiers uniformly (`test/fakesvc.mjs`'s `net.drain`), so most of the
 suite should hold. Three places will not:
 
-- The pool assertions — `net.proc.pooled() !== 1` in the tier-3 case and again before
-  `timeout 20 spin` — count a pool nothing else is drawing from.
+- The pool assertions — `net.proc.pooled()` in the tier-3 case and again before `timeout 20 spin`
+  — count a pool nothing else is drawing from.
 - `net.bound.length` is used to mean "something ran at tier 3"; it now means "anything ran".
 - The fallback case (`net.workers = false; net.proc.dropWorkers()`) is fine while `sh` is tier 2
   and becomes T7's problem when it is not.

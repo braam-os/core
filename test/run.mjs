@@ -1170,8 +1170,9 @@ if (mode === "--kernel") {
         fail(`spin 1 exited ${row(s, s.cursor_y)}, expected a bare prompt`);
     if (net.terminated.length !== 0)
         fail("a process that exited had its worker terminated rather than pooled");
-    if (net.proc.pooled() !== 1)
-        fail(`the pool holds ${net.proc.pooled()} workers, expected the one just freed`);
+    if (net.proc.pooled() !== 2)
+        fail(`the pool holds ${net.proc.pooled()} workers, expected the two hired at`
+             + " boot, spin's own having been put back rather than terminated");
 
     // M9, first criterion: a program that does not come back. The fake link
     // leaves its step undelivered, which is all the kernel ever sees of a real
@@ -1369,8 +1370,34 @@ if (mode === "--kernel") {
     if (!rows(s).includes("after"))
         fail(`the shell did not survive ^C on a spawned pair: ${JSON.stringify(rows(s))}`);
 
-    // Where a worker cannot be made, a binary asking for tier 3 runs at tier 2
-    // — the same program, the same output, one isolation weaker (§4).
+    // A worker that is made and never loads its script. The kernel learns at
+    // the first step, so the process reads as a crash — and the tier is given
+    // up there, because whether it works is a question about procworker.js and
+    // not about what is running. Nothing else can ask it: `procs` is never
+    // empty once a tier-3 process is permanent, which is what the old latch
+    // waited for and would never have seen again.
+    net.broken = true;
+    net.proc.dropWorkers();
+    s = submit("clear", 9076);
+    s = submit("spin 1", 9077);
+    if (!rows(s).some((line) => line.startsWith("braam: /bin/spin: crashed")))
+        fail(`a worker that never loaded printed ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== prompt(132))
+        fail(`a crashed process left ${row(s, s.cursor_y)}, expected ${prompt(132)}`);
+    if (net.proc.stats().workers)
+        fail("a worker that never loaded left tier 3 on");
+
+    const made = net.links.length;
+    s = submit("clear", 9078);
+    s = submit("spin 1", 9079);
+    if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
+        fail(`the command after a broken worker printed ${JSON.stringify(rows(s))}`);
+    if (net.links.length !== made)
+        fail(`${net.links.length - made} workers were hired after the tier was given up`);
+    net.broken = false;
+
+    // Where a worker cannot be made at all, a binary asking for tier 3 runs at
+    // tier 2 — the same program, the same output, one isolation weaker (§4).
     net.workers = false;
     net.proc.dropWorkers();
     net.bound.length = 0;

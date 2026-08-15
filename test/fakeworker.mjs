@@ -23,6 +23,7 @@ export function makeFakeLinks(net) {
     net.terminated = [];   // one entry per worker killed rather than pooled
     net.bound = [];        // the pid of every process that ran in one
     net.workers = true;    // false makes a link refuse to be made
+    net.broken = false;    // true makes one that never loads: onerror, no ready
     net.held = new Set();  // pids whose steps sit undelivered, as a loop does
     net.holdNext = false;  // hold the next process to be bound, whatever pid
 
@@ -55,9 +56,14 @@ export function makeFakeLinks(net) {
             }
 
             // Up: what the worker said, delivered where a real one would
-            // deliver it — off the kernel's stack.
+            // deliver it — off the kernel's stack. A worker that failed to
+            // load says it there too, through the other handler.
             while (link.up.length && !link.dead) {
-                link.onmessage({ data: link.up.shift() });
+                const m = link.up.shift();
+                if (m.k === "error")
+                    link.onerror();
+                else
+                    link.onmessage({ data: m });
                 moved = true;
             }
         }
@@ -119,7 +125,15 @@ export function makeFakeLinks(net) {
         };
 
         links.push(link);
-        link.up.push({ k: "ready" });
+
+        // A worker whose script never ran: it serves nothing and reports the
+        // failure the only way a real one can, which is the error event.
+        if (net.broken) {
+            link.serve = () => {};
+            link.up.push({ k: "error" });
+        } else {
+            link.up.push({ k: "ready" });
+        }
         return link;
     };
 }

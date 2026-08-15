@@ -7,6 +7,66 @@ of the two needs amending.
 
 ---
 
+## A pool for a system where every command needs a worker
+
+[doc/TODO.md](TODO.md) T2. The pool in `web/proc.js` was sized for the two tier-3 binaries that
+exist — `MAX_IDLE` 2, one worker hired at boot — and T1 measured what that costs the moment a
+pipeline is at the tier: `cat /bin/sh | cat | wc` **hires one worker and terminates one on every
+run**, in all three engines, while reusing two. Three stages want three workers at once and the
+pool holds two, so the third is bought and thrown away each time. `MAX_IDLE` is now 4 and two
+workers are hired at boot.
+
+### The number is a pipeline, and the cap stays a cap
+
+The pool only ever fills by *returning* what it hired on demand, so it self-tunes up to the peak
+concurrency a session reaches and `MAX_IDLE` is the point where it stops. Four is a four-stage
+pipeline's worth held with nothing running — one more than the three stages T1 measured, and once
+the shell is a tier-3 process (T8) it holds one of its own besides, outside the pool.
+
+`pool()`'s terminate-vs-keep rule was the other thing T2 asked to re-decide, and it keeps its
+shape. An unbounded pool is the obvious alternative and is wrong for the reason the cap was
+written: a twenty-stage pipeline would leave twenty threads behind for a session that will never
+want them again. What was wrong was the number, not the rule.
+
+The pre-hire is two rather than four because it is only about the *first* command: a `Worker`
+constructor returns before its script has loaded, so what a pre-hire buys is that the load has
+finished by the time something is bound into it. Two is the shell's and the first command's, and
+the pool reaches four by itself on the first pipeline that wants four.
+
+### An idle worker was holding a dead process's memory
+
+`MAX_IDLE` 4 made a comment worth checking, and it was false at tier 3. `serveProc` dropped its
+instance at the *next* bind, so a pooled worker pinned the finished process's `WebAssembly.Memory`
+— as much as `PROC_MAX_PAGES`, 16 MB — until it was hired again, and four idle workers would have
+pinned four of them. The instance and its memory are now released on the step that ends the
+process, in `serveProc.step` where the trap path already did it, so it is one place and both tiers.
+At tier 2 it changes nothing observable: `retire()` drops the whole server a moment later.
+
+### The probe's question is about the script, not about what is running
+
+`broke()` ended with `if (!idle.length && !procs.size) workers = false`, which is how a host whose
+`procworker.js` will not load was supposed to stop trying. It cannot fire once a tier-3 process is
+permanent: with the shell at the tier, `procs` is never empty again, and every `exec` would hire
+another worker that will never load.
+
+The replacement asks the question the latch was really asking. Each link records whether it
+announced itself — the `{ k: "ready" }` message `deliver()` had been dropping on the floor, whose
+comment already said it "says the worker loaded, and nothing more" — and `broke()` gives the tier
+up only for a worker that broke before saying so. One that had loaded and then threw is a process
+that crashed, which is its own business and no reason to disable the tier for the session. The
+distinction is exact rather than heuristic: `onerror` before `ready` *is* a script that would not
+evaluate, and the ordering holds because `ready` is posted during evaluation.
+
+`test/fakeworker.mjs` gained the switch that models it — `net.broken` makes a link that serves
+nothing and reports an error where a real one would — because nothing in the suite had ever called
+`link.onerror`, and a latch with no test is a latch that was wrong twice.
+
+### What was deliberately not done here
+
+T1's other finding, that tier 2's bulk cost is mostly the every-64th `setTimeout(drain, 0)` in
+`web/worker.js` rather than the call itself, is untouched. It is a change to how the kernel worker
+yields and it wants its own measurement; sizing the pool does not depend on it.
+
 ## What a syscall costs, measured
 
 [doc/TODO.md](TODO.md) proposes moving every program to tier 3, and its first item is the gate:

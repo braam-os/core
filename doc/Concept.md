@@ -785,9 +785,11 @@ allowed in a worker at any size and keeps `exec` one round trip rather than two.
 
 The `postMessage` of a module is what M9 uses, and it is why the cache stays in the kernel worker
 rather than moving out with the instance: a binary is compiled once however many workers run it.
-Starting a worker is the other cost the tier adds, and the pool is the answer — a small free list
-of workers with no process in them, topped up with one at boot, which doubles as the capability
-probe. Where the constructor throws, tier 3 is off and §4's fallback applies.
+Starting a worker is the other cost the tier adds, and the pool is the answer — a free list of
+workers with no process in them, a pipeline's worth of them, topped up at boot, which doubles as
+the capability probe. Where the constructor throws, tier 3 is off and §4's fallback applies; so it
+is where a worker is made and never loads its script, which is a worker that reports an error
+before it has announced itself.
 
 A tier-3 **syscall** is the cost that does not go away: two `postMessage` hops and two copies,
 against a direct call and one copy at tier 2. That is the reason the tier is a claim a binary makes
