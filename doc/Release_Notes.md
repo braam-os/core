@@ -7,6 +7,32 @@ of the two needs amending.
 
 ---
 
+## The Linux console's sixteen colours
+
+`web/render.js` shipped a palette of nobody's in particular — a softened set picked to look
+pleasant against its own background. It is the Linux console's now: `#AA1111` red, `#11AA11`
+green, `#AA5511` for the brown that a 16-colour palette calls yellow, `#AAAAAA` for white, and
+the `#55` / `#FF` bright half above them.
+
+The reason is that the indices are the interface. §2.3 puts a palette index in the cell rather
+than a colour, so `COLOR_YELLOW` in a program's `style_set` means whatever the page decides — and
+a program written against a terminal has forty years of expectation about what index 3 looks
+like. A palette that renders 3 as a pale gold rather than a brown makes `COLOR_YELLOW` a
+surprise, and the tests, which read indices, cannot see the difference. Matching the console
+removes the question.
+
+The one departure is the floor: the console's `#00` channel is `#11` here, so black is `#111111`
+and the dark half is mixed from `11` rather than `00`. A canvas is not a CRT and true black on a
+backlit panel reads as a hole in the page rather than as the absence of light. It is the one
+value `web/index.html` was already built around, so the page's background is unchanged and only
+its text moved, to `#AAAAAA` — index 7 — with the error line on bright red, so the frame and the
+grid are the same terminal rather than two nearly-equal greys.
+
+`web/embed.html`'s amber palette is untouched: it exists to show that a palette is an embedder's
+choice, and it is the only thing proving the `options.palette` path still works.
+
+---
+
 ## A prompt that says where you are
 
 The prompt now names the working directory: the basename, plain white on blue, then a space and

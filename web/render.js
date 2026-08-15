@@ -23,12 +23,12 @@ const ATTR_BOLD = 1;
 const ATTR_UNDERLINE = 2;
 const ATTR_REVERSE = 4;
 
-// The palette the kernel's fg/bg indices name.
+// The palette the kernel's fg/bg indices name: the Linux console's.
 const PALETTE = [
-    "#111111", "#e5687a", "#8fcf7e", "#e0c184",
-    "#7aa6e5", "#c58fe0", "#6fc7cf", "#cccccc",
-    "#4a4e5e", "#ff8b9a", "#aeeb9c", "#ffe0a3",
-    "#9cc4ff", "#e0acff", "#8fe8f0", "#ffffff",
+    "#111111", "#aa1111", "#11aa11", "#aa5511",
+    "#1111aa", "#aa11aa", "#11aaaa", "#aaaaaa",
+    "#555555", "#ff5555", "#55ff55", "#ffff55",
+    "#5555ff", "#ff55ff", "#55ffff", "#ffffff",
 ];
 
 const FONT_STACK =
