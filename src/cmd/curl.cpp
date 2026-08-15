@@ -3,7 +3,8 @@
 
 // A relative URL resolves against the page, so `curl /index.html` works with no
 // network at all. A cross-origin one needs CORS, which is the wall a user meets
-// first and the reason the diagnostic mentions it.
+// first and the reason the diagnostic names it. The host tells a refusal from a
+// dead network, so `Perm` and `Io` each get the hint that fits.
 Task<i32> proc_main(Args args)
 {
     bool show_head = false;
@@ -51,8 +52,12 @@ Task<i32> proc_main(Args args)
             co_return 130;
         if (Task<void> e = errln("curl", args[i], got.error()))
             co_await e;
-        if (got.error() == Error::Io)
-            co_await write_all(SYS_STDERR, "curl: a cross-origin URL needs CORS\n");
+        if (got.error() == Error::Perm)
+            co_await write_all(SYS_STDERR,
+                               "curl: answered without access-control-allow-origin (CORS)\n");
+        else if (got.error() == Error::Io)
+            co_await write_all(SYS_STDERR,
+                               "curl: nothing answered at all, so this is not CORS\n");
         co_return 1;
     }
 

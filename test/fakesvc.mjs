@@ -117,6 +117,11 @@ export function makeFakeSvc(mem, net, kernel) {
                 const route = net.routes.get(r.arg());
                 if (!route)
                     throw { braam: E.NOTFOUND };
+                // A route that fails the way the browser does: PERM for an
+                // origin the server would not allow, IO for one nothing
+                // answered. web/svc.js tells them apart with a no-cors retry.
+                if (route.fail)
+                    throw { braam: route.fail };
                 body = {
                     status: route.status,
                     headers: utf8.encode(route.headers),

@@ -7,6 +7,44 @@ of the two needs amending.
 
 ---
 
+## Telling a CORS refusal from a dead network
+
+M6 gave `curl` one hint on `Error::Io` — "a cross-origin URL needs CORS" — because `fetch`
+reports a refused origin and an unreachable server identically, as a `TypeError` with nothing in
+it. The hint was right most of the time and wrong in the one case where a user most needs to be
+believed: when the network really is broken, the message sent them looking at a header their
+server may already send.
+
+The two can be told apart, and the browser will do it. A `no-cors` request is not blocked — it
+goes out, the server answers, and what comes back is an opaque `Response` with status `0` and no
+body. Useless to read, which is why braam cannot use it for the fetch itself, and conclusive as
+a probe: only a reachable server resolves it at all. `web/svc.js` runs one when, and only when,
+the real fetch has already rejected, and reports `Error::Perm` if it succeeds and `Error::Io` if
+it does not. The probe is aborted the moment it resolves, since `fetch` settles on the response
+headers and the body would otherwise be downloaded for nothing.
+
+`Perm` is the right existing error rather than a new one. What happened is precisely a
+permission denied: the request was made, the server answered, and the browser would not let the
+page read the reply. Adding an `Error::Cors` would have put a browser's vocabulary into a kernel
+enum that storage and the filesystem share, for a distinction one program makes — and it would
+have been an ABI change in `abi.js` and `result.h` for a diagnostic.
+
+So `curl` now says "answered without access-control-allow-origin (CORS)" for one and "nothing
+answered at all, so this is not CORS" for the other, and neither can be mistaken for the other's
+cause. Both fit a 60-column grid, which is why they are as terse as they are.
+
+The fake carries the same distinction: a route in `test/fakesvc.mjs` may name the error it fails
+with, so `test/run.mjs` drives both paths without a network. What it cannot cover is the probe
+itself — there is no CORS in Node and `mode` is ignored there, so the fake asserts what the
+kernel and `curl` do with each answer, not how `web/svc.js` arrives at it. That is the same gap
+every service has against a fake, and the same reason `tools/wsd.mjs` exists for the one where
+it mattered more.
+
+None of this makes a cross-origin fetch work. It cannot: the same-origin policy is what stops a
+page reading a reply that carries the user's cookies, and no flag, API or permission prompt
+lifts it. A relay would, at the cost of the server braam is built not to need. The change is to
+the diagnosis alone, which is the part that was fixable.
+
 ## Paste, as typing
 
 `Cmd+V` — `Ctrl+V` where that is the chord — puts the clipboard into the terminal. It cost one

@@ -61,6 +61,26 @@ function parseSpec(spec) {
     return { method: method || "GET", headers, body };
 }
 
+// fetch rejects with a bare TypeError whether the server refused the origin or
+// nothing answered at all. A no-cors retry tells the two apart: the request
+// leaves the browser either way, so only a reachable server resolves it. The
+// reply is opaque and useless to read, which is why this runs on the failure
+// path alone, and the abort drops the body once the headers have settled it.
+// The probe is a bare GET whatever the request was, since it asks about the
+// server rather than about the method, and GET is the one that is safe to make
+// twice.
+async function answered(url) {
+    const stop = new AbortController();
+    try {
+        await fetch(url, { mode: "no-cors", signal: stop.signal });
+        return true;
+    } catch {
+        return false;
+    } finally {
+        stop.abort();
+    }
+}
+
 function packHeaders(res) {
     let out = "";
     res.headers.forEach((value, name) => {
@@ -176,7 +196,9 @@ export function makeSvcImport(mem, deposit, relay, reply, proc) {
                 const init = { method: spec.method, headers: spec.headers };
                 if (spec.body.length && spec.method !== "GET" && spec.method !== "HEAD")
                     init.body = spec.body;
-                const res = await fetch(r.arg(), init);
+                const res = await fetch(r.arg(), init).catch(async () => {
+                    throw { braam: (await answered(r.arg())) ? E.PERM : E.IO };
+                });
                 body = makeBody(res);
                 body.status = res.status;
                 body.headers = packHeaders(res);

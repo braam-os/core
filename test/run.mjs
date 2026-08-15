@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 
+import { E } from "../web/abi.js";
 import { FakeStore, makeFakeImports } from "./fakefs.mjs";
 import { FakeNet, makeFakeSvc } from "./fakesvc.mjs";
 import { pasted } from "../web/keys.js";
@@ -738,6 +739,24 @@ if (mode === "--kernel") {
     s = submit("curl /hello.txt | wc", 3027);
     if (!rows(s).some((line) => line.startsWith("1 2 9")))
         fail(`curl into a pipe printed ${JSON.stringify(rows(s))}, expected 1 2 9`);
+
+    // The two ways a fetch fails in a browser, which look identical to fetch
+    // itself: an origin the server will not allow, and nothing answering at
+    // all. Each gets the hint that fits, and neither gets the other's.
+    net.routes.set("https://denied.example", { fail: E.PERM });
+    net.routes.set("https://dead.example", { fail: E.IO });
+
+    s = submit("clear", 3028);
+    s = submit("curl https://denied.example", 3029);
+    if (!rows(s).some((line) => line.includes("access-control-allow-origin")))
+        fail(`a refused origin said nothing about CORS: ${JSON.stringify(rows(s))}`);
+
+    s = submit("clear", 3031);
+    s = submit("curl https://dead.example", 3033);
+    if (!rows(s).some((line) => line.startsWith("curl: nothing answered")))
+        fail(`a dead network said nothing: ${JSON.stringify(rows(s))}`);
+    if (rows(s).some((line) => line.includes("access-control-allow-origin")))
+        fail(`a dead network was blamed on CORS: ${JSON.stringify(rows(s))}`);
 
     // M6, second criterion: a chat client over a WebSocket. The fake loops a
     // lone socket back to itself, so one client is a whole conversation; the
