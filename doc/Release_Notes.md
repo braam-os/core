@@ -116,9 +116,10 @@ page read the reply. Adding an `Error::Cors` would have put a browser's vocabula
 enum that storage and the filesystem share, for a distinction one program makes — and it would
 have been an ABI change in `abi.js` and `result.h` for a diagnostic.
 
-So `curl` now says "answered without access-control-allow-origin (CORS)" for one and "nothing
-answered at all, so this is not CORS" for the other, and neither can be mistaken for the other's
-cause. Both fit a 60-column grid, which is why they are as terse as they are.
+So `curl` now says "response is not accessible because the server did not grant cross-origin
+access" for one and "no answer" for the other, and neither can be mistaken for the other's
+cause. The first says what happened rather than naming the header, at the cost of wrapping on a
+60-column grid; the second is short because there is nothing more to say.
 
 The fake carries the same distinction: a route in `test/fakesvc.mjs` may name the error it fails
 with, so `test/run.mjs` drives both paths without a network. What it cannot cover is the probe

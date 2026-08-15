@@ -784,14 +784,14 @@ if (mode === "--kernel") {
 
     s = submit("clear", 3028);
     s = submit("curl https://denied.example", 3029);
-    if (!rows(s).some((line) => line.includes("access-control-allow-origin")))
+    if (!rows(s).some((line) => line.includes("cross-origin")))
         fail(`a refused origin said nothing about CORS: ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 3031);
     s = submit("curl https://dead.example", 3033);
-    if (!rows(s).some((line) => line.startsWith("curl: nothing answered")))
+    if (!rows(s).some((line) => line.startsWith("curl: no answer")))
         fail(`a dead network said nothing: ${JSON.stringify(rows(s))}`);
-    if (rows(s).some((line) => line.includes("access-control-allow-origin")))
+    if (rows(s).some((line) => line.includes("cross-origin")))
         fail(`a dead network was blamed on CORS: ${JSON.stringify(rows(s))}`);
 
     // M6, second criterion: a chat client over a WebSocket. The fake loops a

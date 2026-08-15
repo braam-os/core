@@ -54,10 +54,10 @@ Task<i32> proc_main(Args args)
             co_await e;
         if (got.error() == Error::Perm)
             co_await write_all(SYS_STDERR,
-                               "curl: answered without access-control-allow-origin (CORS)\n");
+                               "curl: response is not accessible because the server did not grant cross-origin access\n");
         else if (got.error() == Error::Io)
             co_await write_all(SYS_STDERR,
-                               "curl: nothing answered at all, so this is not CORS\n");
+                               "curl: no answer\n");
         co_return 1;
     }
 
