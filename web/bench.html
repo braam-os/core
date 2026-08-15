@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>braam — tier measurement</title>
+<style>
+    html { color-scheme: dark; }
+    body {
+        margin: 0;
+        min-height: 100vh;
+        box-sizing: border-box;
+        padding: 1em 1.25em;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75em;
+        background: #111111;
+        color: #aaaaaa;
+        font: 13px/1.5 'Andale Mono', 'DejaVu Sans Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #stage {
+        flex: 0 0 auto;
+        height: 50vh;
+        min-width: 100em; /* wide enough that `wc` with eight operands is one row */
+    }
+    #screen {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+    #log, #table {
+        flex: 0 0 auto;
+        margin: 0;
+        color: #6f7488;
+        white-space: pre-wrap;
+    }
+    #table { color: #cfd3e0; }
+    .error { color: #ff5555; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<pre id="table"></pre>
+<div id="log"></div>
+<script type="module" src="./bench.js"></script>
+</body>
+</html>

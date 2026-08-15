@@ -7,6 +7,106 @@ of the two needs amending.
 
 ---
 
+## What a syscall costs, measured
+
+[doc/TODO.md](TODO.md) proposes moving every program to tier 3, and its first item is the gate:
+the whole argument for the change is the cost of a syscall, and nobody had measured one.
+Concept.md §4.4 asserts *"two `postMessage` hops and two copies, order 0.1 ms"* and the M9 note
+repeats it, but both were estimates — `test/run.mjs` counts ticks rather than wall time, and its
+links have no thread in them. The answer is **34–44 µs** for a tier-3 round trip and **0.2–2.9 ms**
+added to a keystroke, which is two to three times better than the guess in one place and worse than
+it looks in another. The figures are in T1; this is why they are the ones that were taken.
+
+### The measurement is a difference, not a stopwatch
+
+Timing one syscall would have needed a boundary to argue about — does the span start when the
+process calls `sys_async`, or when the kernel's job is scheduled? — and it could not have been read
+anyway: without cross-origin isolation `performance.now()` steps in 0.1 ms under Blink and a whole
+millisecond under Gecko and WebKit, and `PROC_TASKS` is 8, so several round trips overlap and their
+mean is not a per-call cost.
+
+So the number is ΔT/ΔN over two runs of the *same command*: `wc` over one file against `wc` over
+eight. Same binary, same spawn, same compile-cache hit, same instantiate, same exit, same prompt
+redraw — all of it subtracts out, and what is left is the marginal cost of a round trip. ΔN is read
+out of counters rather than predicted, which is what makes it a measurement and not arithmetic
+about `SYS_CHUNK`.
+
+The eight files have to be eight *different* files. `wc /bin/sh /bin/sh` is `Err(Perm)`: §5.2 gives
+one open per path system-wide, because an OPFS sync access handle takes an exclusive lock and the
+open-file table enforces that for every backend rather than only the one it came from. That cost
+half an hour and is worth writing down.
+
+### The tier-2 number is mostly a timer
+
+The result that changes what T2 should do first: **tier 2's marginal cost is not a call.** Every
+64th tier-2 step is scheduled with `setTimeout(drain, 0)` rather than a microtask — `web/worker.js`
+does that so a process in a tight syscall loop cannot chain microtasks without the worker ever
+painting — and one of those waits 1.3 ms in Blink, 2.4 ms in Gecko, 0.25 ms in WebKit. `wc` over
+eight files takes that route eight times, which is 10.2 ms of a 16.2 ms command in Blink and 19 of
+33 in Gecko. Discount it and a tier-2 round trip is 2–17 µs.
+
+That is why the tiers look nearly equal in the raw figures, and in Gecko it is why tier 3 measures
+*faster* than tier 2 for bulk I/O. The every-64th rule is a cheaper thing to reconsider than T6's
+`SYS_CHUNK` or a batched step protocol, and it was invisible until something counted the two routes
+separately.
+
+### A keystroke has two answers, and only one of them is reassuring
+
+A repaint is four syscalls, and the first of them damages the grid — so key-to-first-paint and
+key-to-finished-echo are different numbers. Under Blink they are within a factor of four; under
+Gecko the second is thirty times the first. Reporting either alone would have been misleading, so
+the harness reports both, and the headline is the echo.
+
+One key is inside a frame at either tier in every engine. **Sustained typing is not**: 64 keys back
+to back cost 0.34 ms each at tier 3 in Blink but 2.7 in Gecko and 5.1 in WebKit, against 0.10 to
+0.42 at tier 2. Nothing was dropped — the 64-slot ring held — but a shell that costs 5 ms a
+keystroke while it is being typed into is the thing T7 and T8 have to answer to, and it is engine
+dependent in a way the bulk figure is not.
+
+The third arm exists to make that attributable. It stamps every binary tier 3 *except* `sh`, and
+its keystroke figures match the stock archive's in all three engines: the keystroke cost is the
+shell's own tier, not the programs'.
+
+### Why a re-stamped twin rather than a rebuild
+
+The tier is six u32s in a `braam` custom section and `stamp.py` strips a prior one before appending,
+so the twin archives are the same binaries with one word changed — `cmake --build build --target
+bench` copies the staging tree, re-stamps, and repacks. Nothing is recompiled, `bundle.bin` is
+byte-identical, and the three CTest cases never see the twins because they take their inputs by
+explicit path. A second build tree would have measured a second build.
+
+### The counters are unconditional, and the clock is in the worker
+
+Gating the instrumentation behind an option would have meant measuring a build nobody runs. What it
+costs is a dozen integer increments on paths that already do a `postMessage`, one bounded ring of
+key samples, and a `stats()` on what `makeProc` returns. `workers` is in there because it cannot be
+inferred: with it false a tier-3 binary ran at tier 2, and the arm measured tier 2 twice.
+
+The first version timed from the page and had a 14 ms floor — two poll intervals — which is larger
+than most of the workloads. The fix was to stamp both ends in the worker, at the key and at the
+repaint, and let the page poll only for *whether* it is over. A poll costs a message; it should not
+also cost the measurement.
+
+### What the harness had to survive
+
+Three failures, none of them about tiers, each of which would otherwise have read as a hang:
+
+- **A background tab throttles the timers being measured**, so the page refuses to start hidden and
+  marks any pass that loses focus. Per pass, not per session: eight minutes of six page loads with a
+  person at the machine will lose focus once, and that is no reason to discard the other five.
+- **WebKit will not boot a second kernel promptly in the same document**, and will not boot the next
+  one at all while the last one's worker still holds its OPFS handles. One arm per page load, two
+  seconds after `dispose()`, and a retry that reloads the same pass.
+- **An unanswered `selectall` is indistinguishable from a blank screen**, since `deselect()` posts a
+  selection nobody asked for. `selectall` now carries the asker's id back and answers even with
+  nothing to answer with.
+
+`tools/bench.mjs` prints the page's progress as it arrives, which is how the last two were found:
+a browser whose console nobody is reading is the normal case here, and a run that stops has to say
+where.
+
+---
+
 ## An SDK after all
 
 "Plain clang, and no SDK" below is about the *toolchain* — that nothing is taken from a

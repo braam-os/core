@@ -356,6 +356,8 @@ export function mount(options = {}) {
                 }));
             return;
         }
+        if (data.kind === "stats")
+            return; // whoever asked is listening for itself
         if (data.kind === "error")
             onError(data.text);
         else

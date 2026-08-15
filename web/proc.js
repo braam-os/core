@@ -170,6 +170,15 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     const idle = [];           // workers with no process in them
     let workers = true;        // until one refuses to be made
 
+    // What the tier costs, counted where it is spent (doc/TODO.md T1). A round
+    // trip is one asynchronous call and the step that answers it, which is
+    // `calls2` at tier 2 and `calls3` at tier 3; the synchronous four are not
+    // round trips at either tier and are not counted.
+    const stat = {
+        calls2: 0, calls3: 0, steps2: 0, steps3: 0,
+        spawned: 0, compiled: 0, hired: 0, reused: 0, terminated: 0, broke: 0,
+    };
+
     // The capability boundary in a dozen lines: these two closures are all a
     // tier-2 process can call, and the pid is written into them here rather
     // than passed by the caller. Process 7 holds no function that says 3.
@@ -183,6 +192,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             // could not make room, and the length goes over regardless so that
             // the reply can say so.
             sysAsync(op, token, ptr, len, from) {
+                stat.calls2++;
                 const dst = kernel().sys(pid, SYS.STAGE, len, 0, 0) >>> 0;
                 if (dst && len)
                     mem.view().set(from.view().subarray(ptr, ptr + len), dst);
@@ -202,6 +212,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             link.onmessage = ({ data }) => deliver(link, data);
             link.onerror = () => broke(link);
             link.pid = 0;
+            stat.hired++;
             return link;
         } catch {
             workers = false;
@@ -210,15 +221,20 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     }
 
     function take() {
-        return idle.pop() || hire();
+        const link = idle.pop();
+        if (link)
+            stat.reused++;
+        return link || hire();
     }
 
     function pool(link) {
         link.pid = 0;
-        if (idle.length < MAX_IDLE)
+        if (idle.length < MAX_IDLE) {
             idle.push(link);
-        else
+        } else {
+            stat.terminated++;
             link.terminate();
+        }
     }
 
     // A worker that failed to load or threw where nothing could catch it. Its
@@ -226,6 +242,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     // hence the `p.link = null`, which is what stops kill() from handing a
     // dead worker back to the next process.
     function broke(link) {
+        stat.broke++;
         const at = idle.indexOf(link);
         if (at >= 0)
             idle.splice(at, 1);
@@ -235,6 +252,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             finish(p, { result: STEP.TRAPPED });
         }
         link.pid = 0;
+        stat.terminated++;
         link.terminate();
         if (!idle.length && !procs.size)
             workers = false; // it never worked; stop trying
@@ -250,8 +268,10 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         // Compiled here whatever the tier: the cache is the host's (§4.4), a
         // Module is structured-cloneable, and a malformed binary is caught
         // where `exec` can still say so.
+        stat.spawned++;
         let module = modules.get(path);
         if (!module) {
+            stat.compiled++;
             module = new WebAssembly.Module(r.bytes());
             modules.set(path, module);
         }
@@ -281,6 +301,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         const p = procs.get(pid);
 
         if (p && p.link && !p.done) {
+            stat.steps3++;
             p.pending = { r, done };
             const payload = r.bytes();
             p.link.postMessage(
@@ -289,6 +310,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             return;
         }
 
+        stat.steps2++;
         queue.push({ pid, r, done });
         if (schedule)
             schedule(drain);
@@ -324,6 +346,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         // list. The token is the process's own and rides with each: the kernel
         // will name it again when it answers.
         for (const call of m.calls || []) {
+            stat.calls3++;
             const dst = kernel().sys(p.pid, SYS.STAGE, call.len, 0, 0) >>> 0;
             if (dst && call.len)
                 mem.view().set(new Uint8Array(call.payload), dst);
@@ -386,6 +409,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         }
 
         p.link.pid = 0;
+        stat.terminated++;
         p.link.terminate();
 
         // The request the terminated worker will never answer. Nothing else
@@ -410,11 +434,14 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     // between it and the kernel — which is the whole of §4's fallback, and is
     // why this is not `shutdown`. The shell is one of those, and permanent.
     function dropWorkers() {
-        for (const link of idle)
+        for (const link of idle) {
+            stat.terminated++;
             link.terminate();
+        }
         idle.length = 0;
         for (const [pid, p] of procs)
             if (p.link) {
+                stat.terminated++;
                 p.link.terminate();
                 procs.delete(pid);
             }
@@ -434,11 +461,18 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         return queue.length;
     }
 
+    // The counters, plus the state a measurement has to record beside them.
+    // `workers` is the one that cannot be inferred: with it false, a tier-3
+    // binary ran at tier 2 and the numbers are of the fallback, not the tier.
+    function stats() {
+        return { ...stat, workers, pooled: idle.length, live: procs.size };
+    }
+
     // One worker hired before anything needs it: the first `exec` of a tier-3
     // binary then costs an instantiation rather than a worker start.
     const first = hire();
     if (first)
         idle.push(first);
 
-    return { spawn, step, drain, kill, shutdown, dropWorkers, live, pooled, pending };
+    return { spawn, step, drain, kill, shutdown, dropWorkers, live, pooled, pending, stats };
 }

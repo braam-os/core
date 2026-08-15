@@ -135,6 +135,7 @@ make and node, with no ninja. The top-level `Makefile` wraps it and configures o
 make            # build kernel.wasm, the /bin binaries and tests.wasm
 make run        # ctest
 make serve      # serve build/web/ and open a browser
+make bench      # what a syscall costs at each tier, in a browser (doc/TODO.md T1)
 make install    # the SDK, to /usr/local if writable else ~/.local
 make release    # pack build/web/ and the SDK as build/*.zip
 make clean      # rm -rf build
@@ -244,6 +245,14 @@ way rather than restating the format.
 A fake proves the kernel, not the shipping JS. `tools/wsd.mjs` is the counterweight for the one
 service where that gap matters: a real WebSocket server, so `make serve` gives two tabs a real
 conversation rather than a loopback.
+
+**`make bench` is the other counterweight, and it is a measurement rather than a test.** The cmake
+`bench` target packs two tier-3 twins of the boot archive by re-stamping the staged binaries —
+nothing is recompiled and `bundle.bin` is byte-identical — `web/bench.html` drives the shipped page
+against all three, and `tools/bench.mjs` serves them and collects what the page posts into
+`build/bench-<engine>.json`. It answers what a fake cannot: what a syscall costs on a real
+`postMessage`. The counters behind it are unconditional and live in `makeProc`'s `stats()` and in
+`web/worker.js`; the figures are in doc/TODO.md T1.
 
 ## Architecture invariants
 

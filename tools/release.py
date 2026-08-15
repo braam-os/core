@@ -20,6 +20,11 @@ from version import version_of
 # What a built site cannot be missing.
 REQUIRED = ("index.html", "kernel.wasm", "bundle.bin")
 
+# The tier measurement's own files, which land in build/web/ so they can be
+# served and are no part of the site. Names, not a pattern: an exclusion that
+# guesses is worse than one that is spelled.
+SKIP = {"bench.html", "bench.js", "bundle3.bin", "bundle3nosh.bin"}
+
 # Fixed, because a zip timestamp is the difference between two identical
 # builds. 1980-01-01 is the earliest a zip can express.
 STAMP = (1980, 1, 1, 0, 0, 0)
@@ -27,7 +32,8 @@ MODE = 0o100644 << 16
 
 
 def collect(root: Path, extras):
-    files = [(p.relative_to(root).as_posix(), p) for p in sorted(root.rglob("*")) if p.is_file()]
+    files = [(p.relative_to(root).as_posix(), p) for p in sorted(root.rglob("*"))
+             if p.is_file() and p.name not in SKIP]
     files += [(p.name, p) for p in extras]
     return sorted(files)
 

@@ -9,6 +9,8 @@ TOOLCHAIN := cmake/wasm32-unknown-unknown.cmake
 PORT      := 8080
 # The chat demo's WebSocket server, started alongside `serve`.
 WS_PORT   := 8081
+# The tier measurement's own server, doc/TODO.md T1.
+BENCH_PORT := 8082
 
 # make's own -jN cannot reach the generated build: its jobserver descriptors do
 # not survive the cmake process in between. Pass a count explicitly instead.
@@ -21,7 +23,7 @@ BROWSER := $(firstword $(foreach c,open xdg-open,$(shell command -v $(c) 2>/dev/
 # to, the user's otherwise. Override with PREFIX=<dir>.
 PREFIX ?= $(shell test -w /usr/local && echo /usr/local || echo $(HOME)/.local)
 
-.PHONY: all run serve wsd install release clean
+.PHONY: all run serve bench wsd install release clean
 
 all: $(BUILD)/CMakeCache.txt
 	@cmake --build $(BUILD) -j $(JOBS)
@@ -38,6 +40,19 @@ endif
 	@BRAAM_WS_PORT=$(WS_PORT) node tools/wsd.mjs & \
 	 trap "kill $$! 2>/dev/null" EXIT INT TERM; \
 	 cmake --build $(BUILD) --target serve
+
+# What a syscall costs at each tier, measured in a browser: the cmake target
+# packs the tier-3 twin archives, the page runs the workloads, and the server
+# below collects what it posts. Keep the tab in front.
+bench: all
+	@cmake --build $(BUILD) --target bench
+ifeq ($(BROWSER),)
+	@echo "no browser opener found; visit http://localhost:$(BENCH_PORT)/ yourself"
+else
+	@( sleep 1; $(BROWSER) "http://localhost:$(BENCH_PORT)/" ) &
+endif
+	@BRAAM_BENCH_ROOT=$(BUILD)/web BRAAM_BENCH_OUT=$(BUILD) \
+	 BRAAM_BENCH_PORT=$(BENCH_PORT) node tools/bench.mjs
 
 # The SDK — headers, the two libraries a program links, the CMake package and
 # the hello example. See doc/Programming_Manual.md.

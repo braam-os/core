@@ -33,6 +33,19 @@ let store = null;
 // The isolated processes, so that a dispose can let go of their workers.
 let proc = null;
 
+// What a keystroke costs and what a tier-2 step waits for (doc/TODO.md T1).
+// One key is in flight at a time: `key_at` is the stamp of the last one that
+// has not been painted yet, and the first present after it is the sample.
+let key_at = 0;
+let repaints = 0;
+// The two ends of a measured command, stamped where they happen: a driver
+// polling from the page could only bracket them a poll's width apart.
+let last_key = 0;
+let last_present = 0;
+const KEY_SAMPLES = 256;
+const keys = [];
+const defer = { micro_ms: 0, micro_n: 0, timer_ms: 0, timer_n: 0 };
+
 // The same handshake for the embedder's options, which decide where the module
 // is fetched from and therefore cannot be applied after boot has started.
 let configured = null;
@@ -78,12 +91,26 @@ async function boot() {
     // for. Now and then it takes the slower route instead: a process in a tight
     // syscall loop would otherwise chain microtasks without the worker ever
     // painting. A tier-3 step is a message and is already an event-loop turn.
+    //
+    // Which route a step took and how long it then waited is counted: the two
+    // are a whole order of magnitude apart, and a chained setTimeout(0) is
+    // clamped to 4 ms past the fifth nesting level.
     let steps = 0;
     proc = makeProc(mem, () => self.kernel, (drain) => {
-        if (++steps % 64)
-            queueMicrotask(drain);
-        else
-            setTimeout(drain, 0);
+        const at = performance.now();
+        if (++steps % 64) {
+            queueMicrotask(() => {
+                defer.micro_ms += performance.now() - at;
+                defer.micro_n++;
+                drain();
+            });
+        } else {
+            setTimeout(() => {
+                defer.timer_ms += performance.now() - at;
+                defer.timer_n++;
+                drain();
+            }, 0);
+        }
     }, () => new Worker(new URL(options.procWorkerUrl || "./procworker.js", import.meta.url),
                         { type: "module" }),
        () => performance.now());
@@ -97,6 +124,14 @@ async function boot() {
         }, proc);
 
     const imports = makeImports(mem, (text) => emit("log", text), (x, y, w, h) => {
+        last_present = performance.now();
+        if (key_at) {
+            if (keys.length < KEY_SAMPLES)
+                keys.push(performance.now() - key_at);
+            key_at = 0;
+        } else {
+            repaints++;
+        }
         if (renderer)
             renderer.present(x, y, w, h);
     }, fs, svc);
@@ -233,6 +268,29 @@ self.onmessage = ({ data }) => {
         return;
     }
 
+    // What the measurement reads (doc/TODO.md T1). Answered before the kernel
+    // exists too, so a driver can poll from the moment it mounts, and it draws
+    // nothing: a `selectall` poll would repaint the grid it is timing.
+    if (data.kind === "stats") {
+        self.postMessage({
+            kind: "stats",
+            now: performance.now(),
+            proc: proc ? proc.stats() : null,
+            keys: keys.slice(),
+            repaints,
+            last_key,
+            last_present,
+            defer: { ...defer },
+        });
+        // Only the key samples, which a caller indexes by position. The
+        // counters stay cumulative so a caller can take differences.
+        if (data.reset) {
+            keys.length = 0;
+            key_at = 0;
+        }
+        return;
+    }
+
     if (data.kind === "svc-reply") {
         const waiting = relays.get(data.id);
         if (!waiting)
@@ -264,6 +322,8 @@ self.onmessage = ({ data }) => {
         break;
     case "key":
         deselect();
+        key_at = performance.now();
+        last_key = key_at;
         self.kernel.key(data.code >>> 0, data.mods >>> 0);
         pump();
         break;
@@ -275,10 +335,16 @@ self.onmessage = ({ data }) => {
         }
         break;
     case "selectall":
-        if (renderer) {
+        // Answered even with nothing to answer with, and carrying back the id
+        // the asker sent: a driver cannot tell a blank screen from a dropped
+        // request otherwise, and deselect() posts a selection nobody asked for.
+        if (renderer)
             renderer.all();
-            self.postMessage({ kind: "selection", text: renderer.text() });
-        }
+        self.postMessage({
+            kind: "selection",
+            text: renderer ? renderer.text() : "",
+            id: data.id,
+        });
         break;
     case "paste":
         deselect();

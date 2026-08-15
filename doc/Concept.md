@@ -790,8 +790,13 @@ of workers with no process in them, topped up with one at boot, which doubles as
 probe. Where the constructor throws, tier 3 is off and §4's fallback applies.
 
 A tier-3 **syscall** is the cost that does not go away: two `postMessage` hops and two copies,
-order 0.1 ms, against a direct call and one copy at tier 2. That is the reason the tier is a
-claim a binary makes rather than a default — a syscall-bound program pays it per `SYS_CHUNK`.
+against a direct call and one copy at tier 2. That is the reason the tier is a claim a binary makes
+rather than a default — a syscall-bound program pays it per `SYS_CHUNK`.
+
+*Measured* since, at 0.2.44, in three engines: **34–44 µs** a round trip, not the 0.1 ms this
+section estimated. The tier-2 figure is 2–17 µs of work, plus whatever the every-64th
+`setTimeout(drain, 0)` waits — which is the larger half of it, and is a property of the host's
+scheduling rather than of the tier. doc/TODO.md T1 has the numbers and the method.
 
 The real cost is **duplication**: with no dynamic linking, every binary embeds its own copy
 of the allocator, the string types, and the coroutine runtime. Keep the process-side runtime
