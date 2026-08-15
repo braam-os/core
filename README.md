@@ -67,19 +67,15 @@ send the part that changed; a full-screen program claims a keyboard route throug
 rather than taking the keyboard, so `^C` always gets through.
 
 **Isolated processes — every program is one.** There is no in-kernel program and no way to write
-one: each of the twenty-nine commands in [src/cmd/](src/cmd/) is a wasm binary in an instance of
-its own, and `exec` chooses between two tiers from metadata in the binary, with userland unable
-to tell the difference:
+one: each of the thirty-two commands in [src/cmd/](src/cmd/) is a wasm binary in an instance of
+its own — its own address space, its own capabilities, its own descriptors and a 16 MB cap — in a
+Web Worker of its own, so a runaway program is killed with `worker.terminate()` rather than asked
+to stop. Where the host cannot make a worker, the same binary runs in the kernel's worker and
+gives up only that kill; nothing else changes and userland cannot tell.
 
-| Tier | What it is | What it buys |
-| --- | --- | --- |
-| 2 | its own `WebAssembly.Instance` | address space, capabilities, descriptors, a 16 MB cap |
-| 3 | its own instance in its own worker | a real kill switch — `worker.terminate()` |
-
-The kernel↔process ABI is the same at either tier: two imports plus the memory the kernel caps,
-four exports, and no argument anywhere for a pid — which is the whole of "a process cannot issue
-a syscall on behalf of another". `spin` runs at tier 3 and exists to be un-killable by
-cooperation.
+The kernel↔process ABI is the same either way: two imports plus the memory the kernel caps, four
+exports, and no argument anywhere for a pid — which is the whole of "a process cannot issue a
+syscall on behalf of another". `spin` exists to be un-killable by cooperation.
 
 **The shell is one of the programs.** `/bin/sh` is a binary init runs, and what a prompt needs —
 a pipeline, a redirection, a job, a working directory, the keyboard, the cursor — it asks for
@@ -119,7 +115,7 @@ the configure step looks for it.
 import and export surface of `kernel.wasm` and of each binary and then boots the kernel under
 Node, `unit` runs the in-wasm unit tests, and `size` holds the kernel and the boot archive to
 [tools/size_budget.txt](tools/size_budget.txt). The host side is faked in
-[test/](test/) — including the tier-3 worker protocol, which CI runs end to end over a link
+[test/](test/) — including the process-worker protocol, which CI runs end to end over a link
 with no thread in it.
 
 The build leaves a self-contained static site in `build/web/`. It needs no server and no
@@ -190,15 +186,15 @@ writing a program of your own, outside this repository.
 Complete, as a first version. All ten milestones are done, M0 through M9: the nucleus, the
 scheduler, the screen and keyboard, the shell, streams, the filesystem, host services, the
 layout layer and job control, isolated processes, and liveness isolation. Every acceptance
-criterion is ticked and the test suite passes. Since then the applet tier has been retired and
-every program is a binary of its own: `kernel.wasm` is about 169 KB against a 256 KiB budget,
-and the boot archive that carries the twenty-nine binaries is 370 KB.
+criterion is ticked and the test suite passes. Since then the kernel applet has been retired and
+every program is a binary of its own: `kernel.wasm` is about 139 KB against a 256 KiB budget,
+and the boot archive that carries the thirty-two binaries is 485 KB.
 
 What is deliberately absent is recorded rather than forgotten: no `bg` and no `^Z` (stopping
 a running coroutine is the resume-side twin of cancellation and would have to reach every
-awaitable), no re-wrapping of logical lines on resize, no per-process working directory, no
-window manager over the pane primitive, and no CPU metering — a tier-3 program can be killed
-but not bounded.
+awaitable), no re-wrapping of logical lines on resize, no per-process filesystem root, no
+window manager over the pane primitive, and no CPU metering — a program can be killed but not
+bounded.
 
 ## License
 

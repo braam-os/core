@@ -44,14 +44,14 @@ processes) is done: the §4.3 process ABI in `src/kernel/sysabi.h`, the process-
 `exec` and the syscall dispatcher in `src/user/exec.{h,cpp}`, the three process operations on
 `host_svc` in `src/svc/proc.{h,cpp}`, the per-pid import closure and module cache in
 `web/proc.js`, and two new exports — `sys` and `sys_async` — with no new import. M9 (liveness
-isolation) is done: the own-worker tier, with **no change to the §4.3 process ABI** — the same
-binary runs at tier 2 or tier 3, because each synchronous syscall is answerable inside the
-process's own worker. Both halves of the kernel↔process-worker protocol live in `web/proc.js`,
-`web/procworker.js` is its wiring, the worker pool doubles as the capability probe behind §4's
-tier-2 fallback, and `test/fakeworker.mjs` runs the whole protocol in CI over a link with no
-thread in it. `tail` and `spin` run at tier 3.
+isolation) is done: a worker per process, with **no change to the §4.3 process ABI** — the same
+binary runs in a worker of its own or in the kernel's, because each synchronous syscall is
+answerable inside the process's own worker. Both halves of the kernel↔process-worker protocol
+live in `web/proc.js`, `web/procworker.js` is its wiring, the worker pool doubles as the
+capability probe behind §4's fallback, and `test/fakeworker.mjs` runs the whole protocol in CI
+over a link with no thread in it.
 
-**After M9, one program model.** The applet tier is retired, in the change
+**After M9, one program model.** The kernel applet is retired, in the change
 [doc/Release_Notes.md](doc/Release_Notes.md) opens with: `src/prog/` and the registry deleted,
 every program a binary in `src/cmd/`, `cd`/`fg`/`jobs`/`kill`/`help`/`exit` moved into
 `src/user/builtin/` as true shell builtins with no file behind them, `BinFs` and `/usr` gone in
@@ -73,7 +73,8 @@ the syscall table. Two operations were added for it — `cursor` at 69, the scro
 cursor, and `fg` at 84, which names what `^C` reaches. The tty pump is now permanent and init
 spawns it (`src/user/console.h`), because something has to hold the keyboard while nothing is
 running and a process has no `keys()`. None of it touched the wasm ABI, and the only JavaScript
-that changed was splitting `proc.shutdown()` so it stops killing tier-2 processes.
+that changed was splitting `proc.shutdown()` so it stops killing the processes the kernel's own
+worker holds.
 
 **And the prompt got a colour.** `style` at 70 sets what the next `Write` paints with — sticky
 grid state, the colour a cell grid cannot carry in the bytes (§2.3) — so the table is thirty-five
@@ -96,15 +97,14 @@ points into a `String` the loop body owns — `Prompt`'s `Str`s are non-owning a
 is not a literal. `test/run.mjs` composes the expected prompt from the directory it is in rather
 than spelling it.
 
-**And every program took a worker.** doc/TODO.md T3: tier 3 became the default
-`cmake/BraamProgram.cmake` gives a program, with `/bin/sh` the one binary still asking for tier 2
-— so thirty-one of the thirty-two ran in a worker of their own and could be killed rather than
-waited on. Nothing in C++ moved: the tier is a `u32` in the `braam` custom section and the same
-binary runs at either (§4.3), so this was `stamp.py`'s argument, `test/run.mjs`'s tier map, and
-the documents the change made false. What did move is the test driver's model of a worker:
-`net.hold(n)` in `test/fakeworker.mjs` counts binds now, because `clear` is a program too and a
-spawning program binds its own worker before its child's, and the two cases that give the tier up
-run last so that everything before them runs at the tier it ships at.
+**And every program took a worker.** doc/TODO.md T3: a worker of its own became what
+`cmake/BraamProgram.cmake` gives a program by default, so a program can be killed rather than
+waited on. Nothing in C++ moved — the choice is a `u32` in the `braam` custom section and the
+same binary runs either way (§4.3) — so this was `stamp.py`'s argument and the documents the
+change made false. What did move is the test driver's model of a worker: `net.hold(n)` in
+`test/fakeworker.mjs` counts binds now, because `clear` is a program too and a spawning program
+binds its own worker before its child's, and **the two cases that take the workers away run last**
+so that everything before them runs the way it ships.
 
 **And the shell got a pid.** It answered to 0, which is what `sched_spawn` returns on failure and
 what the terminal claims mean by "nobody" — so `Sys::Fg`'s "nobody holds the keys" clause passed for
@@ -114,10 +114,10 @@ whoever armed it. `cat | wc` with a `^C` is the case that would have caught the 
 nothing like it existed.
 
 **And init started replacing the shell.** doc/TODO.md T7, the design question T8 waits on: a
-tier-3 process dies with its worker and there is no falling a running one back, so once `/bin/sh`
-is one of them a lost worker would be the session rather than a command. `init_task` is a loop
-now — a shell that **died** is replaced by an ordinary `exec`, which lands at whatever tier is
-left; one that **exited** is not, so `exit` still ends the session. `exec_process` grew a
+process dies with its worker and there is no moving a running one back, so once `/bin/sh` has a
+worker of its own a lost one would be the session rather than a command. `init_task` is a loop
+now — a shell that **died** is replaced by an ordinary `exec`, which lands wherever a worker can
+still be had; one that **exited** is not, so `exit` still ends the session. `exec_process` grew a
 `bool *died` because an `i32` cannot tell `exit 132` from a trap. It also found a bug that would
 have decided T7 by itself: `dropWorkers()` terminated a worker without failing the step in it,
 which is a kernel parked for ever rather than a process that died.
@@ -130,12 +130,13 @@ of every tick, so a repaint painted three times and the cursor had to be hidden 
 walking the line. `scrolled` in the reply is what the second `cursor` call was for, and it is a
 counter `src/kernel/screen.cpp` now keeps. `redraw()` in `src/sh/edit.cpp` is the only caller.
 
-**And then the shell took a worker.** doc/TODO.md T8, and there is no name left in §4's tier table:
-`set(BRAAM_BIN_TIER_sh 2)` is gone, `src/cmd/CMakeLists.txt` passes no `TIER` at all, and
-`stamp.py` requires one rather than defaulting to the answer nothing wants. What made it safe was
-T7 (init replaces a shell that died, so a lost worker costs a shell rather than the session) and
-what made it *affordable* was `echo` above. The bench arms turned over with it — `bundle.bin` is
-the `t3` arm now and `bundle3nosh.bin` is the twin that gets packed — and four cases in
+**And then the shell took a worker.** doc/TODO.md T8, and with it **every binary in the system
+makes the same claim**: `set(BRAAM_BIN_TIER_sh 2)` is gone, `src/cmd/CMakeLists.txt` passes no
+`TIER` at all, and `stamp.py` requires one rather than defaulting to the answer nothing wants.
+What made it safe was T7 (init replaces a shell that died, so a lost worker costs a shell rather
+than the session) and what made it *affordable* was `echo` above. The bench arms turned over with
+it — the shipped `bundle.bin` is the `t3` arm now, so `make bench` packs `bundle3nosh.bin` as its
+twin rather than a duplicate — and four cases in
 `test/run.mjs` changed meaning rather than merely numbers: `dropWorkers()` kills the shell too, so
 the held-step case asserts a session that came back rather than a prompt, and the broken-worker case
 empties the pool with a two-stage pipeline instead, because dropping the workers would have made it
@@ -181,7 +182,7 @@ make and node, with no ninja. The top-level `Makefile` wraps it and configures o
 make            # build kernel.wasm, the /bin binaries and tests.wasm
 make run        # ctest
 make serve      # serve build/web/ and open a browser
-make bench      # what a syscall costs at each tier, in a browser (doc/TODO.md T1)
+make bench      # what a syscall costs, with and without the worker (doc/TODO.md T1)
 make install    # the SDK, to /usr/local if writable else ~/.local
 make release    # pack build/web/ and the SDK as build/*.zip
 make clean      # rm -rf build
@@ -294,19 +295,20 @@ conversation rather than a loopback.
 
 **`make bench` is the other counterweight, and it is a measurement rather than a test.** The cmake
 `bench` target packs two twins of the boot archive by re-stamping the staged binaries —
-`bundle2.bin` every program at tier 2 and `bundle3nosh.bin` the same but for `sh`, with the shipped
-`bundle.bin` as the third and every program at tier 3; nothing is recompiled and `bundle.bin` is
-byte-identical — `web/bench.html` drives the shipped page against
+`bundle2.bin` with every program in the kernel's worker and `bundle3nosh.bin` the same but for
+`sh`, with the shipped `bundle.bin` as the third and every program in a worker of its own;
+nothing is recompiled and `bundle.bin` is byte-identical — `web/bench.html` drives the shipped
+page against
 all three, and `tools/bench.mjs` serves them and collects what the page posts into
 `build/bench-<engine>.json`. It answers what a fake cannot: what a syscall costs on a real
 `postMessage`. The counters behind it are unconditional and live in `makeProc`'s `stats()` and in
 `web/worker.js` — where `paint` and `tick` say how much of a keystroke is inside the kernel worker,
 and a `render` message turns drawing off for the A/B that says whether the rest is the canvas or the
 turn. The figures are in doc/TODO.md T1, T5 and T8. **The arm ids mean what they meant at
-T1** — `t2` every program at tier 2, `t3nosh` tier 3 but for the shell, `t3` all of it — so the
-three measurements can be read against each other; keep it that way even as *which* of them ships
-moves, since T5's own code change was repairing an arm that had silently stopped being a control,
-and T8 moved the shipped archive from `t3nosh` to `t3`.
+T1** — `t2` every program in the kernel's worker, `t3nosh` a worker each but for the shell, `t3`
+all of it — so the three measurements can be read against each other; keep it that way even as
+*which* of them ships moves, since T5's own code change was repairing an arm that had silently
+stopped being a control, and T8 moved the shipped archive from `t3nosh` to `t3`.
 
 ## Architecture invariants
 
@@ -428,8 +430,8 @@ Further constraints that are easy to violate by habit:
 
 ## Process model
 
-Every program is a binary; there is no in-kernel program and no way to write one. `exec` picks
-between the two isolated tiers from binary metadata, so userland does not notice (Concept.md §4):
+Every program is a binary; there is no in-kernel program and no way to write one. `exec` decides
+from binary metadata where to put it, so userland does not notice (Concept.md §4):
 
 - **Shell builtin** — not a program and not a file, and no longer kernel code either: `cd`, `fg`,
   `jobs`, `kill`, `help`, `exit` live in `src/sh/builtin/`, inside `/bin/sh`. What makes one a
@@ -440,22 +442,21 @@ between the two isolated tiers from binary metadata, so userland does not notice
   task — so a builtin must buffer its output and write it once, or it fills an eight-slot pipe
   and parks with nobody left to drain it. The table is an explicit array, not a registrar:
   `braam_sh` is an archive, and `--gc-sections` would drop an unreferenced registrar silently.
-- **Separate instance, shared worker** (M8) — address-space, capability, descriptor and
-  memory-cap isolation. A binary in `/bin` carrying a `braam` custom section; `exec` reads
-  the tier out of it. **Nothing in the tree asks for it** since doc/TODO.md T8: it is §4's
-  fallback, and an option `braam_add_program` still offers an out-of-tree program.
-- **Separate instance, own worker** (M9) — adds a real kill switch, since wasm cannot be
-  preempted: `worker.terminate()`. **This is what everything gets** — `braam_add_program` stamps
-  tier 3 unless a program asks for 2, and no program does — and it runs at tier 2 where the host
-  cannot make a worker. The protocol is one message each way per step, the tier
-  rides in the spawn request's `flags` word (`proc_pack` in `sysabi.h`), and a tier-3 syscall
-  costs two `postMessage` hops rather than a call: 34–45 µs measured, which doc/TODO.md T1 is
-  the argument for paying everywhere and T5 re-measured unmoved after the flip.
+- **A process in a worker of its own** (M9) — address-space, capability, descriptor and
+  memory-cap isolation, plus a real kill switch, since wasm cannot be preempted:
+  `worker.terminate()`. **This is what every program gets**, and `braam_add_program` arranges it
+  unasked. The protocol is one message each way per step, the choice rides in the spawn request's
+  `flags` word (`proc_pack` in `sysabi.h`), and a syscall costs two `postMessage` hops rather than
+  a call: 34–45 µs measured, which doc/TODO.md T1 is the argument for paying everywhere and T5
+  re-measured unmoved after the flip.
+- **A process in the kernel's worker** (M8) — everything above but the kill. `exec` falls back to
+  it where the host cannot make a worker; **nothing in the tree asks for it** since doc/TODO.md
+  T8, and `braam_add_program`'s `TIER 2` is the option an out-of-tree program still has.
 
 **A process that loses its worker dies with it, and init replaces the shell** (doc/TODO.md T7).
-§4's tier-2 fallback is decided before a process starts, so it covers a host that never had
-workers and not one whose workers go mid-session — there is no falling a *running* process back,
-since the instance went with the worker. So init starts another `/bin/sh` when its shell **died**
+§4's fallback is decided before a process starts, so it covers a host that never had workers and
+not one whose workers go mid-session — there is no moving a *running* process back, since the
+instance went with the worker. So init starts another `/bin/sh` when its shell **died**
 (a trap, a step that failed, an instance that would not be made) and does not when it **exited**:
 `exit` still ends the session. `exec_process`'s `bool *died` is what says which, since `exit 132`
 and a trap are the same `i32`. Bounded at three deaths in quick succession. Whoever takes a worker
@@ -472,9 +473,9 @@ header so neither can drift alone. Three rules about it are load bearing:
   `web/worker.js`, an explicit `drain()` in the test driver. Synchronous syscalls are the other
   direction and re-enter the kernel at top level, exactly as `key()` does.
 - **A process's pid is written into its import closure, not passed.** That is the whole of "a
-  process cannot issue a syscall on behalf of another PID": there is no argument for it. At
-  tier 3 the pid is bound into the worker at creation, and the step protocol's messages carry
-  *that* pid — never one read out of a message body, which would give it back.
+  process cannot issue a syscall on behalf of another PID": there is no argument for it. The pid
+  is bound into the worker at creation, and the step protocol's messages carry *that* pid — never
+  one read out of a message body, which would give it back.
 - **A process may have several syscalls outstanding, and the step says which one it answers.**
   `PROC_TASKS` is 4 on the process side; on the kernel side each parked call is a `Call` record
   with its own staging block, served by a scheduler job of its own. One reused staging buffer
@@ -496,17 +497,18 @@ header so neither can drift alone. Three rules about it are load bearing:
   are pure and are compiled straight into the suite rather than linked from `braam_sh`, which
   would drag the process runtime's imports in with them. Anything that needs the shell or a
   program to actually run belongs in `test/run.mjs`.
-- **Both halves of the tier-3 step protocol live in `web/proc.js`** — `serveProc` is the
+- **Both halves of the step protocol live in `web/proc.js`** — `serveProc` is the
   process's side and `makeProc` the host's, and `web/procworker.js` and `test/fakeworker.mjs`
   are wiring around them. Two files describing one wire is how it drifts.
 - **A terminated worker's in-flight step must be failed by whoever killed it.** An abandoned
   `HostReq` is reaped by `wake()` on its token and by nothing else, so a request nobody will ever
   answer leaks the record and its payload for the life of the page.
 
-A tier-2 program is an ordinary scheduler job: a proxy task in `src/user/exec.cpp` steps the
+A program is an ordinary scheduler job: a proxy task in `src/user/exec.cpp` steps the
 instance and performs its syscalls with its own `CancelToken`, so `^C`, `kill`, `jobs`, `/proc`
-and the stage epilogue need nothing added. Its destructor drops the instance — or, at tier 3,
-terminates the worker holding it, which is the same sentence one thread further out.
+and the stage epilogue need nothing added. Its destructor terminates the worker holding the
+instance, or drops the instance directly where the kernel's worker holds it — the same sentence
+one thread further out.
 
 Since M4 a pipeline's stages are independent scheduler jobs rather than a child group the shell
 `co_await`s: `CancelState::waiting` is a single slot, so one job cannot have two children parked
@@ -544,7 +546,7 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   that does not hold the screen, but a background job still writes to the grid through `stdout`
   and `ScreenClear` is open to anyone — `clear` and `watch` call it without claiming. Gating that
   is per-job output routing, not a claim.
-- **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection was
+- **No CPU metering.** A runaway program is killed; nothing bounds one. Fuel injection was
   considered and not built.
 - **`Pane` is a primitive, not a multiplexer.** Two jobs visible at once needs per-pane output
   routing and a window manager in the shell. One process at a time holds the screen — a second
@@ -555,13 +557,13 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   `Module` by path, so the bytes still cross the VFS on every `exec` and only the compile is
   saved; the worker comes from the pool, and only a pipeline wider than what is idle or a killed
   process makes the host start one. The session holds one permanently, since the shell is a
-  tier-3 process for as long as the system is up.
-- **Every syscall a program makes is two `postMessage` hops**, 34–45 µs, since T3 put every
-  program in its own worker and T8 put the shell there too. Bulk I/O pays it
-  per `SYS_CHUNK`, which is 512 bytes: doc/TODO.md T5 re-measured that at 6–13 ms more than tier 2
-  for a quarter of a megabyte through three processes, and **decided against T6** — a bigger chunk
-  or a batched step protocol — because nothing written for this system can perceive it. A workload
-  that moves megabytes is what would reopen it, not a better figure.
+  process for as long as the system is up.
+- **Every syscall a program makes is two `postMessage` hops**, 34–45 µs, since T3 and T8 put every
+  program in a worker of its own. Bulk I/O pays it per `SYS_CHUNK`, which is 512 bytes:
+  doc/TODO.md T5 re-measured that at 6–13 ms more than a syscall that is a call, for a quarter of
+  a megabyte through three processes, and **decided against T6** — a bigger chunk or a batched
+  step protocol — because nothing written for this system can perceive it. A workload that moves
+  megabytes is what would reopen it, not a better figure.
 - **A whole line costs an order of magnitude more than a keystroke.** `anchor()` in
   `src/sh/edit.cpp` is seven or eight round trips — two `cursor_get`s and three `style`+`write`
   pairs for the coloured runs — and `interactive()` adds a `cwd_get` per line. T8 cut the
@@ -587,7 +589,7 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   the interactive path, and two is its floor without fusing the keyboard into the paint.
 - **The shell has no variables, no `-c`, no globbing and no scripts beyond `sh -s`.** None of it
   was blocked by the shell being kernel code, and none of it is blocked now.
-- **Two tier-3 fidelity losses (§4.3),** true of every program since T3 rather than of two: a
+- **Two fidelity losses the worker costs (§4.3),** true of every program: a
   binary that will not instantiate reads as a crash rather than as a refusal, and `Sys::Now` is
   relative. Nothing calls `proc_now()`, so the second is a constraint on what may be written
   next rather than a regression.
@@ -606,7 +608,7 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   `ProcFs`, boot and init), `src/proc/` (a process binary's runtime, `screen.cpp` included),
   `src/sh/` (the shell: grammar, line editor, job runtime, builtins) and `src/cmd/` (one file per
   program, `sh.cpp` among them), `test/unit/`, `web/` (`proc.js` both halves of the process
-  protocol, `procworker.js` a tier-3 process's worker), `bundle/`, `examples/` (a program built
+  protocol, `procworker.js` one process's worker), `bundle/`, `examples/` (a program built
   against the installed SDK), `tools/`, `cmake/` (the toolchain file, `BraamProgram.cmake` and
   the package config, all three installed). Concept.md §7. `braam_fs` and `braam_svc` are siblings above the kernel and below userland and
   must not depend upwards or on each other; anything needing the scheduler or the screen belongs

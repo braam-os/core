@@ -135,8 +135,8 @@ happens against an `OffscreenCanvas` transferred into the worker, so the main th
 free. A runaway program hangs its own worker rather than the page, and a "reset kernel"
 button is just `worker.terminate()` followed by a reboot.
 
-Since M9 a runaway program does not even hang the kernel's worker: a tier-3 process is a worker
-of its own (§4.2), and the kernel is merely waiting for a reply it can stop waiting for.
+Since M9 a runaway program does not even hang the kernel's worker: a process is a worker of its
+own (§4.2), and the kernel is merely waiting for a reply it can stop waiting for.
 
 ### 3.1 Toolchain and language subset
 
@@ -497,67 +497,59 @@ a socket has event handlers holding it alive on the JS side — which is what `J
 
 ## 4. Process model
 
-**Every program is a binary in its own instance.** There is no in-kernel program and no way to
-write one; what a program gets is chosen only between the two isolated tiers, and `exec` picks
-between them from a flag in the binary's metadata — userland does not notice.
+**Every program is a binary in its own instance, in a worker of its own.** There is no in-kernel
+program and no way to write one. A program gets its own address space, its own capabilities, its
+own descriptors and a memory cap the kernel sets, and it gets them inside a Web Worker holding
+nothing else — so `worker.terminate()` ends it without its cooperation.
 
-| Tier | Isolation | Spawn cost | Kill | Used for |
-|---|---|---|---|---|
-| **Instance, shared worker** | address space + capabilities + memory cap | ~1 ms | cooperative | the fallback below, and a binary that asks |
-| **Instance, own worker** | the above + liveness | ~10 ms, few MB | `worker.terminate()` | every program, the shell included |
+| Where it runs | Isolation | Spawn cost | Kill |
+|---|---|---|---|
+| **In a worker of its own** | address space + capabilities + memory cap + liveness | ~10 ms, few MB | `worker.terminate()` |
+| **In the kernel's worker** | the above, less liveness | ~1 ms | cooperative |
 
-**There is no third row, and the shell is not an exception to the two.** `/bin/sh` is a binary
-in `/bin` that init runs, and everything a prompt needs — a pipeline, a redirection, a job, a
-working directory, the keyboard, the cursor — it asks for through §4.3 like any other program.
-What is left inside the kernel is not a weaker tier: it is the dispatcher those requests arrive
-at.
+The second row is a *fallback*, not a choice userland makes: where the host cannot give a process
+a worker — a browser without nested workers, a `procworker.js` that will not load — the same
+binary runs in the kernel's worker instead and gives up only the kill. `exec` decides, from a
+flag in the binary's `braam` custom section (§4.3), and nothing above it notices which it got.
 
-`exec` reads the tier out of a binary's `braam` custom section (§4.3): a name in `/bin` is a
-binary, and the binary says which tier it wants. One asking for tier 3 still runs at tier 2 where
-the host has no worker to put it in — a *fallback*, covering a browser without nested workers
-and a `procworker.js` that will not load.
+**The shell is not an exception.** `/bin/sh` is a binary in `/bin` that init runs, and everything
+a prompt needs — a pipeline, a redirection, a job, a working directory, the keyboard, the cursor —
+it asks for through §4.3 like any other program. What is left inside the kernel is not a weaker
+kind of process: it is the dispatcher those requests arrive at.
 
-**A host that loses its workers takes every tier-3 process with it, and init replaces the shell.**
+**A host that loses its workers takes every process with it, and init replaces the shell.**
 The fallback above is decided before a process starts, so it covers a host that never had workers
 and not one whose workers go mid-session: a `procworker.js` that will not load, or a host letting
-go of the tier. Every process in a worker dies there, and once `/bin/sh` is one of them that would
+go of them. Every process in a worker dies there, and once `/bin/sh` is one of them that would
 be the session rather than a command, because nothing re-execs init. So **init starts another
 shell when its shell *died* — a trap, a step that failed, an instance that would not be made —
 and does not when it *exited***, which is the user's own `exit` and the end of the session. The
-replacement is an ordinary `exec` of `/bin/sh`, so it lands at whatever tier is still available:
-after a worker that would not load, tier 2. That is what keeps this section's promise — that
-userland does not notice which tier it got — true of the shell as it is of everything else, and it
-is what makes tier 3's kill switch something `/bin/sh` can survive rather than something that
-ends the session.
+replacement is an ordinary `exec` of `/bin/sh`, so it lands wherever a worker can still be had,
+and in the kernel's worker when one cannot. That is what keeps this section's promise — that
+userland does not notice where it ran — true of the shell as it is of everything else, and it is
+what makes the kill switch something `/bin/sh` can survive rather than something that ends the
+session.
 
-There is no falling a *running* process back to tier 2, and there could not be: the instance is
-gone with the worker and there is no state to carry over. Replacing the shell is the whole of the
-answer, and it is bounded — three deaths in quick succession and init says so and stops, since a
-shell that cannot get as far as a prompt would otherwise say it for ever.
+There is no moving a *running* process back into the kernel's worker, and there could not be: the
+instance is gone with the worker and there is no state to carry over. Replacing the shell is the
+whole of the answer, and it is bounded — three deaths in quick succession and init says so and
+stops, since a shell that cannot get as far as a prompt would otherwise say it for ever.
 
-**Tier 3 is what a program gets unless it asks for less**, which is a decision taken once the
-tier had been measured: 34–45 µs a syscall round trip against §4.4's estimated 0.1 ms, so a
-command that is not interactive pays a few hundred microseconds for a kill switch it cannot be
-denied. The recipe that builds a program carries that default
-(`cmake/BraamProgram.cmake`), so an out-of-tree program follows the system's own answer.
+**Every program gets a worker unless it asks not to**, which is a decision taken once the cost
+had been measured: 34–45 µs a syscall round trip against §4.4's estimated 0.1 ms, so a command
+pays a few hundred microseconds for a kill switch it cannot be denied. The recipe that builds a
+program carries that default (`cmake/BraamProgram.cmake`), so an out-of-tree program follows the
+system's own answer, and nothing in `/bin` asks for anything else — the prompt included, since a
+keystroke costs two round trips rather than the five it cost when a repaint was four operations
+for one change to the grid.
 
-**And nothing asks for less, including the prompt.** `/bin/sh` was the one exception, on the
-argument that a prompt pays the tier several times a keystroke and there is nobody to kill it for.
-Half of that stopped being true at once — init replaces a shell that died, so the kill switch means
-something for `/bin/sh` too — and the other half was made false rather than argued with. A keystroke
-was five round trips because a repaint was four operations for one change to the grid; `echo`
-(§4.3) is those four, so it is two. That is the number the exception was worth, and with it gone
-there is no name in the tier at all: the tier is a claim a binary makes, and every binary in the
-system now makes the same one.
-
-**There was a third tier, and it is gone.** The **kernel applet** — a program as an in-kernel
-coroutine, sharing the kernel's heap and its whole authority — was how every program was written
-before M8 gave them an alternative, and for a while all three tiers coexisted. They no longer do.
-Two program models meant two `Args` types, two `io.h`s and two copies of every filter's logic
-waiting to diverge, and the weaker model was the one with no memory cap, no descriptor table and
-nothing between a bug and the kernel's heap. So the applets became binaries, the ABI grew to
-meet them (§4.3), and `Tier::Retired` keeps the number 1 reserved so a binary stamped by an older
-build is refused rather than misread.
+**There was a third program model, and it is gone.** The **kernel applet** — a program as an
+in-kernel coroutine, sharing the kernel's heap and its whole authority — was how every program
+was written before M8 gave them an alternative. Two program models meant two `Args` types, two
+`io.h`s and two copies of every filter's logic waiting to diverge, and the weaker model was the
+one with no memory cap, no descriptor table and nothing between a bug and the kernel's heap. So
+the applets became binaries, the ABI grew to meet them (§4.3), and `Tier::Retired` keeps the
+number 1 reserved so a binary stamped by an older build is refused rather than misread.
 
 A **shell builtin** is still not a program and still has no file in `/bin`, but it is no longer
 kernel code: the six live inside `/bin/sh`, in `src/sh/builtin/`. What makes one a builtin has
@@ -612,20 +604,20 @@ the real shell and the real programs.
 isolation and *liveness* isolation are separate problems, and we should be explicit about
 which one we are solving. Two options:
 
-1. **One worker per untrusted process**, so `worker.terminate()` is our `SIGKILL`. This is
-   tier 3, and it is what M9 built.
+1. **One worker per untrusted process**, so `worker.terminate()` is our `SIGKILL`. This is what
+   M9 built.
 2. **Fuel counters** — a binary-rewriting pass injecting `if (--fuel < 0) trap;` at loop
    headers and function entries. This is what standalone runtimes do for metering; it costs
    perhaps 5–15% throughput. Optional, and a self-contained project of its own.
 
 The first is enough for a *kill*, which is what an operating system owes its user, and it needs
 no metering: the kernel does not have to notice that a process is looping, because it is not
-waiting on anything it cannot abandon. A tier-3 step is one more asynchronous host request, so a
+waiting on anything it cannot abandon. A step is one more asynchronous host request, so a
 process that never answers is a request that never lands — and `^C`, `kill` and a cancelled job
 already know what to do with one of those. The second option is still the only way to *bound*
 CPU rather than end it, and is still unbuilt.
 
-What tier 3 does not change is the shape: one worker per process, hired from a small pool and
+What the worker does not change is the shape: one worker per process, hired from a small pool and
 terminated rather than pooled when it is killed, and the process's own memory created inside it,
 so the kernel's page counts still decide the cap. A worker that has finished its process is
 clean — the instance is dropped and wasm cannot have touched the worker's own scope — so it goes
@@ -633,8 +625,8 @@ back to the pool. One that was terminated is gone, which is the point.
 
 The pool is sized for a pipeline *above* what the session holds permanently, because the shell is
 one of these processes and never gives its worker back. That is also why the capability probe
-cannot ask whether anything is running: with a permanent tier-3 process the pool and the process
-table are never both empty, so what it asks instead is whether a worker got as far as announcing
+cannot ask whether anything is running: with one process permanent the pool and the process table
+are never both empty, so what it asks instead is whether a worker got as far as announcing
 itself.
 
 ### 4.3 The kernel↔process ABI
@@ -678,7 +670,7 @@ over its path, neither with a header glued on the front.
 
 **The operation table grew with the programs.** M8 fixed it at eight — `exit`, `getpid`, `now`
 and `stage` synchronously, `write`, `read`, `open` and `close` asynchronously — because those
-were what a binary needed when only two were binaries. Retiring the applet tier meant every
+were what a binary needed when only two were binaries. Retiring the applet meant every
 program needed what it had reached for directly, and the table grew to twenty-seven: `stat`,
 `list`, `mkdir` and `remove` beside the descriptor operations; `sleep` for the timer queue;
 `clock` and `storage` for the two host services no file can stand in for; `fetch`, `wsopen`, the
@@ -782,10 +774,10 @@ every process has a working directory of its own, the one answer is the shell's.
 `chdir` is an operation and `pwd` calls it: not because the text was expensive, but because
 "which process is asking" is not a question a filesystem can be asked.
 
-**The synchronous half is closed.** Tier 3 answers `exit`, `getpid`, `now` and `stage` inside the
-process's own worker, with no kernel to ask — that is the whole reason the same binary runs at
-either tier. A fifth synchronous operation would have nothing to answer with there and would fail
-at tier 3 alone, which is the worst way for an ABI to break. So an operation that needs the kernel
+**The synchronous half is closed.** `exit`, `getpid`, `now` and `stage` are answerable inside the
+process's own worker, with no kernel to ask — that is the whole reason one binary runs in either
+place. A fifth synchronous operation would have nothing to answer with there and would fail in a
+worker alone, which is the worst way for an ABI to break. So an operation that needs the kernel
 is asynchronous whatever it costs, and the four above are the complete set for good.
 
 **The kernel does not call a process; the host does, and never with the kernel on the stack.**
@@ -803,15 +795,16 @@ through a block the host takes from the process's own `_alloc`.
 A trap is how a process reports a fatal error: it has no host imports to log through, so the
 kernel turns a trap into an exit status and says the process crashed.
 
-**Tier 3 changes none of it.** The same binary runs at either tier; only the wiring behind its
-two imports differs, which is what lets `exec` pick a tier from metadata without userland — or
+**The worker changes none of it.** The same binary runs in either place; only the wiring behind
+its two imports differs, which is what lets `exec` decide from metadata without userland — or
 the program — noticing. That is worth stating plainly, because a worker boundary has no
 synchronous direction at all (§1 rules out `SharedArrayBuffer`, and therefore `Atomics.wait`),
 and `sys` is by construction synchronous. The reason it survives is that every one of its four
 operations can be answered *without the kernel*:
 
-- `GetPid` is the pid the host bound into the worker when it made it — the same closure trick as
-  at tier 2, one thread further out, so a process still holds no function that names another.
+- `GetPid` is the pid the host bound into the worker when it made it — the same closure trick the
+  kernel's worker uses, one thread further out, so a process still holds no function that names
+  another.
 - `Now` is a clock reading the step message carried, plus the worker's own elapsed time. It is
   monotonic and relative rather than bit-identical to the kernel's tick clock, which nothing in
   `src/proc/` or `src/cmd/` depends on.
@@ -823,13 +816,12 @@ operations can be answered *without the kernel*:
 
 So the asynchronous half is the only thing that crosses: `sys_async` is recorded beside the step
 result, and the kernel worker performs the `Sys::Stage` copy on the process's behalf exactly as
-the tier-2 closure does. One message down, one up, per step — the protocol between the two
-workers is the *host's*, not an ABI a binary can see, and it is written once in `web/proc.js`
-with both halves in the same file.
+it would for a process it holds itself. One message down, one up, per step — the protocol between
+the two workers is the *host's*, not an ABI a binary can see, and it is written once in
+`web/proc.js` with both halves in the same file.
 
-Two things do lose fidelity, and neither is worth an ABI change — though both are now true of
-every program rather than of the two that used to ask for the tier. A tier-3 instance is created
-inside its worker, so a binary that will not instantiate reads as a crash (132) rather than as
+Two things do lose fidelity, and neither is worth an ABI change. An instance in a worker of its
+own is created there, so a binary that will not instantiate reads as a crash (132) rather than as
 "will not instantiate" (126) — the module is still compiled in the kernel worker, so a malformed
 one is still refused before anything runs. And `Now`, as above, is relative.
 
@@ -846,37 +838,25 @@ allowed in a worker at any size and keeps `exec` one round trip rather than two.
 
 The `postMessage` of a module is what M9 uses, and it is why the cache stays in the kernel worker
 rather than moving out with the instance: a binary is compiled once however many workers run it.
-Starting a worker is the other cost the tier adds, and the pool is the answer — a free list of
-workers with no process in them, a pipeline's worth of them, topped up at boot, which doubles as
-the capability probe. Where the constructor throws, tier 3 is off and §4's fallback applies; so it
-is where a worker is made and never loads its script, which is a worker that reports an error
-before it has announced itself.
+Starting a worker is the other cost, and the pool is the answer — a free list of workers with no
+process in them, a pipeline's worth of them, topped up at boot, which doubles as the capability
+probe. Where the constructor throws, §4's fallback applies; so it is where a worker is made and
+never loads its script, which is a worker that reports an error before it has announced itself.
 
-A tier-3 **syscall** is the cost that does not go away: two `postMessage` hops and two copies,
-against a direct call and one copy at tier 2. A syscall-bound program pays it per `SYS_CHUNK`.
+A **syscall** is the cost that does not go away: two `postMessage` hops and two copies, against a
+direct call and one copy for a process the kernel's worker holds itself. A syscall-bound program
+pays it per `SYS_CHUNK`.
 
-*Measured* since, at 0.2.44, in three engines: **34–45 µs** a round trip, not the 0.1 ms this
-section estimated. The tier-2 figure is 2–17 µs of work, plus whatever the every-64th
-`setTimeout(drain, 0)` waits — which is the larger half of it, and is a property of the host's
-scheduling rather than of the tier. doc/TODO.md T1 has the numbers and the method. That
-measurement is what turned the tier from a claim a binary makes into the default it gets: at those
-figures the only program that looked as though it could not afford the tier was the one being typed
-into.
+*Measured* since, at 0.2.44 and again at 0.2.47, in three engines: **34–45 µs** a round trip, not
+the 0.1 ms this section estimated, and unmoved by putting every program in a worker. doc/TODO.md
+T1 and T5 have the numbers, the method, and the decision not to cut the number of round trips in
+bulk I/O.
 
-Re-measured at 0.2.47 with the default inverted, and the round trip did not move. What did move is
-that the `setTimeout` half largely went with the tier-2 programs: the shell was the only tier-2
-process left and took 21 steps where a bulk command took 483. T5 has that, and the decision not to
-cut the number of round trips in bulk I/O.
-
-**The prompt was the exception, and it was the *count* that made it one, not the tier.** A
-keystroke is round trips times what one costs, and the count was five for a single change to the
-grid — a key, then a repaint of four. `echo` (§4.3) made it two, which is the floor without fusing
-the keyboard into the paint, and only then was `/bin/sh` moved. So the cost model now says the same
-thing about every program in the system, which is what §4's table had always claimed and had one
-name against it. What is left on the interactive path is the *line*: `anchor()` costs seven or
-eight round trips and the working directory one more, so Enter to the next prompt is an order of
-magnitude more than a keystroke. It is paid once a line rather than once a key, which is why it was
-not what the flip turned on.
+What that leaves on the interactive path is the *line* rather than the key. A keystroke is two
+round trips — a key, then a repaint, which `echo` (§4.3) made one operation — but `anchor()` costs
+seven or eight and the working directory one more, so Enter to the next prompt is an order of
+magnitude more than a keystroke. It is paid once a line rather than once a key, which is why it is
+affordable.
 
 The real cost is **duplication**: with no dynamic linking, every binary embeds its own copy
 of the allocator, the string types, and the coroutine runtime. Keep the process-side runtime
@@ -1085,9 +1065,9 @@ src/sh/                 the shell: grammar, LineEditor, job runtime, builtins
 src/cmd/sh.cpp          its entry point — /bin/sh is a binary like any other
 bundle/                 the tree tools/pack.py packs into /bin and /share
 test/                   in-wasm unit tests, the Node driver, and the fakes: storage,
-                        services, and a tier-3 worker with no thread in it
+                        services, and a process worker with no thread in it
 web/                    braam.js (the embedding API), worker.js, host shim, renderer
-web/proc.js             both halves of the process protocol; procworker.js is a tier-3
+web/proc.js             both halves of the process protocol; procworker.js is one
                         process's worker, and wiring only
 tools/                  build scripts, bundle packer, metadata stamper, version and
                         release scripts, size-budget check, chat server
@@ -1180,7 +1160,7 @@ the process's behalf, returning the address of a staging block the process's ker
 owns. The reverse direction needs no such call, because `_alloc` is already in the ABI.
 
 **M9 added a third route, for the case where the two memories are not in the same agent.** A
-tier-3 process is a worker away, so the copy is in two halves with a `postMessage` between them:
+process is a worker away, so the copy is in two halves with a `postMessage` between them:
 the process's worker `slice`s the payload out into a transferable `ArrayBuffer`, and the kernel's
 worker copies that into the staging block `Sys::Stage` gave it. The kernel half of that is the
 same two lines as above; only the source changed. `slice` rather than `subarray` is load-bearing
@@ -1285,5 +1265,5 @@ Full reasoning in [Release_Notes.md](Release_Notes.md).
 This document consolidates three earlier design notes — on the nucleus, on browser storage,
 and on wasm isolation — which have been removed now that their content lives here in full. It
 resolves the one disagreement between them (in-kernel coroutine programs versus separate
-instances) in favour of the tiered model in §4, with the isolated tiers deferred to M8 and M9
-and the ABI fixed up front.
+instances) in favour of the process model in §4, with the isolation deferred to M8 and M9 and
+the ABI fixed up front.

@@ -40,7 +40,7 @@ not a CPU with a memory management unit.
 Two things POSIX has that Braam does not, and both are deliberate rather than pending:
 
 **No preemption.** `while(1){}` cannot be interrupted — nothing in the wasm specification allows
-it. Tier 3 (§4.2) answers this with a kill rather than a scheduler: a process gets a worker of
+it. §4.2 answers this with a kill rather than a scheduler: a process gets a worker of
 its own, and `terminate()` ends it without its cooperation. Bounding CPU rather than ending it
 would need fuel injection, which was considered and not built.
 
@@ -74,13 +74,13 @@ host, and the host's scheduling discipline is the first thing to understand.
 │  └───────────────────┘               └──────────┬───────────────┘  │
 │                                                 │ _start / _resume │
 │                     ┌───────────────────────────▼───────────────┐  │
-│                     │ tier 2: the process's instance, right here│  │
-│                     │   own memory · own externref table · fds  │  │
+│                     │ fallback: the process's instance, right   │  │
+│                     │ here — own memory · own externrefs · fds  │  │
 │                     └───────────────────────────────────────────┘  │
 └──────────────────────────────────┬─────────────────────────────────┘
                                    │ postMessage: bind, step
 ┌──────────────────────────────────▼─────────────────────────────────┐
-│ tier 3: a Web Worker holding one process — the same instance, one  │
+│ normally: a Web Worker holding one process — the same instance, one│
 │ thread further out, where terminate() does not need its cooperation│
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -98,10 +98,11 @@ weeks later.
 
 So one `_start` or `_resume` is a **deferred host action**, structurally identical to a storage
 reply: the proxy task parks on a wake token, the host steps the instance once the tick has
-unwound, and the token is woken with the outcome. At tier 2 the deferral is a microtask
-(`web/worker.js:81-89`); at tier 3 it is a `postMessage`, deferred by nature; in the test driver
-it is an explicit `drain()` between ticks (`test/fakesvc.mjs:61-73`). The stepping code is the
-same `web/proc.js` in all three, because the difference is scheduling and not behaviour.
+unwound, and the token is woken with the outcome. Across a worker the deferral is the
+`postMessage`, deferred by nature; for a process the kernel's worker holds itself it is a
+microtask (`web/worker.js:81-89`); in the test driver it is an explicit `drain()` between ticks
+(`test/fakesvc.mjs:61-73`). The stepping code is the same `web/proc.js` in all three, because the
+difference is scheduling and not behaviour.
 
 Synchronous syscalls run the other way and need none of this. `sys(pid, …)` re-enters the kernel
 from JS at top level, exactly as `key()` and `wake()` do, and answers without parking.
@@ -219,7 +220,7 @@ hold those until it exits.
 
 ### 4.4 The metadata
 
-`exec` has to know two things before it can instantiate a binary: which tier to run it at, and
+`exec` has to know two things before it can instantiate a binary: where to run it, and
 how much memory to give it. Both live in a wasm custom section named `braam`, six little-endian
 `u32`s appended after the link by `tools/stamp.py`:
 
@@ -283,21 +284,21 @@ copy a payload, and a program never calls it — but a hostile binary can, so it
 `SYS_STAGE_MAX` (1 MiB, the largest blit there can be) rather than handed an arbitrary
 `heap_alloc`.
 
-**The set is closed at four, permanently.** Tier 3 answers all four inside the process's own
-worker with no kernel to ask, and that is the entire reason one binary runs at either tier:
+**The set is closed at four, permanently.** All four are answerable inside the process's own
+worker with no kernel to ask, and that is the entire reason one binary runs in either place:
 
 - `GetPid` is the constant the host bound into the closure when it made the worker.
 - `Now` is the clock reading the step message carried plus the worker's own elapsed time —
   monotonic and relative rather than identical to the kernel's tick clock, which nothing depends
   on.
 - `Exit` is buffered and rides back on the step's reply. A process only ever issues it
-  immediately before returning, so nothing observes the delay; tier 2 keeps the last `Exit`
-  before the step returned, and so does this.
+  immediately before returning, so nothing observes the delay; the kernel's worker keeps the last
+  `Exit` before the step returned, and so does this.
 - `Stage` is refused with 0 — the "no room" answer the runtime already handles. Unknown
   operations are refused locally too, and never relayed.
 
-A fifth synchronous operation would have nothing to answer with at tier 3 and would fail there
-alone, which is the worst way for an ABI to break. So an operation that needs the kernel is
+A fifth synchronous operation would have nothing to answer with inside a worker and would fail
+there alone, which is the worst way for an ABI to break. So an operation that needs the kernel is
 asynchronous whatever it costs.
 
 ---
@@ -362,16 +363,18 @@ is what makes several outstanding calls representable at all.
 
 ## 7. What actually happens
 
-### 7.1 `echo hi` at tier 2, end to end
+### 7.1 `echo hi`, end to end
 
 The stepper is an ordinary scheduler job — `exec_process`, the task the shell's pipeline stage
-runs. It never performs a syscall itself.
+runs. It never performs a syscall itself. The trace below is drawn with the instance in the
+kernel's own worker, so that every line is one call; §7.3 is the same step with the worker hop
+added, and the binary cannot tell the two apart.
 
 ```
  stepper (kernel)          host (web/proc.js)              echo.wasm
  ────────────────          ──────────────────              ─────────
  exec_resolve("echo")
-   read /bin/echo, parse the braam section → tier 2, 4 pages, cap 256
+   read /bin/echo, parse the braam section → 4 pages, cap 256
        │
  proc_spawn ──── host_svc(ProcSpawn, tok, req) ──►│
        │                                          │ compile (cached by path)
@@ -439,14 +442,14 @@ And the two-byte write is not a simplification — that is what `echo hi` really
 them, which is the cost model of §6 arriving in the smallest possible program. A filter that
 reads and writes `SYS_CHUNK` at a time pays the same overhead per 512 bytes instead of per two.
 
-### 7.2 A synchronous call, at both tiers
+### 7.2 A synchronous call, either side of a worker
 
-`proc_pid()` is one line either side of a tier boundary, and the difference never reaches the
+`proc_pid()` is one line on both sides of a worker boundary, and the difference never reaches the
 binary:
 
 ```
-   tier 2                                tier 3
-   ──────                                ──────
+   in the kernel's worker                in a worker of its own
+   ──────────────────────                ──────────────────────
    spin.wasm                             spin.wasm
      │ sys(GetPid, 0,0,0)                  │ sys(GetPid, 0,0,0)
      ▼                                     ▼
@@ -459,9 +462,9 @@ binary:
 A worker boundary has no synchronous direction — §1 rules out `SharedArrayBuffer` and therefore
 `Atomics.wait` — and `sys` is by construction synchronous. It survives because none of its four
 operations has to reach the kernel at all. That is the result M9 turned on, and it is why the
-same `spin.wasm` runs at either tier with the same import list.
+same `spin.wasm` runs in either place with the same import list.
 
-### 7.3 One tier-3 step
+### 7.3 One step across a worker
 
 Two messages, one each way, whatever the process did inside the step:
 
@@ -493,8 +496,8 @@ Two messages, one each way, whatever the process did inside the step:
    pending.r.ok(result); pending.done()   → wake(tok)
 ```
 
-That `for` loop is character-for-character the tier-2 `sysAsync` closure with the source of the
-bytes changed, which is the point: the kernel side of the protocol is one handler of
+That `for` loop is character-for-character the in-kernel-worker `sysAsync` closure with the source
+of the bytes changed, which is the point: the kernel side of the protocol is one handler of
 straight-line code, and both halves live in `web/proc.js` so that two files cannot describe one
 wire.
 
@@ -536,7 +539,7 @@ sized 8 so a completing server never parks on the send.
 
 ### 7.5 `^C`, and the kill
 
-A tier-2 stage is a `Task<i32>` like any other, so `^C` reaches it through exactly the awaitables
+A stage is a `Task<i32>` like any other, so `^C` reaches it through exactly the awaitables
 it reaches any other awaiting task through. The destructor is the whole kill path:
 
 ```
@@ -552,13 +555,13 @@ it reaches any other awaiting task through. The destructor is the whole kill pat
               │
               ├─ proc_kill(pid) ── host_svc(ProcKill, 0, pid, null) ──►  host
               │                                                            │
-              │    tier 2:  procs.delete(pid) — a queued step will  ───────┤
-              │             run, find the pid gone, and fail itself        │
+              │    own worker:  link.terminate(), and the part that ───────┤
+              │                 is easy to miss: the in-flight step        │
+              │                 must be FAILED by whoever killed it        │
+              │                 — r.fail(NOTFOUND); done() → wake(tok)     │
               │                                                            │
-              │    tier 3:  link.terminate(), and the part that is  ───────┘
-              │             easy to miss: the in-flight step must be
-              │             FAILED by whoever killed it —
-              │             r.fail(NOTFOUND); done() → wake(tok)
+              │    kernel's:    procs.delete(pid) — a queued step   ───────┘
+              │                 will run, find the pid gone, and fail itself
               │
               └─ proc_remove; heap_delete(p) → ~Proc:
                    ~FullScreen  (the screen comes back)
@@ -569,8 +572,8 @@ it reaches any other awaiting task through. The destructor is the whole kill pat
 
 That last line is not tidiness. An abandoned `HostReq` is reaped by `wake()` on its token and by
 nothing else, so a request whose worker no longer exists leaks the record and its payload for the
-life of the page unless the killer answers it. At tier 2 it happens for free, because a queued
-step still runs and finds the pid gone.
+life of the page unless the killer answers it. In the kernel's worker it happens for free, because
+a queued step still runs and finds the pid gone.
 
 `proc_kill` is told, not asked: no record, no reply, the pid in the `req` position and a null
 externref, because it is issued from a destructor where there is nothing left to await with.
@@ -595,7 +598,7 @@ status and a message.
 "Suspended with nothing pending" is unrepresentable in a correct runtime — a step that reports
 `Suspended` must have parked on something — so it is reported rather than looped on.
 
-At tier 3 the instance is created inside its worker, so a binary that will not instantiate reads
+An instance in a worker of its own is created there, so a binary that will not instantiate reads
 as 132 rather than 126. The module is still compiled in the kernel worker, so a malformed one is
 still refused before anything runs; only the distinction is lost, and it was not worth an ABI
 change to keep.
@@ -946,9 +949,8 @@ rather than as a test:
   not exported; it is imported, which is what makes the cap the kernel's.
 - **Exactly one `braam` section**, with the right magic and `abi`, `max_pages` of 256, and the
   tier the build asked for.
-- **The same lists at either tier.** `spin` and `tail` are tier 3 and look identical to the other
-  twenty-nine, which is what lets `exec` pick a tier without userland — or the program —
-  noticing.
+- **The same lists wherever a process runs.** Every binary looks identical, which is what lets
+  `exec` decide where to put one without userland — or the program — noticing.
 
 ---
 
@@ -1017,19 +1019,9 @@ running system without rebuilding it — [Programming_Manual.md](Programming_Man
 `-Wl,--max-memory=16777216` would also work and would be the *binary's* number; this way a binary
 cannot ask for more by being compiled differently.
 
-### Asking for tier 3
-
-One more line, which the recipe turns into `TIER 3`:
-
-```cmake
-set(BRAAM_BIN_TIER_spin 3)
-```
-
-What a program has to be to earn one is that it may not come back. A tier-3 syscall costs two
-`postMessage` hops and two copies — order 0.1 ms, against a direct call and one copy at tier 2 —
-and a syscall-bound program pays that per `SYS_CHUNK`. So the tier is a claim a binary makes
-rather than a default, and a binary that asks for it still runs at tier 2 where the host cannot
-make a worker.
+A worker of its own is what the recipe gives a program, and nothing in `src/cmd/` asks for
+anything else. A program that cannot afford two `postMessage` hops a syscall may give it up —
+[Programming_Manual.md](Programming_Manual.md) §7 has that, and what it costs.
 
 ---
 
@@ -1038,7 +1030,7 @@ make a worker.
 The honest closing. Each of these is absent on purpose, with the argument recorded in
 `Release_Notes.md` or `Milestones.md`; `CLAUDE.md`'s "Known gaps" is the current list.
 
-- **No CPU metering.** Tier 3 kills a runaway program; nothing bounds one. Fuel injection is the
+- **No CPU metering.** A runaway program is killed; nothing bounds one. Fuel injection is the
   only way to bound rather than end, and it is unbuilt.
 - **No namespace isolation.** A process has a working directory of its own, but no *root* of its
   own: once a path is absolute, `open` resolves it with the kernel's full authority. Fixing that
@@ -1053,5 +1045,5 @@ The honest closing. Each of these is absent on purpose, with the argument record
 - **Every asynchronous syscall parks.** `await_ready()` is false unconditionally; there is no
   fast path for an answer the kernel already has.
 - **One process at a time may hold the screen.** `Pane` is a primitive, not a multiplexer.
-- **Two tier-3 fidelity losses**: a binary that will not instantiate reads as a crash, and
-  `Sys::Now` is relative.
+- **Two fidelity losses from the worker**: a binary that will not instantiate reads as a crash,
+  and `Sys::Now` is relative.

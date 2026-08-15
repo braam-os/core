@@ -99,9 +99,9 @@ the build directory and configure again.
 `braam_add_program(NAME <n> SOURCES <...> [TIER 3|2] [LIBS <...>])` is the same function
 `src/cmd/` builds the system's own thirty-two programs with. It links `braam::proc` and
 `braam::flags`, links with `--import-memory` so the memory cap is the kernel's, and runs
-`stamp.py` over the result. `LIBS` names anything else the program is made of; `TIER` is
-§7 below. The CMake target it defines is `bin_<name>` — the file is `<name>.wasm`, and the
-prefix is there because a program may be called `test` or `install`.
+`stamp.py` over the result. `LIBS` names anything else the program is made of; `TIER` is §7
+below, and you will not need it. The CMake target it defines is `bin_<name>` — the file is
+`<name>.wasm`, and the prefix is there because a program may be called `test` or `install`.
 
 ---
 
@@ -279,28 +279,30 @@ a trap rather than a warning:
 
 ---
 
-## 7. The tiers
+## 7. The worker
 
-A program runs in an instance of its own either way — address space, capabilities and
-descriptors are isolated at both tiers. Tier 3 puts it in a *worker* of its own, which buys one
-thing: `worker.terminate()`, a kill that does not need the program's cooperation. **It is what
-`braam_add_program` gives a program**, and what every program in `/bin` runs at — `/bin/sh`
-included, since a repaint became one syscall and a keystroke two.
+**Your program runs in a Web Worker of its own**, and `braam_add_program` arranges that with
+nothing asked of you. It is what every program in `/bin` gets, `/bin/sh` included. What it buys
+is `worker.terminate()`: a kill that does not need the program's cooperation, so a bug that loops
+for ever costs a command rather than the session.
 
 The cost is that every syscall becomes two `postMessage` hops rather than a call — 34–45 µs
 measured, paid per `SYS_CHUNK` — so a program that reads a large file pays it per 512 bytes, and
-one being typed into pays it per round trip its editor makes. A program in that position may ask
-for tier 2:
+one being typed into pays it per round trip its editor makes. A program in that position may give
+the worker up and run in the kernel's instead:
 
 ```cmake
 braam_add_program(NAME repl SOURCES repl.cpp TIER 2)
 ```
 
-What it gives up is the kill: a tier-2 program that stops answering hangs the kernel's worker,
-so ask for it only where a runaway is not a possibility a user has to live with. Nothing in the
-system asks for it today — the shell was the last, and cutting the round trips it made was the
-cheaper answer than weakening its isolation. A tier-3 binary still runs at tier 2 where the host
-cannot make a worker, with no change to the program.
+It is still a process — its own instance, its own address space, capabilities and descriptors,
+and the same memory cap. What it gives up is only the kill: such a program that stops answering
+hangs the kernel's worker, so ask for it only where a runaway is not a possibility a user has to
+live with. Nothing in the system asks for it today; the shell was the last, and cutting the round
+trips it made was the cheaper answer than weakening its isolation.
+
+You do not have to handle the case where the host has no workers to give. The same binary runs in
+the kernel's worker there, with no change to the program and nothing to detect.
 
 ---
 
