@@ -79,12 +79,22 @@ braam_add_program(NAME hello SOURCES hello.cpp)
 ```
 
 ```
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=<prefix>/lib/cmake/braam/wasm32-unknown-unknown.cmake
+cmake -B build --toolchain <prefix>/lib/cmake/braam/wasm32-unknown-unknown.cmake
 cmake --build build
 ```
 
-The toolchain file points `find_package` at the SDK it was taken from, so nothing else has
-to be spelled out. `build/hello.wasm` is the program, about 6 KB.
+`build/hello.wasm` is the program, about 6 KB.
+
+**The toolchain file is the one thing you have to name, and only on that first command.** It
+is what makes the compiler a wasm32 one, and it points `find_package` at the SDK it was taken
+from, so nothing else has to be spelled out — not the include path, not the libraries, not
+`stamp.py`. `--toolchain` is CMake's shorthand for `-DCMAKE_TOOLCHAIN_FILE=`.
+
+CMake chooses the compiler when a project is first configured, so a build directory
+configured *without* it holds a host compiler and cannot be repaired by adding the flag: you
+get `sizeof(usize) == 4, "wasm32"` and `unknown type name '__externref_t'` from the headers,
+or, since `find_package(braam)` refuses a non-wasm32 compiler, a message saying so. Delete
+the build directory and configure again.
 
 `braam_add_program(NAME <n> SOURCES <...> [TIER 2|3] [LIBS <...>])` is the same function
 `src/cmd/` builds the system's own thirty-two programs with. It links `braam::proc` and

@@ -2,8 +2,13 @@
 
 Build it against an installed SDK, with the toolchain file the SDK ships:
 
-    cmake -B build -DCMAKE_TOOLCHAIN_FILE=<prefix>/lib/cmake/braam/wasm32-unknown-unknown.cmake
+    cmake -B build --toolchain <prefix>/lib/cmake/braam/wasm32-unknown-unknown.cmake
     cmake --build build
+
+The toolchain is what makes the compiler a wasm32 one, and CMake picks the
+compiler when the project is first configured — so it must be on that first
+command. A build directory configured without it cannot be repaired by adding
+it; delete the directory and configure again.
 
 `build/hello.wasm` is the program: a wasm module importing `kernel.sys`,
 `kernel.sys_async` and `env.memory`, exporting `_start`, `_resume`, `_alloc` and

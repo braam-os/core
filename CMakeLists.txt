@@ -200,6 +200,12 @@ install(PROGRAMS tools/stamp.py DESTINATION ${BRAAM_INSTALL_LIBEXECDIR})
 install(DIRECTORY examples/hello DESTINATION ${BRAAM_INSTALL_EXAMPLESDIR})
 install(FILES doc/Programming_Manual.md LICENSE DESTINATION ${BRAAM_INSTALL_DOCDIR})
 
+# Last, and said where it is read: the toolchain file is the one thing a
+# consumer has to name, and only on the first configure.
+install(CODE "message(STATUS \"Braam SDK installed. Build a program with:\")")
+install(CODE "message(STATUS \"  cmake -B build --toolchain \
+\${CMAKE_INSTALL_PREFIX}/${BRAAM_INSTALL_CMAKEDIR}/wasm32-unknown-unknown.cmake\")")
+
 # Two archives, each under one versioned directory: the site, and the SDK. Not
 # in ALL — an ordinary build should not repack them. The SDK is staged by
 # installing into build/sdk, so the zip and `make install` cannot disagree; like

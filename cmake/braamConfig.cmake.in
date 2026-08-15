@@ -3,6 +3,19 @@
 # The Braam SDK. Paths are relative to this file, so an unpacked
 # braam-sdk-<version>.zip works with nothing installed.
 
+# The toolchain file is what makes the compiler a wasm32 one, and it must be
+# named before project() probes it — so a build tree configured without it
+# cannot be repaired, only deleted.
+set(BRAAM_TOOLCHAIN "${CMAKE_CURRENT_LIST_DIR}/wasm32-unknown-unknown.cmake")
+if(NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "wasm32")
+    message(FATAL_ERROR
+        "A Braam program builds only for freestanding wasm32, and this build tree is "
+        "configured for ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR} with "
+        "${CMAKE_CXX_COMPILER}.\n"
+        "Delete the build directory and configure with the SDK's toolchain file:\n"
+        "  cmake -B build --toolchain ${BRAAM_TOOLCHAIN}\n")
+endif()
+
 include(CMakeFindDependencyMacro)
 find_dependency(Python3 COMPONENTS Interpreter)
 

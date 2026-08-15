@@ -77,6 +77,24 @@ installed toolchain file sets `braam_DIR` to its own directory when `braamConfig
 beside it — which is true of the installed copy and false of the one in the source tree, so one
 file serves both.
 
+### Forgetting the toolchain file
+
+The one thing a consumer must supply is the toolchain, and it cannot be supplied late: CMake
+picks the compiler at the first `project()`, so a build tree configured without it holds the
+host's `c++` and there is no flag that repairs it. What that looked like was a page of errors
+from the headers — `sizeof(usize) == 4, "wasm32"`, then `unknown type name '__externref_t'` —
+which name the symptom and not the cause.
+
+`braamConfig.cmake` now refuses a build tree whose processor is not `wasm32`, and says which
+compiler it found, that the directory has to be deleted rather than fixed, and the exact
+`cmake -B build --toolchain <path>` to run — with the path filled in, since the config knows
+where it is. The same line is printed by `make install` at the end. Detecting it is all that is
+possible: a package config runs after `project()`, so by the time it is read the compiler has
+been chosen and the only useful thing left is a sentence.
+
+The check mirrors the guard at the top of the root `CMakeLists.txt`, which has refused the same
+mistake for the project's own build since M0.
+
 ### `stamp.py --sysabi`
 
 The stamp carries the process ABI, and `stamp.py` reads `PROC_ABI` out of `sysabi.h` rather
