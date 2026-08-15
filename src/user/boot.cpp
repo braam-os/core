@@ -6,7 +6,9 @@
 #include "fs/memfs.h"
 #include "fs/opfsfs.h"
 #include "fs/vfs.h"
+#include "io.h"
 #include "kernel/alloc.h"
+#include "kernel/fmt.h"
 #include "kernel/screen.h"
 #include "kernel/traits.h"
 #include "procfs.h"
@@ -87,6 +89,66 @@ Task<void> mount_home()
     say("braam: no OPFS — /home is in memory and will not survive a reload");
 }
 
+// The greeting, on the grid the prompt is about to appear in. A coroutine of
+// its own rather than four lines of init_task, for the reason boot_filesystem
+// is one: it holds the whole file, and init's frame is on the boot path.
+//
+// Silent when there is no motd. A boot archive without a greeting is not a
+// broken one, and the line saying so would itself be noise at every boot.
+Task<void> show_motd()
+{
+    Task<Result<String>> t = read_file(MOTD);
+    if (!t)
+        co_return;
+    Result<String> r = co_await t;
+    if (r.is_err() || r.value().empty())
+        co_return;
+
+    // Green, and back to the default afterwards: the style is sticky grid
+    // state, so what the prompt writes next would inherit it. The defaults are
+    // named here rather than saved, because nothing has changed them — this is
+    // the kernel's only use of colour, and boot is the only writer at boot.
+    //
+    // screen_write turns the file's own newlines into rows (screen.cpp), so
+    // the only thing left to arrange is that the prompt starts on a line of
+    // its own — which a file not ending in a newline would take away.
+    screen_style(COLOR_GREEN, COLOR_BLACK, 0);
+    screen_write(r.value().str());
+    if (r.value().str()[r.value().size() - 1] != '\n')
+        screen_newline();
+    screen_style(COLOR_WHITE, COLOR_BLACK, 0);
+}
+
+// Why /bin/sh would not resolve, on one line. Three different repairs hide
+// behind one Result: an archive that never had a shell, one built against
+// another kernel, and one whose bytes are damaged.
+void no_shell(Error e)
+{
+    Buf<160> line;
+    line.put("braam: ").put(SHELL).put(": ");
+    switch (e) {
+    case Error::NotFound:
+        line.put("not in the boot archive");
+        break;
+    case Error::Unsupported:
+        line.put("built for another process ABI — this kernel speaks ")
+            .put(u32(PROC_ABI))
+            .put(", so the boot archive is stale");
+        break;
+    case Error::Invalid:
+        line.put("not a program — no braam section, or a damaged image");
+        break;
+    case Error::NoMemory:
+        line.put("out of memory reading the image");
+        break;
+    default:
+        line.put(error_name(e));
+        break;
+    }
+    say(line.str());
+    say("braam: there is no prompt — reload once the boot archive is repaired");
+}
+
 } // namespace
 
 Task<void> boot_filesystem()
@@ -146,9 +208,14 @@ Task<i32> init_task()
         // Said on the grid rather than through a Stream, because there is
         // nobody left to print it: a bundle that will not give up /bin/sh is a
         // system with no prompt, and the reason has to reach the screen.
-        say("braam: /bin/sh: not found — the boot archive is broken");
+        no_shell(found.error());
         co_return 1;
     }
+
+    // Only now, with a shell that is going to run: a system with no prompt
+    // coming should show why, not a greeting above a dead terminal.
+    if (Task<void> t = show_motd())
+        co_await t;
 
     Args args{ Span<const Str>(&SHELL, 1) };
     Task<i32> t = exec_process(exe, args, stdio_console());
@@ -159,7 +226,11 @@ Task<i32> init_task()
     i32 status = co_await t;
 
     // init spawns the shell and nothing else, so there is no getty to start
-    // another. Say so rather than leave a prompt that never comes back.
-    say("braam: the shell exited — reload to start again");
+    // another. Say so rather than leave a prompt that never comes back, and
+    // carry the status: a shell that died on its first step and one the user
+    // typed `exit` at look the same from here otherwise.
+    Buf<96> line;
+    line.put("braam: the shell exited (status ").put(status).put(") — reload to start again");
+    say(line.str());
     co_return status;
 }

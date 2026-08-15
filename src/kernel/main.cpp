@@ -31,8 +31,10 @@ BRAAM_EXPORT("init") void init(u32 heap_base)
     __wasm_call_ctors();
 
     // A grid exists from the first instruction, so the kernel is never in a
-    // screenless state and the banner below has somewhere to go. The host
-    // reflows it to the measured geometry with its first resize().
+    // screenless state and the banner below has somewhere to go. The host's
+    // first resize() moves the rows to the measured geometry but does not
+    // re-wrap them (§3.5), so what wraps here stays wrapped: the banner has to
+    // fit in 80 columns, which is what keeps it terse.
     if (!screen_resize(80, 24))
         panic("braam: no screen");
 
@@ -44,7 +46,7 @@ BRAAM_EXPORT("init") void init(u32 heap_base)
         .put_hex(u32(heap_origin()))
         .put(", ")
         .put(u32(s.bytes_reserved >> 10))
-        .put(" KiB reserved, ")
+        .put(" KiB, ")
         .put(u32(s.allocs))
         .put(" allocs, up in ")
         .put(u32((host_now() - started) * 1000))

@@ -239,10 +239,15 @@ Stamped after the link rather than compiled in, because `initial_pages` must agr
 the one place that knows both. `strip()` drops any earlier section of the same name, so stamping
 twice is stamping once.
 
-`exec_meta` (`src/user/exec.cpp:1742-1771`) walks the section list and refuses a binary whose magic
-or `abi` is not the kernel's. That is what the `abi` word is for: an ABI amendment makes a stale
-binary a diagnostic rather than a wrong answer. `Tier::Retired = 1` is the in-kernel applet, kept
-reserved rather than reused for the same reason.
+`exec_meta` walks the section list and refuses a binary whose magic or `abi` is not the kernel's.
+That is what the `abi` word is for: an ABI amendment makes a stale binary a diagnostic rather than
+a wrong answer. The two refusals are **different errors**, because they call for different repairs:
+`Err(Invalid)` is a file that was never a program — no `braam` section, or bytes that are not a
+module — while `Err(Unsupported)` is a section of ours carrying somebody else's number, which is a
+stale binary and wants saying so. `exec_resolve` propagates both, so a typed command reads
+`braam: <name>: built for another process ABI` and a `/bin/sh` that will not resolve names the
+number this kernel speaks. `Tier::Retired = 1` is the in-kernel applet, kept reserved rather than
+reused for the same reason.
 
 `proc_pack` folds the three numbers the host needs into the request record's one spare word:
 

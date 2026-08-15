@@ -12,6 +12,10 @@
 // returns, the terminal is done.
 constexpr Str SHELL = "/bin/sh";
 
+// Printed on the grid before that first prompt, and absent is not an error: a
+// boot archive without a greeting is not a broken one.
+constexpr Str MOTD = "/share/motd";
+
 Task<void> boot_filesystem();
 
 Task<i32> init_task();

@@ -20,8 +20,10 @@ struct Executable {
     ProcMeta meta{};
 };
 
-// The `braam` custom section (Concept.md §4.3), or Err(Invalid) when there is
-// none to read and the file is therefore not a program.
+// The `braam` custom section (Concept.md §4.3). Err(Invalid) when there is none
+// to read and the file is therefore not a program; Err(Unsupported) when there
+// is one of ours whose `abi` is not this kernel's, which is a stale binary and
+// wants saying so.
 Result<ProcMeta> exec_meta(Str image);
 
 // /bin, then the name itself once it looks like a path. Err(NotFound) is "no

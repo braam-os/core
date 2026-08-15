@@ -408,8 +408,19 @@ Task<i32> run_line(Str line, bool interactive)
         Task<Result<u32>> t = spawn(r->pl.args(i), ChildIo{ s.in, s.out, s.err });
         Result<u32> pid     = t ? co_await t : Err(Error::NoMemory);
         if (pid.is_err()) {
-            co_await say2(SYS_STDERR, r->pl.args(i)[0],
-                          pid.error() == Error::NotFound ? "not found" : "not executable");
+            // A stale binary is its own answer: the file is there and is a
+            // program, and rebuilding is the repair. Still 126, which is what
+            // "found but would not run" means.
+            // A literal per branch, not one conditional expression: Str's
+            // length comes from __builtin_strlen, which folds only when the
+            // pointer is a constant — otherwise this is a call to strlen and
+            // there is no libc to link (Concept.md §C.3).
+            Str why("not executable");
+            if (pid.error() == Error::NotFound)
+                why = "not found";
+            else if (pid.error() == Error::Unsupported)
+                why = "built for another process ABI";
+            co_await say2(SYS_STDERR, r->pl.args(i)[0], why);
             bad = pid.error() == Error::NotFound ? 127 : 126;
             break;
         }

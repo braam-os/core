@@ -158,26 +158,32 @@ void test_sysabi()
         CHECK_EQ(r.value().max_pages, 256);
     }
 
-    // Everything that is not a braam binary is refused rather than guessed at.
+    // Everything that is not a braam binary is refused rather than guessed at,
+    // and Invalid is "this was never a program".
+    auto refused = [](Result<ProcMeta> r, Error e) { return r.is_err() && r.error() == e; };
+
     Module none;
     none.section(1, 4);
-    CHECK(exec_meta(none.str()).is_err());
+    CHECK(refused(exec_meta(none.str()), Error::Invalid));
 
     Module bad_magic;
     bad_magic.custom(PROC_SECTION, meta_body(0xdeadbeef, PROC_ABI, 2, 256).str());
-    CHECK(exec_meta(bad_magic.str()).is_err());
+    CHECK(refused(exec_meta(bad_magic.str()), Error::Invalid));
 
+    // A section of ours whose number is not ours is the one refusal that is not
+    // Invalid: the file is a program, built against another kernel, and the
+    // repair is to rebuild it (Concept.md §4.3).
     Module bad_abi;
     bad_abi.custom(PROC_SECTION, meta_body(PROC_MAGIC, PROC_ABI + 1, 2, 256).str());
-    CHECK(exec_meta(bad_abi.str()).is_err());
+    CHECK(refused(exec_meta(bad_abi.str()), Error::Unsupported));
 
     Module short_meta;
     short_meta.custom(PROC_SECTION, "\1\2\3\4");
-    CHECK(exec_meta(short_meta.str()).is_err());
+    CHECK(refused(exec_meta(short_meta.str()), Error::Invalid));
 
-    CHECK(exec_meta("").is_err());
-    CHECK(exec_meta("\0asm").is_err());
-    CHECK(exec_meta("not a module at all").is_err());
+    CHECK(refused(exec_meta(""), Error::Invalid));
+    CHECK(refused(exec_meta("\0asm"), Error::Invalid));
+    CHECK(refused(exec_meta("not a module at all"), Error::Invalid));
 
     // A section whose length runs past the end of the file is a broken file,
     // not a walk that reads past it.
@@ -185,5 +191,5 @@ void test_sysabi()
     over.bytes.push('\1');
     over.bytes.push('\x40');
     over.bytes.append("xx");
-    CHECK(exec_meta(over.str()).is_err());
+    CHECK(refused(exec_meta(over.str()), Error::Invalid));
 }

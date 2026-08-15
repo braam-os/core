@@ -94,6 +94,99 @@ suite.
 
 ---
 
+## A boot that says why there is no prompt
+
+Since the shell became a program, a boot archive that will not give up a runnable `/bin/sh` leaves
+a terminal with a version banner and nothing under it. init said one line for it:
+
+```
+braam: /bin/sh: not found — the boot archive is broken
+```
+
+which was printed for three unrelated causes and was a lie for two of them. `exec_resolve` had the
+answer in a `Result` init threw away.
+
+### The error had to be widened before the message could be
+
+`exec_meta` refused a binary with `Err(Invalid)` whether it had no `braam` section, was not a wasm
+module at all, or was one of ours built against a different kernel. Concept.md §4.3 has promised
+since M8 that the `abi` word makes *"a stale binary a diagnostic rather than a wrong answer"* — but
+the wrong answer and the stale binary were the same value, so the diagnostic could not be written
+however carefully init phrased it.
+
+So the magic check keeps `Invalid` and the `abi` check becomes `Err(Unsupported)`. That is the
+whole mechanism; everything else is rendering. It was tempting instead to have `exec_meta` hand
+back the number it found so the message could name both, but the value it returns is the metadata
+and there is no metadata to return — a section with a foreign `abi` is not a `ProcMeta` this kernel
+can read. Naming the kernel's own number is enough to place the fault: a reader who sees "this
+kernel speaks 4" knows to look at what built the archive.
+
+The shell gets the same distinction for free, since `Sys::Spawn` resolves through the same
+function. A stale archive breaks every typed command, not just the boot, and `braam: echo: built
+for another process ABI` is a better first thing to see than `not executable`. The exit code stays
+126: found, and would not run.
+
+One trap on the way. The natural way to write that is
+
+```cpp
+Str why = e == Error::NotFound ? "not found" : e == Error::Unsupported ? "..." : "...";
+```
+
+and it does not link. `Str`'s length comes from `__builtin_strlen`, which folds only when the
+pointer is a constant; a two-way conditional clang still sees through, a three-way one it does not,
+and the result is a call to `strlen` with no libc to satisfy it. A literal per branch, and the fold
+comes back. This is `--allow-undefined` being absent doing its job (§C.3): the alternative was a
+runtime trap in the diagnostic path, which is the one path nobody exercises.
+
+### The greeting
+
+`bundle/share/motd` had shipped in the archive since there was an archive and nothing had ever
+printed it — only `run.mjs` read it, as a convenient read-only file. init prints it now, in green,
+restoring the default style afterwards so the prompt beneath it is not green too. It is the
+kernel's first use of colour; `screen_style` had no caller at all.
+
+It is printed **after** the shell resolves rather than after the mounts, which is the whole of the
+ordering decision: a system that is not going to reach a prompt should show why, not a welcome
+above a dead terminal. The two are never on screen together.
+
+Absent is not an error and says nothing. A boot archive without a greeting is not a broken one, and
+a line reporting its absence would be noise at every boot of one.
+
+`show_motd` is a coroutine of its own rather than four lines inside `init_task`, for the reason
+`boot_filesystem` is one: it holds the whole file, and a frame past 512 bytes costs a whole 64 KiB
+span (§8.2). That is also why `read_file` moved out of `exec.cpp`'s anonymous namespace into
+`src/user/io.{h,cpp}` — `boot.cpp` could not reach it where it was, `io.h` already holds `FileIo`
+and `file_open_read`, and the process-side twin is declared in exactly that place in
+`src/proc/io.h`.
+
+### The farewell carries the status
+
+`braam: the shell exited (status 7) — reload to start again`. A shell the user typed `exit` at and
+one that died on its first step looked identical from init, and the second is the interesting case:
+`exec_process` prints `will not instantiate` or `crashed` through `io.err` — which *is* the grid
+here — and the status line under it now says which.
+
+### The banner fits on one line again
+
+It was 82 cells and the grid at boot is 80 columns, so it wrapped — and the comment above
+`screen_resize(80, 24)` claimed the host's first `resize()` would reflow it, which is not what
+resize does: it moves rows and drops from the top, and never re-wraps a logical line (§3.5's
+unkept promise to M7). A banner that wraps at boot therefore stays wrapped in a terminal of any
+width. Dropping the word `reserved` takes it to 73, with enough headroom for a four-digit revision
+count and a slower machine's boot time, and the comment now says what the constraint is so the
+next line added to it is measured rather than assumed.
+
+### What is not covered
+
+The three broken-archive paths have no smoke case. Testing them means booting a fresh instance
+against a patched `bundle.bin`, which `run.mjs` has the machinery for — `store.reset()` and a new
+instance, as the no-OPFS case does — but a corruption is written by hand against the BBND layout
+and would be a second, weaker copy of what `test_sysabi` already asserts about `exec_meta`. What
+the smoke test does check is the greeting: that it reaches the grid, that it is green, and that the
+prompt below it is not.
+
+---
+
 ## The shell is a program
 
 `/bin/sh` is a binary in `/bin` that init runs. `src/user/shell.cpp`, `edit.cpp`, `job.cpp` and

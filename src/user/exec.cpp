@@ -698,44 +698,6 @@ Task<i32> spawn_run(SpawnRef s)
     co_return status;
 }
 
-Task<Result<String>> read_file(Str path)
-{
-    Task<Result<i32>> t = vfs_open(path, O_READ);
-    if (!t)
-        co_return Err(Error::NoMemory);
-    i32 fd = CO_TRY(co_await t);
-
-    // The staging block is on the heap rather than in this frame: FS_BLOCK is
-    // the allocator's top size class, and a frame that big costs a whole span
-    // (Concept.md §8.2).
-    u8 *block = static_cast<u8 *>(heap_alloc(FS_BLOCK));
-    String out;
-    Result<void> bad = {};
-    if (!block)
-        bad = Err(Error::NoMemory);
-
-    for (u64 off = 0; block;) {
-        Result<usize> r = vfs_read(fd, off, block, FS_BLOCK);
-        if (r.is_err()) {
-            bad = Err(r.error());
-            break;
-        }
-        if (r.value() == 0)
-            break;
-        if (!out.append(Str(reinterpret_cast<const char *>(block), r.value()))) {
-            bad = Err(Error::NoMemory);
-            break;
-        }
-        off += r.value();
-    }
-
-    heap_free(block);
-    vfs_close(fd);
-    if (bad.is_err())
-        co_return Err(bad.error());
-    co_return move(out);
-}
-
 bool read_leb(const u8 *p, usize n, usize &at, u32 &out)
 {
     out       = 0;
@@ -1760,8 +1722,13 @@ Result<ProcMeta> exec_meta(Str image)
                 const u8 *q = p + at + name_len;
                 ProcMeta m{ sys_get_u32(q),      sys_get_u32(q + 4),  sys_get_u32(q + 8),
                             sys_get_u32(q + 12), sys_get_u32(q + 16), sys_get_u32(q + 20) };
-                if (m.magic != PROC_MAGIC || m.abi != PROC_ABI)
+                if (m.magic != PROC_MAGIC)
                     return Err(Error::Invalid);
+                // Ours, but built against another kernel. Its own error, not
+                // Invalid: §4.3's stale-binary diagnostic is only a diagnostic
+                // if it is distinguishable from a file that was never a program.
+                if (m.abi != PROC_ABI)
+                    return Err(Error::Unsupported);
                 return m;
             }
         }

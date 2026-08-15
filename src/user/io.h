@@ -59,6 +59,11 @@ Source file_source(FileIo &f);
 // FileIo alive for as long as it reads from the Source.
 Task<Result<void>> file_open_read(Str path, FileIo &out);
 
+// The whole of a file, for the two callers that want the bytes rather than a
+// stream: the image `exec` is about to run, and the motd init prints. The
+// process-side twin is read_file in src/proc/io.h.
+Task<Result<String>> read_file(Str path);
+
 // Writes all of `s`, retrying the stray wake that leaves a write unfinished.
 Task<Result<void>> write_all(Stream out, Str s);
 

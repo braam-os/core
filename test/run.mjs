@@ -247,6 +247,18 @@ if (mode === "--kernel") {
     if (presented.length !== 1 || presented[0].w !== 60 || presented[0].h !== 16)
         fail(`the resize did not repaint the whole screen: ${JSON.stringify(presented)}`);
 
+    // init prints /share/motd before the shell, in green, and puts the style
+    // back so the prompt under it is not green too. COLOR_GREEN is 2 and
+    // COLOR_WHITE 7, from the enum in src/kernel/screen.h.
+    s = descriptor(addr);
+    const motd_y = rows(s).findIndex((line) => line.startsWith("braam — a small operating system"));
+    if (motd_y < 0)
+        fail(`the motd did not print at boot: ${JSON.stringify(rows(s))}`);
+    if (cell(s, 0, motd_y).fg !== 2)
+        fail(`the motd is colour ${cell(s, 0, motd_y).fg}, expected green`);
+    if (cell(s, 0, s.cursor_y).fg !== 7)
+        fail(`the prompt inherited the motd's colour: ${cell(s, 0, s.cursor_y).fg}`);
+
     const type = (text) => {
         for (const ch of text)
             instance.exports.key(ch.codePointAt(0), 0);
