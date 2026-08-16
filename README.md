@@ -173,11 +173,10 @@ picker and run `/mnt/import/hello.wasm`, or `curl` it into `/home` and run it th
 ## Documentation
 
 [doc/Concept.md](doc/Concept.md) is the specification — the architecture and the reasoning
-behind each decision. Read it first. [doc/Milestones.md](doc/Milestones.md) is the plan that
-was followed: M0–M9, with acceptance criteria and a note on how each milestone departed from
-its plan. [doc/Release_Notes.md](doc/Release_Notes.md) explains, per milestone, why the code
-that exists looks the way it does — comments in the source say *what*, and that file says
-*why*. [doc/System_Calls.md](doc/System_Calls.md) is the one walkthrough: how a user process
+behind each decision. Read it first. [doc/Release_Notes.md](doc/Release_Notes.md) explains, per
+milestone, why the code that exists looks the way it does, and holds the plan that was followed:
+M0–M9 and the acceptance criteria they were taken against — comments in the source say *what*,
+and that file says *why*. [doc/System_Calls.md](doc/System_Calls.md) is the one walkthrough: how a user process
 talks to the kernel, from the principles down to the wire, with sequence diagrams of the calls
 that actually happen and the whole syscall table in one place. [doc/Programming_Manual.md](doc/Programming_Manual.md) is for
 writing a program of your own, outside this repository.

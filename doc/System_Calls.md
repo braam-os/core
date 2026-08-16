@@ -1077,7 +1077,7 @@ anything else. A program that cannot afford two `postMessage` hops a syscall may
 ## 13. What this does not buy
 
 The honest closing. Each of these is absent on purpose, with the argument recorded in
-`Release_Notes.md` or `Milestones.md`; `CLAUDE.md`'s "Known gaps" is the current list.
+`Release_Notes.md`; `CLAUDE.md`'s "Known gaps" is the current list.
 
 - **No CPU metering.** A runaway program is killed; nothing bounds one. Fuel injection is the
   only way to bound rather than end, and it is unbuilt.

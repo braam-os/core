@@ -5,9 +5,9 @@ written from scratch in freestanding C++20 and compiled to WebAssembly.
 
 This document is the project's single design reference. It states the goal, sets out the
 architecture, and records the decisions we have already made and why. It changes when a
-decision changes, and then in the same commit as the code. The working plan —
-milestones M0–M9 with their acceptance criteria — is in [Milestones.md](Milestones.md), and
-the reasoning behind what landed is in [Release_Notes.md](Release_Notes.md).
+decision changes, and then in the same commit as the code. The plan that was carried out —
+milestones M0–M9 and the criteria they were accepted against — and the reasoning behind what
+landed are both in [Release_Notes.md](Release_Notes.md).
 [System_Calls.md](System_Calls.md) is derived from this one: it walks §4.3's kernel↔process
 mechanism end to end, with the operation table in full. Read it to understand the mechanism;
 amend this document to change it.
@@ -1058,10 +1058,11 @@ the keystroke that produces the event.
 
 ## 6. Milestones
 
-Moved to **[Milestones.md](Milestones.md)**: M0–M9, each with one objective and one acceptance
-criterion, checked off as work lands. They live apart from this document because they change on
-ordinary work commits and the design does not. This section keeps its number, since the
-numbering here is cited from source comments.
+M0–M9 are done, and their objectives and acceptance criteria are in
+**[Release_Notes.md](Release_Notes.md)**, above the ten notes that say why each milestone landed
+the way it did. They were never in this document because they changed on ordinary work commits
+and the design does not. This section keeps its number, since the numbering here is cited from
+source comments.
 
 ---
 
@@ -1076,8 +1077,7 @@ runtime — what it shares with the kernel is four translation units and a handf
 
 ```
 doc/Concept.md          this document
-doc/Milestones.md       the plan: M0–M9 and their acceptance criteria
-doc/Release_Notes.md    reasoning behind the code, milestone by milestone
+doc/Release_Notes.md    reasoning behind the code, and M0–M9's acceptance criteria
 doc/System_Calls.md     the kernel↔process mechanism, end to end (§4.3)
 Makefile                wrapper: all, run, serve, release, clean
 CMakeLists.txt          the build

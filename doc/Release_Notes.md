@@ -321,7 +321,7 @@ zip whenever `bench` had been run in the same tree.
 ### What it costs elsewhere
 
 M8's acceptance criterion "tier selection comes from binary metadata" is retired rather than
-broken: there is no selection. doc/Milestones.md keeps it as the record of what M8 built.
+broken: there is no selection. The criteria list below keeps it as the record of what M8 built.
 
 The kernel grew by 1,297 bytes — 142,473 to 143,770, against a 256 KiB budget — which is the
 retry coroutine costing more than the tier checks and the `Tier` enum saved. `bundle.bin` lost
@@ -1997,8 +1997,8 @@ author needs before writing a loop, and it was previously only visible by notici
 
 **The consistency pass.** Reading the whole mechanism against the tree turned up documentation
 that had drifted, and it is worth recording what kind, because it was not the kind expected.
-Little of it was the applet retirement — that change carried its own notes, and Milestones.md
-already has a preamble telling a reader how to read every milestone below it. The stale things
+Little of it was the applet retirement — that change carried its own notes, and the milestone
+record already said how to read every milestone under it. The stale things
 were older and quieter:
 
 - **Concept.md §3.4 listed a `host_random` import that was never built.** Six imports is a number
@@ -2220,6 +2220,80 @@ reads it.
 
 `LICENSE` travels with the site. The zip is a copy of the software in the sense the MIT text
 means, and the notice is 1 KB.
+
+## The milestones, and the criteria they were accepted against
+
+The ten notes that follow are the *why* of M0–M9, one per milestone, written as each landed.
+`doc/Milestones.md` was the plan they were written against — one objective and a handful of
+acceptance criteria apiece, with a short note on how each milestone departed from its plan. Every
+one of those departure notes is stated at length below, and the arithmetic it carried (the size
+trajectory, the program counts) is in the notes too, so what only it held was **the objectives and
+the criteria**. Those are not history: a criterion is a standing behavioural contract, and a change
+that breaks one is a regression however green the three CTest cases are. So they are here, and the
+plan is deleted.
+
+Twenty-two criteria, M0 to M9:
+
+- **M0 — Nucleus.** Freestanding build, the coroutine shim, the allocator, `Str`/`Vec`, `host_log`,
+  and a size budget from the first commit.
+  - `make` produces a wasm binary with the Appendix C command line.
+  - A static page loads a 4 KB wasm and logs a line to the console.
+  - Size budget recorded (32 KiB) and enforced by CI.
+- **M1 — Scheduler.** `Task<T>`, ready queue, wake tokens, `tick()`, `sleep_ms`, with `CancelToken`
+  in every awaitable from here on.
+  - Two coroutines interleave sleeps in the correct order.
+  - Cancelling a sleeping task unwinds it and runs its destructors.
+- **M2 — Screen and keys.** Cell grid, canvas renderer, damage rectangles, `Channel<Key>`,
+  `OffscreenCanvas` transfer.
+  - Typed characters appear on screen and the cursor moves.
+  - Window resize reflows and `resize(cols, rows)` reaches the kernel.
+- **M3 — Userland shell.** `LineEditor` with history and editing, tokeniser, program registry,
+  argv, exit codes.
+  - `echo hello` prints, `help` lists the programs.
+  - Up-arrow recalls history; a nonzero exit code is observable.
+- **M4 — Streams.** Stdio as channels, pipes, redirection, cancellation on `^C`.
+  - `ls | grep foo` works.
+  - `^C` interrupts a running pipeline and returns a prompt.
+- **M5 — Filesystem.** Mount table, `MemFs`, `BundleFs` from a fetched archive, `OpfsFs` with the
+  open-file table.
+  - Write a file, reload the page, the file is still there.
+  - `df` reports quota, usage, and persistent versus best-effort mode.
+  - With OPFS unavailable, the system boots on `MemFs` and says so.
+- **M6 — Host services.** `fetch`, timers, WebSocket, clipboard, the `externref` table and `JsRef`.
+  - A `curl`-ish command fetches a URL and prints the body.
+  - A chat client works over a WebSocket.
+  - `/mnt/import` and `export` move files in and out.
+- **M7 — Depth.** A layout layer over the cell grid, job control, `/proc`-style introspection, an
+  embedding API for host pages.
+  - A full-screen editor opens, edits, and saves a file.
+  - Jobs can be backgrounded and listed.
+- **M8 — Isolated processes.** The §4.3 ABI, a `WebAssembly.Instance` per process, per-pid import
+  closures, memory caps, a module cache, cross-boundary copies.
+  - A program runs as its own instance with a 16 MB cap, and `memory.grow` fails past it.
+  - A process cannot issue a syscall on behalf of another pid.
+  - ~~Tier selection comes from binary metadata; userland behaviour is unchanged.~~ **Retired**,
+    not broken: there is no selection left to come from anywhere. See "Tier 2 is deleted".
+- **M9 — Liveness isolation.** A worker per process, `worker.terminate()` as `SIGKILL`, module
+  `postMessage`.
+  - `while(1){}` in an untrusted program is killable without reloading the page.
+  - The shell stays responsive while such a program runs.
+
+**Two changes since reach back through the whole list, and neither cost a criterion.** The kernel
+applet and the program registry are gone, so where a criterion says a program was registered that
+program is a binary in `/bin` and `help` and `ls` read a filesystem — the criteria are about what
+the system *does*, not where the code lives, and the ones that named `echo` and `sleep` as applets
+are now met by binaries and checked by `test/run.mjs` rather than by the in-wasm suite. And the
+tiers are gone, which retires exactly one criterion, M8's third, as above.
+
+**Where they are checked.** M0's budget is the `size` case and M1's pair is checked twice — in
+`tests.wasm` against a fake clock and in `smoke` against the shipping kernel. M5's persistence is
+mechanical too: `smoke` writes a file, throws the instance away, builds a new one against the same
+JS-side store and reads it back. Most of the rest are shell-level and much of what is scriptable is
+driven by `test/run.mjs`; what is left — a resize reflowing, a chat between two tabs, a picker
+moving a file in — is checked by hand at the prompt, which is what a change touching one of them
+still owes.
+
+---
 
 ## M9 — Liveness isolation
 
@@ -3091,7 +3165,7 @@ channel, and `shell.cpp`'s, which named an argv-lifetime invariant that no longe
 
 ### A pipe carries owning chunks, not `Bytes`
 
-Milestones.md says `Channel<Bytes>` and `Bytes` already exists — `using Bytes = Span<const u8>` —
+M4's objective says `Channel<Bytes>` and `Bytes` already exists — `using Bytes = Span<const u8>` —
 so the obvious reading is that a pipe moves `Bytes`. It cannot. A `Span` is a pointer and a
 length, and the whole point of a pipe is that the reader runs *later*: by the time it takes the
 value, the writer's buffer is a dead coroutine frame. The channel has to own what it carries, so
@@ -3473,7 +3547,7 @@ Typed at the prompt, ^C writes `^C`, abandons the buffer and returns `LineEnd::I
 shell prints a fresh prompt carrying 130. Typed while a program runs, it sits in the keyboard
 ring and is consumed as typeahead by the next `read_line`.
 
-Interrupting a *running* program is Milestones.md's M4 criterion and stays there. It needs the
+Interrupting a *running* program is M4's criterion and stays there. It needs the
 shell to watch the keyboard while a child runs — a second receiver on a single-receiver channel,
 or a `select`-shaped combinator — and both are streams work. What M3 owes is that the mechanism
 underneath is already in place, which is what the cancellation cases in `test_edit` and

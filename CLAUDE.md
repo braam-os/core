@@ -10,7 +10,7 @@ them live in `src/cmd/` with the shell's own parts in `src/sh/`. There is no in-
 any kind and no program registry. `kernel.wasm` is about 146 KB against a 256 KiB budget and
 `bundle.bin` is 491 KB; the wasm ABI is still six imports and nine exports, and the three CTest
 cases pass. Work here is change to a working system, so the bar is that nothing above regresses,
-and Milestones.md is history rather than a to-do list.
+and the milestone plan is history rather than a to-do list.
 
 What each milestone left behind. The layout still reflects it except where the shell is
 concerned — `src/user/parse.cpp`, `edit.cpp`, `job.cpp` and `builtin/` below are all in `src/sh/`
@@ -169,15 +169,13 @@ substantive — it carries decisions whose rationale is not recoverable from the
 stable: amend it only when a design decision changes, and then in the same commit that changes
 the code. Its section numbering is cited from source comments, so do not renumber.
 
-**[doc/Milestones.md](doc/Milestones.md) is the plan that was carried out** — M0–M9, every box
-ticked, each with a note on how the milestone departed from its plan. It is now a record: read
-it to find out when and why a mechanism arrived, and do not add work items to it. A milestone's
-acceptance criteria are still live constraints, though, and most are checked by the test suite.
-
 **[doc/Release_Notes.md](doc/Release_Notes.md) records why the code is the way it is**, per
 milestone. Comments in the source stay terse and say *what*; the *why* goes here — and it is
 still the place a substantive change is explained, appended under a new heading rather than by
-rewriting a milestone's section. Read the M0 section before touching the allocator, the
+rewriting a milestone's section. It also holds **the plan that was carried out**: M0–M9's
+objectives and the twenty-two acceptance criteria they were taken against, listed just above the
+milestone notes. That list is a record — do not add work items to it — but the criteria
+themselves are live constraints. Read the M0 section before touching the allocator, the
 coroutine shim, or the build flags — each departs from an obvious approach for a reason stated
 there and nowhere else.
 
@@ -298,8 +296,8 @@ surface of `kernel.wasm` and of every binary, and that the kernel boots; `unit` 
 `tests.wasm` under Node; and `size` holds `kernel.wasm` and `bundle.bin` to
 `tools/size_budget.txt` — a program is measured but not bounded, so there is no per-binary
 budget and adding one back is a design change. New core code gets a case
-in [test/unit/](test/unit/). Behind those, the acceptance criteria in Milestones.md are the
-standing behavioural contract — a change that breaks one is a regression however green the
+in [test/unit/](test/unit/). Behind those, M0–M9's acceptance criteria — listed in
+Release_Notes.md above the milestone notes — are the standing behavioural contract — a change that breaks one is a regression however green the
 three cases are, so re-check the criteria a change touches by hand at the prompt.
 
 Both wasm modules import the storage and service ABIs, so both are driven with the in-memory
@@ -536,7 +534,7 @@ quietly.
 
 ## Known gaps
 
-These are absent on purpose, each for a reason recorded in Milestones.md or Release_Notes.md.
+These are absent on purpose, each for a reason recorded in Release_Notes.md.
 None is a bug, and adding one is a design change to be argued in Concept.md first:
 
 - **No `bg` and no `^Z`.** Stopping a running coroutine at an arbitrary point is the
