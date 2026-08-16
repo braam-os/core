@@ -70,12 +70,13 @@ rather than taking the keyboard, so `^C` always gets through.
 one: each of the thirty-two commands in [src/cmd/](src/cmd/) is a wasm binary in an instance of
 its own — its own address space, its own capabilities, its own descriptors and a 16 MB cap — in a
 Web Worker of its own, so a runaway program is killed with `worker.terminate()` rather than asked
-to stop. Where the host cannot make a worker, the same binary runs in the kernel's worker and
-gives up only that kill; nothing else changes and userland cannot tell.
+to stop. There is no second way to run one: where the host cannot make a worker, the spawn backs
+off and asks again — 10 ms, then 20, up to a second — rather than starting the program somewhere
+weaker.
 
-The kernel↔process ABI is the same either way: two imports plus the memory the kernel caps, four
-exports, and no argument anywhere for a pid — which is the whole of "a process cannot issue a
-syscall on behalf of another". `spin` exists to be un-killable by cooperation.
+The kernel↔process ABI is two imports plus the memory the kernel caps, four exports, and no
+argument anywhere for a pid — which is the whole of "a process cannot issue a syscall on behalf
+of another". `spin` exists to be un-killable by cooperation.
 
 **The shell is one of the programs.** `/bin/sh` is a binary init runs, and what a prompt needs —
 a pipeline, a redirection, a job, a working directory, the keyboard, the cursor — it asks for

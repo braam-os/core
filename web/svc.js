@@ -316,9 +316,9 @@ export function makeSvcImport(mem, deposit, relay, reply, proc) {
             proc.spawn(r);
             return;
 
-        // A step is answered when the process gets there, which at tier 3 is a
-        // message away and may be never — a program in a loop between syscalls
-        // is killed rather than waited for.
+        // A step is answered when the process gets there, which is a message
+        // away and may be never — a program in a loop between syscalls is killed
+        // rather than waited for.
         case OP.PROC_STEP:
             await new Promise((done) => proc.step(r, done));
             return;

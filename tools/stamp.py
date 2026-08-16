@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Stamp a process binary with the metadata `exec` reads before it runs it.
 
-    stamp.py <file.wasm> --tier N --initial-pages N --max-pages N [--sysabi <h>]
+    stamp.py <file.wasm> --initial-pages N --max-pages N [--sysabi <h>]
 
-Appends a wasm custom section named "braam" holding six little-endian u32s, the
+Appends a wasm custom section named "braam" holding five little-endian u32s, the
 ProcMeta of src/kernel/sysabi.h:
 
-    magic, abi, tier, flags, initial_pages, max_pages
+    magic, abi, flags, initial_pages, max_pages
 
 A post-link step rather than a __attribute__((section(".custom_section.braam")))
 global, because the page counts have to agree with the link's --initial-memory
@@ -77,8 +77,8 @@ def strip(data: bytes) -> bytes:
     return bytes(out)
 
 
-def section(sysabi: Path, tier: int, flags: int, initial_pages: int, max_pages: int) -> bytes:
-    meta = struct.pack("<IIIIII", MAGIC, abi(sysabi), tier, flags, initial_pages, max_pages)
+def section(sysabi: Path, flags: int, initial_pages: int, max_pages: int) -> bytes:
+    meta = struct.pack("<IIIII", MAGIC, abi(sysabi), flags, initial_pages, max_pages)
     body = leb128(len(NAME)) + NAME + meta
     return b"\0" + leb128(len(body)) + body
 
@@ -86,9 +86,6 @@ def section(sysabi: Path, tier: int, flags: int, initial_pages: int, max_pages: 
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("binary", type=Path)
-    # Required rather than defaulted: nothing in the system asks for tier 2 any
-    # more, so a default would be the answer no caller wants.
-    ap.add_argument("--tier", type=int, required=True)
     ap.add_argument("--flags", type=int, default=0)
     ap.add_argument("--initial-pages", type=int, required=True)
     ap.add_argument("--max-pages", type=int, required=True)
@@ -98,7 +95,7 @@ def main(argv):
 
     data = strip(args.binary.read_bytes())
     args.binary.write_bytes(
-        data + section(args.sysabi, args.tier, args.flags, args.initial_pages, args.max_pages)
+        data + section(args.sysabi, args.flags, args.initial_pages, args.max_pages)
     )
 
 

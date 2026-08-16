@@ -1,7 +1,6 @@
-// A tier-3 process worker with no worker in it. web/procworker.js needs a
-// thread and web/proc.js does not: everything above the link is message
-// passing, so the two halves are wired back to back here and pumped by hand,
-// exactly as the driver pumps a tier-2 step.
+// A process worker with no worker in it. web/procworker.js needs a thread and
+// web/proc.js does not: everything above the link is message passing, so the
+// two halves are wired back to back here and pumped by hand.
 //
 // What that proves is the protocol — one message down, one up, the syscall
 // relay, the exit status, the pool — and what it cannot prove is preemption,
@@ -10,7 +9,7 @@
 // undelivered, which is precisely what the kernel sees of a real one, and the
 // terminate that answers it is counted.
 //
-// Since T8 the shell is on the other end of one of these links too, and a
+// The shell is on the other end of one of these links too, and a
 // permanent one: a link taken away here is a session rather than a command, and
 // a `hold` that landed on the shell's pid would stop the driver dead.
 

@@ -6,8 +6,8 @@ set(BRAAM_BIN_LIST cat chat clear curl date df echo edit export false grep head 
                    timeout touch true version watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 
-# Every one of them takes a worker of its own, the shell included, which is what
-# the recipe gives a program and what nothing here asks out of (doc/TODO.md T8).
+# Every one of them takes a worker of its own, the shell included. There is
+# nothing to ask for: it is what a program is (Concept.md §4).
 
 # A program that is more than one translation unit names the library that holds
 # the rest of it. Only the shell is.

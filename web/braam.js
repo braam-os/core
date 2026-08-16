@@ -395,7 +395,7 @@ export function mount(options = {}) {
             worker.onmessage = null;
             worker.onerror = null;
 
-            // Asked first, told after. A tier-3 process is a worker of the
+            // Asked first, told after. A process is a worker of the
             // kernel's worker, and terminating a parent is specified to take
             // its children with it — but a leaked one is a core spinning for
             // the life of the page, which is too much to leave to a spec

@@ -162,46 +162,6 @@ add_custom_target(serve
     USES_TERMINAL
     COMMENT "Serving ${CMAKE_BINARY_DIR}/web at http://localhost:8080/")
 
-# Two more boot archives for the tier measurement, doc/TODO.md T1, T5 and T8:
-# the same binaries with the tier in their `braam` section rewritten. Since T8
-# the shipped bundle.bin is every program at tier 3, so it is the far arm rather
-# than the middle one, and the twins are every program at tier 2 and everything
-# but the shell at tier 3 — which takes one re-stamp, since the staged copy is
-# already what it should be everywhere else. stamp.py strips a prior section
-# before appending, so re-stamping a staged copy is the whole of it — nothing is
-# recompiled and bundle.bin is untouched. Outside ALL, and invisible to the
-# three test cases.
-set(BRAAM_BENCH_STAGE ${CMAKE_BINARY_DIR}/bench)
-
-foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
-    list(APPEND BRAAM_BENCH_STAMP_TIER2
-        COMMAND ${Python3_EXECUTABLE} ${BRAAM_STAMP}
-                --sysabi ${BRAAM_SYSABI}
-                --initial-pages ${BRAAM_BIN_INITIAL_PAGES}
-                --max-pages ${BRAAM_BIN_MAX_PAGES}
-                --tier 2 ${BRAAM_BENCH_STAGE}/tier2/bin/${prog})
-endforeach()
-
-add_custom_target(bench
-    COMMAND ${CMAKE_COMMAND} -E rm -rf ${BRAAM_BENCH_STAGE}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${BRAAM_BUNDLE_STAGE} ${BRAAM_BENCH_STAGE}/tier2
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${BRAAM_BUNDLE_STAGE} ${BRAAM_BENCH_STAGE}/nosh
-    ${BRAAM_BENCH_STAMP_TIER2}
-    COMMAND ${Python3_EXECUTABLE} ${BRAAM_STAMP}
-            --sysabi ${BRAAM_SYSABI}
-            --initial-pages ${BRAAM_BIN_INITIAL_PAGES}
-            --max-pages ${BRAAM_BIN_MAX_PAGES}
-            --tier 2 ${BRAAM_BENCH_STAGE}/nosh/bin/sh
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
-            ${BRAAM_BENCH_STAGE}/tier2 ${CMAKE_BINARY_DIR}/web/bundle2.bin
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
-            ${BRAAM_BENCH_STAGE}/nosh ${CMAKE_BINARY_DIR}/web/bundle3nosh.bin
-    DEPENDS web
-    VERBATIM
-    COMMENT "Packing the twin archives, one either side of what ships")
-
 # The SDK — doc/Programming_Manual.md. Two libraries and no more: braam_core,
 # braam_fs, braam_svc and braam_user each carry a host import no binary may have.
 install(TARGETS braam_proc braam_ui braam_flags

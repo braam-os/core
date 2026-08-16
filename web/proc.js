@@ -1,35 +1,33 @@
-// The host's half of the process tiers (Concept.md §4), and the process-side
-// half of the tier-3 protocol beside it, so the two cannot drift.
+// The host's half of a process (Concept.md §4), and the process-side half of
+// the protocol beside it, so the two cannot drift.
 //
 // An isolated process is a second WebAssembly.Instance with a memory the kernel
 // sized, an import closure bound to its pid, and an externref table of its own
-// that it gets for free by being a separate module. Tier 2 puts that instance
-// in this worker; tier 3 puts it in a worker of its own, where terminate() is a
-// kill that does not need the process's cooperation.
+// that it gets for free by being a separate module. It lives in a worker of its
+// own, where terminate() is a kill that does not need its cooperation. There is
+// no second place to put one: a host that cannot make a worker is told so, and
+// the kernel waits rather than running the process here (§4).
 //
 // The rule everything here follows: **a process never runs while the kernel is
 // on the stack.** Its exports reach the kernel through `sys`, and re-entering
 // the kernel in the middle of a tick would run it on a heap it is halfway
-// through changing. So a tier-2 step is queued and drained later, which is what
-// `schedule` is for; a tier-3 step is a message, which is deferred by nature.
+// through changing. A step is a message, which is deferred by nature.
 // Compiling and instantiating execute no wasm, so they need no such care.
 
 import { E } from "./abi.js";
 import { Memory } from "./host.js";
 
-// src/kernel/sysabi.h's ProcStep and Tier.
+// src/kernel/sysabi.h's ProcStep.
 export const STEP = { EXITED: 0, SUSPENDED: 1, TRAPPED: 2 };
-export const TIER = { INSTANCE: 2, WORKER: 3 };
 
-// src/kernel/sysabi.h's Sys. The kernel answers the whole table at tier 2; at
-// tier 3 the synchronous half is answered in the process's own worker, because
-// a worker boundary has no synchronous direction (Concept.md §4.3).
+// src/kernel/sysabi.h's Sys. The synchronous half is answered in the process's
+// own worker, because a worker boundary has no synchronous direction, and the
+// asynchronous half rides back on the step's reply (Concept.md §4.3).
 const SYS = { EXIT: 1, GETPID: 2, NOW: 3, STAGE: 4 };
 
-// src/kernel/sysabi.h's proc_pack: the page counts and the tier in one word.
+// src/kernel/sysabi.h's proc_pack: the two page counts in one word.
 const initialOf = (flags) => flags & 0xffff;
-const maxOf = (flags) => (flags >>> 16) & 0xfff;
-const tierOf = (flags) => flags >>> 28;
+const maxOf = (flags) => flags >>> 16;
 
 // How many workers stay hired with no process in them: a four-stage pipeline's
 // worth, so a pipeline neither hires nor terminates. The pool saves the cost of
@@ -43,9 +41,8 @@ const PRE_HIRE = 2;
 
 // ------------------------------------------------------- the process's half
 
-// One instance, and the two calls it can make. `ops` is where the tiers differ
-// and the only place they do: at tier 2 it reaches straight into the kernel, at
-// tier 3 it answers what it can and records the rest for the step's reply.
+// One instance, and the two calls it can make. `ops` answers what a worker can
+// answer on its own and records the rest for the step's reply.
 export function serveProc(ops) {
     const mem = new Memory();
     let instance = null;
@@ -128,7 +125,7 @@ export function serveProc(ops) {
     };
 }
 
-// The tier-3 half of `ops`, running in the process's own worker. Nothing here
+// The other half of `ops`, running in the process's own worker. Nothing here
 // reaches the kernel: `getpid` is the pid the host bound in, `now` is a clock
 // the step message carried, `exit` and the asynchronous call ride back on the
 // step's reply, and `stage` is refused — it is the host's syscall rather than a
@@ -181,64 +178,40 @@ export function workerOps(pid, clock) {
 
 // ---------------------------------------------------------- the host's half
 
-// `schedule(drain)` must call drain() once the kernel is off the stack; a
-// caller that passes nothing drains by hand, which is what the tests do.
-// `makeLink()` makes a worker for a tier-3 process, or is absent, in which case
-// a binary asking for tier 3 runs at tier 2 (Concept.md §4).
-export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
+// `makeLink()` makes a worker for a process. Where it is absent or will not
+// make one, a spawn is refused with AGAIN and the kernel backs off and asks
+// again — there is nowhere else to put a process (Concept.md §4).
+export function makeProc(mem, kernel, makeLink, clock = () => 0) {
     const modules = new Map(); // path -> Module; §4.4's compile cache
     const procs = new Map();   // pid -> the kernel's half of one process
-    const queue = [];          // tier-2 steps, waiting for the kernel to unwind
     const idle = [];           // workers with no process in them
-    let workers = true;        // until one refuses to be made, or none will load
 
-    // What the tier costs, counted where it is spent (doc/TODO.md T1). A round
-    // trip is one asynchronous call and the step that answers it, which is
-    // `calls2` at tier 2 and `calls3` at tier 3; the synchronous four are not
-    // round trips at either tier and are not counted.
+    // What a process costs, counted where it is spent. A round trip is one
+    // asynchronous call and the step that answers it; the synchronous four are
+    // answered in the worker and are not round trips.
     const stat = {
-        calls2: 0, calls3: 0, steps2: 0, steps3: 0,
+        calls: 0, steps: 0,
         spawned: 0, compiled: 0, hired: 0, reused: 0, terminated: 0, broke: 0,
     };
-
-    // The capability boundary in a dozen lines: these two closures are all a
-    // tier-2 process can call, and the pid is written into them here rather
-    // than passed by the caller. Process 7 holds no function that says 3.
-    function localOps(pid) {
-        return {
-            sys(op, a0, a1, a2) {
-                return kernel().sys(pid, op, a0, a1, a2);
-            },
-
-            // The kernel is asked for the destination first; a zero means it
-            // could not make room, and the length goes over regardless so that
-            // the reply can say so.
-            sysAsync(op, token, ptr, len, from) {
-                stat.calls2++;
-                const dst = kernel().sys(pid, SYS.STAGE, len, 0, 0) >>> 0;
-                if (dst && len)
-                    mem.view().set(from.view().subarray(ptr, ptr + len), dst);
-                kernel().sys_async(pid, op, token, len);
-            },
-        };
-    }
 
     // A link is one worker. It is hired without a process in it, which is also
     // the capability probe: where nested workers do not exist the constructor
     // throws here, at boot, rather than under the first `exec`.
+    //
+    // No latch behind it: the kernel paces the asking now (Concept.md §4), so a
+    // host that could not make one a second ago is asked again rather than
+    // written off for the life of the page.
     function hire() {
-        if (!workers || !makeLink)
+        if (!makeLink)
             return null;
         try {
             const link = makeLink();
             link.onmessage = ({ data }) => deliver(link, data);
             link.onerror = () => broke(link);
             link.pid = 0;
-            link.ready = false; // until it says so; see broke()
             stat.hired++;
             return link;
         } catch {
-            workers = false;
             return null;
         }
     }
@@ -277,17 +250,6 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         link.pid = 0;
         stat.terminated++;
         link.terminate();
-
-        // Whether to give the tier up is a question about the *script*, not
-        // about what is running: once a tier-3 process is permanent the pool
-        // and the process table are both non-empty forever, so a rule that
-        // waits for both to empty never fires. The answer is whether this
-        // worker got as far as announcing itself. One that did was loaded and
-        // has crashed, which is its process's business; one that did not is a
-        // `procworker.js` that will not load, and would otherwise be hired
-        // again on every `exec`.
-        if (!link.ready)
-            workers = false;
     }
 
     function spawn(r) {
@@ -297,9 +259,9 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         const initial = initialOf(flags);
         const maximum = maxOf(flags);
 
-        // Compiled here whatever the tier: the cache is the host's (§4.4), a
-        // Module is structured-cloneable, and a malformed binary is caught
-        // where `exec` can still say so.
+        // Compiled before a worker is asked for: the cache is the host's
+        // (§4.4), a Module is structured-cloneable, and a malformed binary is
+        // caught where `exec` can still say so rather than being retried.
         stat.spawned++;
         let module = modules.get(path);
         if (!module) {
@@ -308,20 +270,21 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             modules.set(path, module);
         }
 
-        const link = tierOf(flags) === TIER.WORKER ? take() : null;
-        const p = { pid, link, server: null, pending: null, done: false };
+        // No worker, no process: there is nowhere else to put one. AGAIN rather
+        // than a failure, because the kernel's answer is to wait and ask again
+        // (Concept.md §4), and the image it sent is still on its side.
+        const link = take();
+        if (!link) {
+            r.fail(E.AGAIN);
+            return;
+        }
 
         // The cap is the kernel's word and not the binary's: the module
         // declares no maximum of its own, so memory.grow stops at the number
         // that came over — which is an rlimit without cgroups (§4.1).
-        if (link) {
-            link.pid = pid;
-            link.postMessage({ k: "bind", pid, module, initial, maximum });
-        } else {
-            p.server = serveProc(localOps(pid));
-            p.server.bind(module, initial, maximum);
-        }
-        procs.set(pid, p);
+        link.pid = pid;
+        link.postMessage({ k: "bind", pid, module, initial, maximum });
+        procs.set(pid, { pid, link, pending: null, done: false });
         r.ok();
     }
 
@@ -332,32 +295,29 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         const pid = r.get("aux");
         const p = procs.get(pid);
 
-        if (p && p.link && !p.done) {
-            stat.steps3++;
-            p.pending = { r, done };
-            const payload = r.bytes();
-            p.link.postMessage(
-                { k: "step", now: clock(), token: r.get("flags"), payload: payload.buffer },
-                [payload.buffer]);
+        if (!p || !p.link || p.done) {
+            r.fail(E.NOTFOUND); // killed while this step was in flight
+            done();
             return;
         }
 
-        stat.steps2++;
-        queue.push({ pid, r, done });
-        if (schedule)
-            schedule(drain);
+        stat.steps++;
+        p.pending = { r, done };
+        const payload = r.bytes();
+        p.link.postMessage(
+            { k: "step", now: clock(), token: r.get("flags"), payload: payload.buffer },
+            [payload.buffer]);
     }
 
-    // A step whose result was the process's last: the instance is gone, and at
-    // tier 3 the worker that held it is clean enough to hire out again.
+    // A step whose result was the process's last: the instance is gone, and the
+    // worker that held it is clean enough to hire out again.
     function retire(p) {
         p.done = true;
-        p.server = null;
     }
 
-    // The tier-3 reply, which is the tier-2 closure's work done a message
-    // later: the exit status the process reported, then the asynchronous call
-    // it parked on, then the answer to the step itself.
+    // The reply, a message after the step: the exit status the process
+    // reported, then the asynchronous call it parked on, then the answer to the
+    // step itself.
     function finish(p, m) {
         const pending = p.pending;
         p.pending = null;
@@ -378,7 +338,7 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         // list. The token is the process's own and rides with each: the kernel
         // will name it again when it answers.
         for (const call of m.calls || []) {
-            stat.calls3++;
+            stat.calls++;
             const dst = kernel().sys(p.pid, SYS.STAGE, call.len, 0, 0) >>> 0;
             if (dst && call.len)
                 mem.view().set(new Uint8Array(call.payload), dst);
@@ -394,36 +354,16 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
     }
 
     function deliver(link, m) {
-        if (m.k === "ready") {
-            link.ready = true; // it loaded, which is all broke() needs to know
+        // A worker announcing that its script evaluated. Nothing acts on it now
+        // that the pool has no latch to arm: a worker that will not load is a
+        // process that died, and the kernel decides what to do about that.
+        if (m.k === "ready")
             return;
-        }
         if (m.k !== "step")
             return;
         const p = procs.get(link.pid);
         if (p && p.link === link)
             finish(p, m);
-    }
-
-    function drain() {
-        while (queue.length) {
-            const { pid, r, done } = queue.shift();
-            const p = procs.get(pid);
-            if (!p || !p.server || p.done) {
-                r.fail(E.NOTFOUND); // killed while this step was in flight
-            } else {
-                const out = p.server.step(r.get("flags"), r.bytes());
-                if (out.fail !== undefined) {
-                    retire(p);
-                    r.fail(out.fail);
-                } else {
-                    if (out.result !== STEP.SUSPENDED)
-                        retire(p);
-                    r.ok(out.result);
-                }
-            }
-            done();
-        }
     }
 
     // Terminating the worker a process is in, and answering for it. The reply
@@ -443,11 +383,10 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         }
     }
 
-    // Told, not asked, and immediate. At tier 2 dropping the entry is all it
-    // takes; at tier 3 the worker goes, which is the whole point of the tier —
-    // a process in a loop between syscalls has no other way out. A worker that
-    // had already finished its process is pooled instead, since `exec` kills
-    // every process it spawned, including the ones that exited.
+    // Told, not asked, and immediate: the worker goes, which is the whole point
+    // of it — a process in a loop between syscalls has no other way out. A
+    // worker that had already finished its process is pooled instead, since
+    // `exec` kills every process it spawned, including the ones that exited.
     function kill(pid) {
         const p = procs.get(pid);
         if (!p)
@@ -462,19 +401,17 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
             terminate(p);
     }
 
-    // Letting go of the whole tier, for a host that is disposing of the kernel.
+    // Letting go of everything, for a host that is disposing of the kernel.
     function shutdown() {
         dropWorkers();
         procs.clear();
     }
 
     // Letting go of the workers alone: the pool, and every process one is
-    // holding. A tier-2 process is untouched, because there is no worker
-    // between it and the kernel — which is the whole of §4's fallback, and is
-    // why this is not `shutdown`. Since T8 that spares nothing at first: the
-    // shell holds a worker too and goes with the rest, and init replaces it —
-    // at tier 2, if that is all the host has left (Concept.md §4). A process
-    // losing its worker here is killed by it, step and all.
+    // holding — which is all of them, the shell included, so init replaces it
+    // and the replacement waits for a worker if there is none to be had
+    // (Concept.md §4). A process losing its worker here is killed by it, step
+    // and all. Not `shutdown`, because the kernel stays.
     function dropWorkers() {
         for (const link of idle) {
             stat.terminated++;
@@ -496,23 +433,14 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         return idle.length;
     }
 
-    // Steps this host still owes a tier-2 process, for a driver that has to
-    // know whether draining by hand would do anything.
-    function pending() {
-        return queue.length;
-    }
-
-    // The counters, plus the state a measurement has to record beside them.
-    // `workers` is the one that cannot be inferred: with it false, a tier-3
-    // binary ran at tier 2 and the numbers are of the fallback, not the tier.
     function stats() {
-        return { ...stat, workers, pooled: idle.length, live: procs.size };
+        return { ...stat, pooled: idle.length, live: procs.size };
     }
 
-    // Workers hired before anything needs one: the first `exec`s of a tier-3
-    // binary then cost an instantiation rather than a worker start. The pool
-    // grows past this by returning what it hired on demand, so PRE_HIRE is
-    // about the first command and MAX_IDLE about the rest.
+    // Workers hired before anything needs one: the first `exec`s then cost an
+    // instantiation rather than a worker start. The pool grows past this by
+    // returning what it hired on demand, so PRE_HIRE is about the first command
+    // and MAX_IDLE about the rest.
     for (let i = 0; i < PRE_HIRE; i++) {
         const link = hire();
         if (!link)
@@ -520,5 +448,5 @@ export function makeProc(mem, kernel, schedule, makeLink, clock = () => 0) {
         idle.push(link);
     }
 
-    return { spawn, step, drain, kill, shutdown, dropWorkers, live, pooled, pending, stats };
+    return { spawn, step, kill, shutdown, dropWorkers, live, pooled, stats };
 }

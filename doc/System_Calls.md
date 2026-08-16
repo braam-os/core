@@ -67,21 +67,20 @@ host, and the host's scheduling discipline is the first thing to understand.
 │  │ exec_sys          │               │   sys(op,a0,a1,a2)       │  │
 │  │ exec_sys_async    │◄── sys_async ─│   sys_async(op,tok,p,n)  │  │
 │  │                   │               │                          │  │
-│  │ proc_spawn ───────┼─── host_svc ─►│ compile · instantiate    │  │
-│  │ proc_step ────────┼─── host_svc ─►│ queue → drain → step     │  │
-│  │ proc_kill ────────┼─── host_svc ─►│ drop · terminate         │  │
+│  │ proc_spawn ───────┼─── host_svc ─►│ compile · hire · bind    │  │
+│  │ proc_step ────────┼─── host_svc ─►│ post → await reply       │  │
+│  │ proc_kill ────────┼─── host_svc ─►│ pool · terminate         │  │
 │  │                   │◄── wake(tok) ─│                          │  │
 │  └───────────────────┘               └──────────┬───────────────┘  │
-│                                                 │ _start / _resume │
-│                     ┌───────────────────────────▼───────────────┐  │
-│                     │ fallback: the process's instance, right   │  │
-│                     │ here — own memory · own externrefs · fds  │  │
-│                     └───────────────────────────────────────────┘  │
-└──────────────────────────────────┬─────────────────────────────────┘
+└──────────────────────────────────────────────── │ ────────────────┘
+                                   ┌──────────────┘
                                    │ postMessage: bind, step
 ┌──────────────────────────────────▼─────────────────────────────────┐
-│ normally: a Web Worker holding one process — the same instance, one│
-│ thread further out, where terminate() does not need its cooperation│
+│ a Web Worker holding one process — its instance, its own memory,   │
+│ its own externrefs and descriptors, one thread further out, where  │
+│ terminate() does not need its cooperation. There is no second      │
+│ place: a spawn with no worker to be had is refused with Again and  │
+│ the kernel backs off and asks again (Concept.md §4).               │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -98,11 +97,10 @@ weeks later.
 
 So one `_start` or `_resume` is a **deferred host action**, structurally identical to a storage
 reply: the proxy task parks on a wake token, the host steps the instance once the tick has
-unwound, and the token is woken with the outcome. Across a worker the deferral is the
-`postMessage`, deferred by nature; for a process the kernel's worker holds itself it is a
-microtask (`web/worker.js:81-89`); in the test driver it is an explicit `drain()` between ticks
-(`test/fakesvc.mjs:61-73`). The stepping code is the same `web/proc.js` in all three, because the
-difference is scheduling and not behaviour.
+unwound, and the token is woken with the outcome. The deferral is the `postMessage` itself,
+which is deferred by nature; in the test driver it is the link being pumped between ticks
+(`test/fakeworker.mjs`). The stepping code is the same `web/proc.js` in both, because the
+difference is who carries the message and not what it says.
 
 Synchronous syscalls run the other way and need none of this. `sys(pid, …)` re-enters the kernel
 from JS at top level, exactly as `key()` and `wake()` do, and answers without parking.
@@ -154,7 +152,7 @@ process exports:  _start(argv_ptr, argv_len) -> i32 // 0 = exited, 1 = suspended
                   _resume(token, ptr, len)   -> i32 // the same
                   _alloc(n) -> ptr, _free(ptr, n)
 
-custom section "braam":  magic, abi, tier, flags, initial_pages, max_pages
+custom section "braam":  magic, abi, flags, initial_pages, max_pages
 ```
 
 The kernel's half is two exports with a leading pid:
@@ -221,14 +219,13 @@ hold those until it exits.
 ### 4.4 The metadata
 
 `exec` has to know two things before it can instantiate a binary: where to run it, and
-how much memory to give it. Both live in a wasm custom section named `braam`, six little-endian
+how much memory to give it. It lives in a wasm custom section named `braam`, five little-endian
 `u32`s appended after the link by `tools/stamp.py`:
 
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 6
-    u32 tier;           // Tier::Instance (2) or Tier::Worker (3)
+    u32 abi;            // PROC_ABI, currently 7
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -247,20 +244,22 @@ a wrong answer. The two refusals are **different errors**, because they call for
 module — while `Err(Unsupported)` is a section of ours carrying somebody else's number, which is a
 stale binary and wants saying so. `exec_resolve` propagates both, so a typed command reads
 `braam: <name>: built for another process ABI` and a `/bin/sh` that will not resolve names the
-number this kernel speaks. `Tier::Retired = 1` is the in-kernel applet, kept reserved rather than
-reused for the same reason.
+number this kernel speaks.
 
-`proc_pack` folds the three numbers the host needs into the request record's one spare word:
+Nothing in the section says *where* the process runs, because there is only one place: a worker
+of its own (Concept.md §4). The `tier` word that used to sit third is gone rather than reserved
+— `abi` is what refuses a binary from a build that had one.
+
+`proc_pack` folds the two numbers the host needs into the request record's one spare word:
 
 ```
-   31    28 27          16 15                     0
-   ┌───────┬───────────────┬───────────────────────┐
-   │ tier  │   max_pages   │     initial_pages     │
-   └───────┴───────────────┴───────────────────────┘
+   31                   16 15                     0
+   ┌───────────────────────┬───────────────────────┐
+   │       max_pages       │     initial_pages     │
+   └───────────────────────┴───────────────────────┘
 ```
 
-Twelve bits for `max_pages` is why `PROC_MAX_PAGES` carries a `static_assert` that it still fits.
-`web/proc.js:30-32` mirrors the three accessors, as `web/abi.js` mirrors the record itself.
+`web/proc.js:29-31` mirrors both accessors, as `web/abi.js` mirrors the record itself.
 
 ---
 
@@ -291,9 +290,8 @@ worker with no kernel to ask, and that is the entire reason one binary runs in e
 - `Now` is the clock reading the step message carried plus the worker's own elapsed time —
   monotonic and relative rather than identical to the kernel's tick clock, which nothing depends
   on.
-- `Exit` is buffered and rides back on the step's reply. A process only ever issues it
-  immediately before returning, so nothing observes the delay; the kernel's worker keeps the last
-  `Exit` before the step returned, and so does this.
+- `Exit` is buffered and rides back on the step's reply, the last one before the step returned. A
+  process only ever issues it immediately before returning, so nothing observes the delay.
 - `Stage` is refused with 0 — the "no room" answer the runtime already handles. Unknown
   operations are refused locally too, and never relayed.
 
@@ -442,22 +440,23 @@ And the two-byte write is not a simplification — that is what `echo hi` really
 them, which is the cost model of §6 arriving in the smallest possible program. A filter that
 reads and writes `SYS_CHUNK` at a time pays the same overhead per 512 bytes instead of per two.
 
-### 7.2 A synchronous call, either side of a worker
+### 7.2 A synchronous call, inside the worker
 
-`proc_pid()` is one line on both sides of a worker boundary, and the difference never reaches the
-binary:
+`proc_pid()` never leaves the worker the process is in, which is what makes the synchronous half
+possible across a boundary that has no synchronous direction:
 
 ```
-   in the kernel's worker                in a worker of its own
-   ──────────────────────                ──────────────────────
-   spin.wasm                             spin.wasm
-     │ sys(GetPid, 0,0,0)                  │ sys(GetPid, 0,0,0)
-     ▼                                     ▼
-   localOps.sys                          workerOps.sys
-     │ kernel().sys(pid, …)                │ return pid   ← bound in at bind time
-     ▼                                     ▼
-   exec_sys → return pid                 (no kernel involved, no message sent)
+   spin.wasm
+     │ sys(GetPid, 0,0,0)
+     ▼
+   workerOps.sys
+     │ return pid   ← bound in at bind time
+     ▼
+   (no kernel involved, no message sent)
 ```
+
+That is also why the synchronous half is closed at four (§5): an operation that needs the kernel
+has no way to ask for it from here.
 
 A worker boundary has no synchronous direction — §1 rules out `SharedArrayBuffer` and therefore
 `Atomics.wait` — and `sys` is by construction synchronous. It survives because none of its four
@@ -572,8 +571,8 @@ it reaches any other awaiting task through. The destructor is the whole kill pat
 
 That last line is not tidiness. An abandoned `HostReq` is reaped by `wake()` on its token and by
 nothing else, so a request whose worker no longer exists leaks the record and its payload for the
-life of the page unless the killer answers it. In the kernel's worker it happens for free, because
-a queued step still runs and finds the pid gone.
+life of the page unless the killer answers it. Whoever takes the worker away — `kill()`,
+`dropWorkers()` — is who must fail the step in it.
 
 `proc_kill` is told, not asked: no record, no reply, the pid in the `req` position and a null
 externref, because it is issued from a destructor where there is nothing left to await with.
@@ -947,10 +946,9 @@ rather than as a test:
   removes it from a binary that never awaits — `true` is the case.
 - **Exports are an exact list**: `_alloc`, `_free`, `_resume`, `_start`. Note that `memory` is
   not exported; it is imported, which is what makes the cap the kernel's.
-- **Exactly one `braam` section**, with the right magic and `abi`, `max_pages` of 256, and the
-  tier the build asked for.
-- **The same lists wherever a process runs.** Every binary looks identical, which is what lets
-  `exec` decide where to put one without userland — or the program — noticing.
+- **Exactly one `braam` section**, with the right magic and `abi`, and `max_pages` of 256.
+- **The same lists for every binary.** They are identical because there is one way to run a
+  program, and the section says nothing about placement for `exec` to read.
 
 ---
 

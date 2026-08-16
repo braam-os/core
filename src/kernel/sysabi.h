@@ -11,23 +11,12 @@
 #include "str.h"
 #include "types.h"
 
-// Isolation tiers (Concept.md §4). Tier 1 was the in-kernel applet and is
-// retired: every program is a binary now, and `exec` refuses one that claims
-// it. The number is kept rather than reused, so a binary stamped by an older
-// build is a diagnostic rather than a wrong answer.
-enum class Tier : u8 {
-    Retired = 1,
-    Instance,
-    Worker,
-};
-
 // The wasm custom section every process binary carries, and the whole of what
-// `exec` needs before it can instantiate one: which tier to run it at, and how
-// much memory to hand it. Six u32s so the parser needs no alignment care.
+// `exec` needs before it can instantiate one: how much memory to hand it.
+// Five u32s so the parser needs no alignment care.
 struct ProcMeta {
     u32 magic;
     u32 abi;
-    u32 tier;
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -35,19 +24,18 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 6;
+constexpr u32 PROC_ABI       = 7;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
 // What a spawn request's `flags` word carries: the two page counts the host
-// needs before it can make a Memory, and the tier that says where to put the
-// instance. One word because the record has no second scalar left — `aux` is
-// the pid, and nothing else may ride on that.
-static_assert(u32(PROC_MAX_PAGES) < 4096, "the page counts no longer fit beside the tier");
+// needs before it can make a Memory. One word because the record has no second
+// scalar left — `aux` is the pid, and nothing else may ride on that.
+static_assert(u32(PROC_MAX_PAGES) < 65536, "the page counts no longer fit in one word");
 
-inline u32 proc_pack(const ProcMeta &m, Tier tier)
+inline u32 proc_pack(const ProcMeta &m)
 {
-    return m.initial_pages | (m.max_pages << 16) | (u32(tier) << 28);
+    return m.initial_pages | (m.max_pages << 16);
 }
 
 inline u32 proc_initial(u32 flags)
@@ -57,19 +45,14 @@ inline u32 proc_initial(u32 flags)
 
 inline u32 proc_max(u32 flags)
 {
-    return (flags >> 16) & 0xfff;
-}
-
-inline Tier proc_tier(u32 flags)
-{
-    return Tier(flags >> 28);
+    return flags >> 16;
 }
 
 // Syscalls. The synchronous half answers inside the export and never parks;
 // the asynchronous half records a request the process's proxy task performs,
 // and its reply reaches the process through _resume.
 //
-// The synchronous half is closed: tier 3 answers all four inside the process's
+// The synchronous half is closed: all four are answered inside the process's
 // own worker, with no kernel to ask (Concept.md §4.3), so an operation that
 // needs the kernel has to be asynchronous whatever it costs.
 enum class Sys : u32 {

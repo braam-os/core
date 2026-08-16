@@ -1,6 +1,6 @@
 // exec: what a command name resolves to, and what it takes to run one as a
-// process of its own (Concept.md §4). The tier comes out of the binary's
-// metadata, so userland asks for a name and never asks for a tier.
+// process of its own (Concept.md §4). Every program runs in a worker of its
+// own, so userland asks for a name and there is nothing else to ask for.
 #pragma once
 
 #include "kernel/string.h"
@@ -12,7 +12,6 @@
 // spawns the task, and read by the task itself a tick later — a Task is lazy,
 // so nothing has looked yet.
 struct Executable {
-    Tier tier = Tier::Instance;
     u32 pid   = 0;
     u32 depth = 0; // how many spawns from init this is
     String path;
@@ -36,9 +35,12 @@ Result<ProcMeta> exec_meta(Str image);
 // spawning process's.
 Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str());
 
-// A tier-2 program as its own instance. The task returned *is* the process:
-// the scheduler runs it, /proc lists it, ^C cancels it, and its destructor
-// drops the instance — so a killed process needs no unwinding of its own.
+// A program as its own instance. The task returned *is* the process: the
+// scheduler runs it, /proc lists it, ^C cancels it, and its destructor
+// terminates the worker — so a killed process needs no unwinding of its own.
+//
+// A host with no worker to give is waited out rather than failed: the spawn
+// backs off and says so on `io.err` until one can be had (Concept.md §4).
 //
 // `cwd` is the directory it starts in, inherited from whoever spawned it. Empty
 // means the shell's, which is what a command typed at the prompt gets.

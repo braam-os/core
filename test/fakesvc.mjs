@@ -43,27 +43,21 @@ export class FakeNet {
 }
 
 export function makeFakeSvc(mem, net, kernel) {
-    // The real thing from web/proc.js, with no scheduler behind it: the driver
-    // is synchronous, so it drains the queue itself between ticks. That is the
-    // same discipline the worker's microtask buys — a process never runs while
-    // the kernel is on the stack. Tier 3 gets the real protocol too, over a
-    // link with no thread in it (test/fakeworker.mjs).
-    const proc = makeProc(mem, kernel, null, makeFakeLinks(net));
+    // The real thing from web/proc.js, over links with no thread in them
+    // (test/fakeworker.mjs): the driver pumps them itself between ticks, which
+    // is the same discipline the message boundary buys in a browser — a process
+    // never runs while the kernel is on the stack.
+    const proc = makeProc(mem, kernel, makeFakeLinks(net));
     const answered = [];
 
     net.proc = proc;
 
     // Runs whatever the host owes a process and answers the requests that got
-    // an answer — which is not all of them: a tier-3 step that is being held
-    // stays outstanding, exactly as one in a worker that is looping does.
-    // Returns true when there was work, so the driver can loop until there is
-    // none.
+    // an answer — which is not all of them: a step that is being held stays
+    // outstanding, exactly as one in a worker that is looping does. Returns
+    // true when there was work, so the driver can loop until there is none.
     net.drain = () => {
-        let moved = net.pump();
-        if (proc.pending()) {
-            proc.drain();
-            moved = true;
-        }
+        const moved = net.pump();
         net.peak = Math.max(net.peak, proc.live());
         if (!answered.length)
             return moved;

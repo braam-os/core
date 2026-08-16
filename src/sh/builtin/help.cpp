@@ -45,8 +45,8 @@ bool put(String &out, Str name, Str usage, usize width)
 
 } // namespace
 
-// The builtins, then /bin. What tier a name in /bin runs at is not something
-// the listing says: that is the point of the tier being the binary's business.
+// The builtins, then /bin. What a name in /bin costs to run is not something
+// the listing says: every one of them is a binary and runs the same way.
 Task<i32> builtin_help(Args args, ShIo io)
 {
     if (args.size() != 1) {

@@ -96,12 +96,12 @@ get `sizeof(usize) == 4, "wasm32"` and `unknown type name '__externref_t'` from 
 or, since `find_package(braam)` refuses a non-wasm32 compiler, a message saying so. Delete
 the build directory and configure again.
 
-`braam_add_program(NAME <n> SOURCES <...> [TIER 3|2] [LIBS <...>])` is the same function
-`src/cmd/` builds the system's own thirty-two programs with. It links `braam::proc` and
-`braam::flags`, links with `--import-memory` so the memory cap is the kernel's, and runs
-`stamp.py` over the result. `LIBS` names anything else the program is made of; `TIER` is §7
-below, and you will not need it. The CMake target it defines is `bin_<name>` — the file is
-`<name>.wasm`, and the prefix is there because a program may be called `test` or `install`.
+`braam_add_program(NAME <n> SOURCES <...> [LIBS <...>])` is the same function `src/cmd/` builds
+the system's own thirty-two programs with. It links `braam::proc` and `braam::flags`, links with
+`--import-memory` so the memory cap is the kernel's, and runs `stamp.py` over the result. `LIBS`
+names anything else the program is made of. The CMake target it defines is `bin_<name>` — the
+file is `<name>.wasm`, and the prefix is there because a program may be called `test` or
+`install`.
 
 ---
 
@@ -288,21 +288,15 @@ for ever costs a command rather than the session.
 
 The cost is that every syscall becomes two `postMessage` hops rather than a call — 34–45 µs
 measured, paid per `SYS_CHUNK` — so a program that reads a large file pays it per 512 bytes, and
-one being typed into pays it per round trip its editor makes. A program in that position may give
-the worker up and run in the kernel's instead:
+one being typed into pays it per round trip its editor makes. There is no way to opt out and
+nothing to opt out to: a program is a worker, and the answer to a program that costs too much in
+round trips is to make fewer of them. The shell was the last to ask for an exception, and cutting
+its round trips was the cheaper answer than weakening its isolation.
 
-```cmake
-braam_add_program(NAME repl SOURCES repl.cpp TIER 2)
-```
-
-It is still a process — its own instance, its own address space, capabilities and descriptors,
-and the same memory cap. What it gives up is only the kill: such a program that stops answering
-hangs the kernel's worker, so ask for it only where a runaway is not a possibility a user has to
-live with. Nothing in the system asks for it today; the shell was the last, and cutting the round
-trips it made was the cheaper answer than weakening its isolation.
-
-You do not have to handle the case where the host has no workers to give. The same binary runs in
-the kernel's worker there, with no change to the program and nothing to detect.
+You do not have to handle the case where the host has no workers to give, either. Your program
+simply has not started yet: the kernel backs off and asks again — 10 ms, then 20, up to a second
+— printing `no worker, retrying` on its stderr, and starts it the moment one can be had. There is
+nothing to detect and no degraded mode to write for.
 
 ---
 
@@ -338,8 +332,8 @@ because a link that accidentally pulled in kernel code shows up here first:
   program that never awaits.
 - **Exports** are exactly `_alloc`, `_free`, `_resume`, `_start`. `memory` is *imported*, not
   exported, which is what makes the cap the kernel's.
-- **One custom section named `braam`**, six little-endian `u32`s: magic `0x6d617262`, the
-  ABI, the tier, flags, the initial pages and the maximum.
+- **One custom section named `braam`**, five little-endian `u32`s: magic `0x6d617262`, the
+  ABI, flags, the initial pages and the maximum.
 
 ```
 $ node -e 'const m=new WebAssembly.Module(require("fs").readFileSync("build/hello.wasm"));

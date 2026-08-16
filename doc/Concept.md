@@ -505,51 +505,63 @@ nothing else — so `worker.terminate()` ends it without its cooperation.
 | Where it runs | Isolation | Spawn cost | Kill |
 |---|---|---|---|
 | **In a worker of its own** | address space + capabilities + memory cap + liveness | ~10 ms, few MB | `worker.terminate()` |
-| **In the kernel's worker** | the above, less liveness | ~1 ms | cooperative |
 
-The second row is a *fallback*, not a choice userland makes: where the host cannot give a process
-a worker — a browser without nested workers, a `procworker.js` that will not load — the same
-binary runs in the kernel's worker instead and gives up only the kill. `exec` decides, from a
-flag in the binary's `braam` custom section (§4.3), and nothing above it notices which it got.
+One row, and there is no second: a process is a worker, and there is nowhere else to put one.
+The binary says nothing about it either — the `braam` custom section carries a memory cap and an
+ABI number and no placement flag (§4.3), so there is no claim for `exec` to read and no choice
+for userland to make.
+
+**A host that cannot give a worker is waited out, not worked around.** Where the constructor
+throws — a browser without nested workers, a host disposing of its pool — the spawn is refused
+with `Again` and the kernel *pauses and asks again*: 10 ms, then 20, 50, 100, 200, 500, and a
+second from there on, saying `no worker, retrying` on the program's own stderr each time. The
+wait is an ordinary await, so `^C` abandons it and a cancelled job unwinds it. Nothing is
+latched off by a refusal, because a host whose workers come back has to be noticed; the kernel's
+backoff is what keeps the asking cheap.
+
+This is deliberately a wait rather than a degraded run. The alternative — instantiating in the
+kernel's worker, which is what this section used to do — is a process with no kill switch
+sharing the kernel's liveness, and once every program is one of these, a host that quietly
+withdrew the kill would be a system that had stopped being what §4.2 describes. A browser that
+cannot make a nested worker cannot run Braam, and the honest answer is to say so until it can.
 
 **The shell is not an exception.** `/bin/sh` is a binary in `/bin` that init runs, and everything
 a prompt needs — a pipeline, a redirection, a job, a working directory, the keyboard, the cursor —
 it asks for through §4.3 like any other program. What is left inside the kernel is not a weaker
 kind of process: it is the dispatcher those requests arrive at.
 
-**A host that loses its workers takes every process with it, and init replaces the shell.**
-The fallback above is decided before a process starts, so it covers a host that never had workers
-and not one whose workers go mid-session: a `procworker.js` that will not load, or a host letting
-go of them. Every process in a worker dies there, and once `/bin/sh` is one of them that would
-be the session rather than a command, because nothing re-execs init. So **init starts another
-shell when its shell *died* — a trap, a step that failed, an instance that would not be made —
-and does not when it *exited***, which is the user's own `exit` and the end of the session. The
-replacement is an ordinary `exec` of `/bin/sh`, so it lands wherever a worker can still be had,
-and in the kernel's worker when one cannot. That is what keeps this section's promise — that
-userland does not notice where it ran — true of the shell as it is of everything else, and it is
-what makes the kill switch something `/bin/sh` can survive rather than something that ends the
-session.
+**A host that loses its workers takes every process with it, and init replaces the shell.** Every
+process in a worker dies there, and once `/bin/sh` is one of them that would be the session
+rather than a command, because nothing re-execs init. So **init starts another shell when its
+shell *died* — a trap, a step that failed, an instance that would not be made — and does not when
+it *exited***, which is the user's own `exit` and the end of the session. The replacement is an
+ordinary `exec` of `/bin/sh`, and where there is no worker to be had it is the `exec` that waits,
+above, rather than a death: a host with none gets a line a second and a shell the moment one can
+be made. That is what makes the kill switch something `/bin/sh` can survive rather than something
+that ends the session.
 
-There is no moving a *running* process back into the kernel's worker, and there could not be: the
-instance is gone with the worker and there is no state to carry over. Replacing the shell is the
-whole of the answer, and it is bounded — three deaths in quick succession and init says so and
-stops, since a shell that cannot get as far as a prompt would otherwise say it for ever.
+There is no moving a *running* process anywhere, and there could not be: the instance is gone
+with the worker and there is no state to carry over. Replacing the shell is the whole of the
+answer, and it is bounded — three deaths in quick succession and init says so and stops, since a
+shell that cannot get as far as a prompt would otherwise say it for ever. A shell that is waiting
+for a worker is not one of those deaths; it has not started yet.
 
-**Every program gets a worker unless it asks not to**, which is a decision taken once the cost
-had been measured: 34–45 µs a syscall round trip against §4.4's estimated 0.1 ms, so a command
-pays a few hundred microseconds for a kill switch it cannot be denied. The recipe that builds a
-program carries that default (`cmake/BraamProgram.cmake`), so an out-of-tree program follows the
-system's own answer, and nothing in `/bin` asks for anything else — the prompt included, since a
-keystroke costs two round trips rather than the five it cost when a repaint was four operations
-for one change to the grid.
+**Every program gets a worker**, which is a decision taken once the cost had been measured: 34–45
+µs a syscall round trip against §4.4's estimated 0.1 ms, so a command pays a few hundred
+microseconds for a kill switch it cannot be denied. The recipe that builds a program arranges it
+unasked (`cmake/BraamProgram.cmake`) and takes no argument for anything else, so an out-of-tree
+program is built the way the system's own are — the prompt included, since a keystroke costs two
+round trips rather than the five it cost when a repaint was four operations for one change to the
+grid.
 
 **There was a third program model, and it is gone.** The **kernel applet** — a program as an
 in-kernel coroutine, sharing the kernel's heap and its whole authority — was how every program
 was written before M8 gave them an alternative. Two program models meant two `Args` types, two
 `io.h`s and two copies of every filter's logic waiting to diverge, and the weaker model was the
 one with no memory cap, no descriptor table and nothing between a bug and the kernel's heap. So
-the applets became binaries, the ABI grew to meet them (§4.3), and `Tier::Retired` keeps the
-number 1 reserved so a binary stamped by an older build is refused rather than misread.
+the applets became binaries and the ABI grew to meet them (§4.3). Nothing of the applet is
+reserved in the wire format: the `abi` word is what refuses a binary from an older build, and it
+does that for every change rather than for this one.
 
 A **shell builtin** is still not a program and still has no file in `/bin`, but it is no longer
 kernel code: the six live inside `/bin/sh`, in `src/sh/builtin/`. What makes one a builtin has
@@ -624,10 +636,10 @@ clean — the instance is dropped and wasm cannot have touched the worker's own 
 back to the pool. One that was terminated is gone, which is the point.
 
 The pool is sized for a pipeline *above* what the session holds permanently, because the shell is
-one of these processes and never gives its worker back. That is also why the capability probe
-cannot ask whether anything is running: with one process permanent the pool and the process table
-are never both empty, so what it asks instead is whether a worker got as far as announcing
-itself.
+one of these processes and never gives its worker back. It is also the whole of the capability
+question: a worker is asked for when one is needed, and a host that will not give one is refused
+per spawn rather than written off once. Nothing is latched, so a host that recovers is noticed
+the next time the kernel asks — which §4 has it doing at a known rate.
 
 ### 4.3 The kernel↔process ABI
 
@@ -644,7 +656,7 @@ process exports:  _start(argv_ptr, argv_len) -> i32 // 0 = exited, 1 = suspended
                   _resume(token, ptr, len)   -> i32 // the same
                   _alloc(n) -> ptr, _free(ptr, n)
 
-custom section "braam":  magic, abi, tier, flags, initial_pages, max_pages
+custom section "braam":  magic, abi, flags, initial_pages, max_pages
 ```
 
 The coroutine model survives the boundary intact: the process's `co_await` suspends, its
@@ -839,13 +851,14 @@ allowed in a worker at any size and keeps `exec` one round trip rather than two.
 The `postMessage` of a module is what M9 uses, and it is why the cache stays in the kernel worker
 rather than moving out with the instance: a binary is compiled once however many workers run it.
 Starting a worker is the other cost, and the pool is the answer — a free list of workers with no
-process in them, a pipeline's worth of them, topped up at boot, which doubles as the capability
-probe. Where the constructor throws, §4's fallback applies; so it is where a worker is made and
-never loads its script, which is a worker that reports an error before it has announced itself.
+process in them, a pipeline's worth of them, topped up at boot. Where the constructor throws
+there is nothing to hand a spawn, so it is refused and §4's wait begins. A worker that is made
+and *then* never loads its script is a different failure and reads as one: the process it was
+given crashed, which is what the kernel is told and what init counts.
 
-A **syscall** is the cost that does not go away: two `postMessage` hops and two copies, against a
-direct call and one copy for a process the kernel's worker holds itself. A syscall-bound program
-pays it per `SYS_CHUNK`.
+A **syscall** is the cost that does not go away: two `postMessage` hops and two copies, where a
+call inside one worker would have been a call and one copy. A syscall-bound program pays it per
+`SYS_CHUNK`.
 
 *Measured* since, at 0.2.44 and again at 0.2.47, in three engines: **34–45 µs** a round trip, not
 the 0.1 ms this section estimated, and unmoved by putting every program in a worker. doc/TODO.md

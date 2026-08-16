@@ -7,6 +7,107 @@ of the two needs amending.
 
 ---
 
+## Tier 2 is deleted
+
+Every binary in the tree has asked for a worker of its own since T8, and `stamp.py --tier` has
+been required rather than defaulted since the same change — so what was left of the second
+program model was a *fallback*: the path a host took when it could not make a worker. It cost a
+second syscall path in `web/proc.js`, a deferral mechanism in `web/worker.js` that existed only
+to drain it, a three-armed bench harness, a word on the wire, and a public knob in the SDK. All
+of it stood behind a case nothing in the tree exercised and no test could reach without turning
+the workers off by hand.
+
+It is gone. One program model, one syscall path, and §4's table has one row.
+
+### The word leaves the wire
+
+`ProcMeta` is five `u32`s rather than six and `PROC_ABI` is 7. The alternative was keeping the
+field and requiring 3, which is a smaller diff and leaves a one-value enum on the ABI for a
+reader to wonder about. The field's second job — `Tier::Retired = 1`, so a binary from before M8
+was refused rather than misread — is what the `abi` word does, and does for every amendment
+rather than for that one, so nothing is reserved in its place.
+
+`proc_pack` gets simpler with it: the tier was a nibble at the top of the flags word, which is
+why `max_pages` had twelve bits and a `static_assert` defending them. It has sixteen now.
+
+### A wait, not a fallback
+
+The question the fallback answered still has to be answered: what does a host that cannot make a
+nested worker do? The choice taken is to **pause and retry** — 10 ms, then 20, 50, 100, 200, 500,
+and a second from there on, printing `no worker, retrying` on the program's own stderr each
+time — rather than fail the command or refuse at boot.
+
+Failing the command was the obvious alternative and is worse in the case that matters: the
+process most likely to want a worker when none can be had is `/bin/sh` itself, at boot or after
+`dropWorkers()`, and a session that ends with one line is less useful than one that says what it
+is waiting for and starts the moment it can. Refusing at boot with a "this browser cannot run
+Braam" screen was the other, and it decides too early: a host that has *lost* its workers is not
+a host that never had them, and the retry covers both without having to tell them apart.
+
+The loop lives in `spawn_process` in `src/user/exec.cpp` — a coroutine of its own rather than
+straight-line code inside `exec_process`, because `exec_process`'s frame is on the path
+`test_shell` guards and a frame past 512 bytes costs a whole 64 KiB span. `sleep_ms` is
+cancellation-aware like every awaitable since M1, so `^C` abandons a wait and a cancelled job
+unwinds it with nothing written for it.
+
+One wrinkle decided the shape: `proc_spawn` takes `String &&image` and the request record adopts
+it, which is §4.4's "a process image is tens of kilobytes and the caller has one already". A
+retry therefore has no image left. Re-reading the file with `read_file` before each attempt after
+the first was preferred to passing a `Str` and copying, because that copy would be paid on every
+`exec` in exchange for a path that only runs when the system is already degraded and has ten
+milliseconds to spare.
+
+Init's respawn bound is untouched and is no longer reachable this way: a shell that is *waiting*
+for a worker has not started, so it is not one of the three deaths that end a session.
+
+### The latch had to go with it
+
+`web/proc.js` kept a `workers` boolean, set false the first time a worker refused to be made or
+failed to load, after which nothing hired again. That was right when the answer to no worker was
+a permanent fallback; it is wrong when the answer is to ask again, since a latch that never
+clears makes recovery impossible. `hire()` now tries each time and the kernel's backoff is what
+keeps the asking cheap.
+
+The cost is one dead worker per hire on a host whose `procworker.js` will not load, and
+`test/run.mjs` asserts exactly that rather than leaving it implied. Note the asymmetry it
+exposes, which is not new but is now the only behaviour: a worker that is never *made* is
+`Again` and retried, while one that is made and then fails to load is a process that **died**,
+because by then the spawn has been answered and the program is in its first step. The second is
+bounded by init's three respawns, not by the backoff.
+
+`link.ready` went with the latch — it had no other reader. The `{ k: "ready" }` message stays on
+the wire, dropped on the floor as it was before T2 gave it a job.
+
+### What the bench measured is not measurable any more
+
+`make bench` existed to A/B the two tiers: `bundle2.bin` and `bundle3nosh.bin`, packed by
+re-stamping the staged binaries, against the shipped archive. With one tier there is no A/B, so
+the cmake target, `web/bench.html`, `web/bench.js` and `tools/bench.mjs` are deleted, along with
+the `defer` counters in `web/worker.js` that only its arms read. T1, T5 and T8's figures stay
+recorded in doc/TODO.md, which is now history rather than a harness.
+
+Deleting `tools/release.py`'s `SKIP` set resolved a live bug on the way: it named `bundle3.bin`
+while the cmake target emitted `bundle3nosh.bin`, so that twin was packed into the released site
+zip whenever `bench` had been run in the same tree.
+
+### What it costs elsewhere
+
+M8's acceptance criterion "tier selection comes from binary metadata" is retired rather than
+broken: there is no selection. doc/Milestones.md keeps it as the record of what M8 built.
+
+The kernel grew by 1,297 bytes — 142,473 to 143,770, against a 256 KiB budget — which is the
+retry coroutine costing more than the tier checks and the `Tier` enum saved. `bundle.bin` lost
+128 bytes, four from each binary's section, and rounds to the same 497 KB because the archive is
+block-aligned.
+
+`test/run.mjs` gained a case and lost one. The old fallback case — workers off, `dropWorkers()`,
+then assert a program still runs — asserted the thing being deleted; in its place the same setup
+asserts the retry: the shell dies, the line appears, the backoff prints two more on the driver's
+own clock, nothing binds a worker while there is none to bind, and the session comes back when
+`net.workers` goes true again. It is still last but for `exit`, for the reason it always was.
+
+---
+
 ## The shell takes a worker
 
 doc/TODO.md T8, and the end of "every program at tier 3": `set(BRAAM_BIN_TIER_sh 2)` is gone,

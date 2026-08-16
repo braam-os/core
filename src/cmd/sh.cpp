@@ -3,9 +3,9 @@
 #include "sh/shell.h"
 
 // The shell, as a program like any other (Concept.md §4). There is no in-kernel
-// shell left to be the exception in §4's tier table: what a prompt needs — a
-// pipeline, a redirection, a job, a working directory, the keyboard and the
-// cursor — is what the §4.3 syscall table is.
+// shell left to be §4's exception: what a prompt needs — a pipeline, a
+// redirection, a job, a working directory, the keyboard and the cursor — is
+// what the §4.3 syscall table is.
 //
 // `-s` reads stdin a line at a time instead of drawing a prompt. Without it the
 // shell asks for the keyboard, and says so and stops if somebody else has it.

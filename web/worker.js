@@ -33,9 +33,9 @@ let store = null;
 // The isolated processes, so that a dispose can let go of their workers.
 let proc = null;
 
-// What a keystroke costs and what a tier-2 step waits for (doc/TODO.md T1).
-// One key is in flight at a time: `key_at` is the stamp of the last one that
-// has not been painted yet, and the first present after it is the sample.
+// What a keystroke costs. One key is in flight at a time: `key_at` is the stamp
+// of the last one that has not been painted yet, and the first present after it
+// is the sample.
 let key_at = 0;
 let repaints = 0;
 // The two ends of a measured command, stamped where they happen: a driver
@@ -44,11 +44,10 @@ let last_key = 0;
 let last_present = 0;
 const KEY_SAMPLES = 256;
 const keys = [];
-const defer = { micro_ms: 0, micro_n: 0, timer_ms: 0, timer_n: 0 };
 
-// Where a keystroke's time goes, either side of the two boundaries a tier-3
-// step adds (doc/TODO.md T8): the kernel's own tick, and the draw into the
-// OffscreenCanvas. Cumulative, so a caller takes differences.
+// Where a keystroke's time goes, either side of the two boundaries a step adds:
+// the kernel's own tick, and the draw into the OffscreenCanvas. Cumulative, so
+// a caller takes differences.
 const paint = { n: 0, ms: 0 };
 const tick = { n: 0, ms: 0 };
 
@@ -95,37 +94,16 @@ async function boot() {
         pump();
     });
 
-    // Isolated processes live here too (Concept.md §4): tier 2 as instances in
-    // this worker, tier 3 in workers of their own. It is handed a getter rather
-    // than the exports, because the kernel does not exist yet.
-    //
-    // A tier-2 step runs off the kernel's stack, which a microtask is enough
-    // for. Now and then it takes the slower route instead: a process in a tight
-    // syscall loop would otherwise chain microtasks without the worker ever
-    // painting. A tier-3 step is a message and is already an event-loop turn.
-    //
-    // Which route a step took and how long it then waited is counted: the two
-    // are a whole order of magnitude apart, and a chained setTimeout(0) is
-    // clamped to 4 ms past the fifth nesting level.
-    let steps = 0;
-    proc = makeProc(mem, () => self.kernel, (drain) => {
-        const at = performance.now();
-        if (++steps % 64) {
-            queueMicrotask(() => {
-                defer.micro_ms += performance.now() - at;
-                defer.micro_n++;
-                drain();
-            });
-        } else {
-            setTimeout(() => {
-                defer.timer_ms += performance.now() - at;
-                defer.timer_n++;
-                drain();
-            }, 0);
-        }
-    }, () => new Worker(new URL(options.procWorkerUrl || "./procworker.js", import.meta.url),
-                        { type: "module" }),
-       () => performance.now());
+    // Isolated processes live here too (Concept.md §4), each in a worker of this
+    // one. It is handed a getter rather than the exports, because the kernel
+    // does not exist yet. Nothing has to defer a step: it is a message, and a
+    // message is already an event-loop turn, so a process cannot run while the
+    // kernel is on the stack.
+    proc = makeProc(mem, () => self.kernel,
+                    () => new Worker(new URL(options.procWorkerUrl || "./procworker.js",
+                                             import.meta.url),
+                                     { type: "module" }),
+                    () => performance.now());
 
     // The same rule as storage: a reply must reach the kernel on a promise,
     // never inside the import call that asked for it.
@@ -278,7 +256,7 @@ self.onmessage = ({ data }) => {
     }
 
     // The page is letting go, and answered before boot has finished as well as
-    // after: a tier-3 process is a worker of this one, and one spinning in a
+    // after: a process is a worker of this one, and one spinning in a
     // loop is a core burning until somebody says stop.
     if (data.kind === "dispose") {
         if (proc)
@@ -299,7 +277,6 @@ self.onmessage = ({ data }) => {
             repaints,
             last_key,
             last_present,
-            defer: { ...defer },
             paint: { ...paint },
             tick: { ...tick },
             drawing,

@@ -1,4 +1,4 @@
-// A tier-3 process lives here: one worker, one instance, and no kernel
+// A process lives here: one worker, one instance, and no kernel
 // (Concept.md §4). Everything it does is in web/proc.js, so that both halves of
 // the step protocol are written in one file; this is the wiring only.
 

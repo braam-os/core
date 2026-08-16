@@ -148,11 +148,10 @@ const fail = (msg) => {
 
 const names = (list) => list.map((e) => `${e.module ? e.module + "." : ""}${e.name}`).sort();
 
-// A tick, and then whatever the host owes a process. A tier-2 program needs a
-// round trip out here per syscall — the kernel cannot call into an instance
-// itself — so the driver does the round trips, exactly as web/worker.js does
-// with a microtask. Returns the last delay tick reported, so every assertion
-// about the timer queue still reads the same.
+// A tick, and then whatever the host owes a process: a step is a message in a
+// browser and a hand-pumped call here, so the driver runs what the worker's
+// event loop would have run. Returns the last delay tick reported, so every
+// assertion about the timer queue still reads the same.
 //
 // A delay of 0 means the kernel has ready work and wants running again at once,
 // which web/worker.js answers with setTimeout(pump, 0). Looping on it here is
@@ -198,10 +197,9 @@ if (mode === "--kernel") {
     // rule applies to it: drift is a bug. Note what is *not* there — a process
     // imports nothing from the host, and `sys` has no pid argument, which is
     // the whole of "a process cannot issue a syscall on behalf of another".
-    // A tier is the binary's claim and nothing more: the surface is the same
-    // one at either, which is what lets `exec` pick without userland noticing.
-    // Every program asks for a worker of its own, the shell included — there is
-    // no exception left to name (doc/TODO.md T8).
+    // Every program is one of these and there is nothing else to be: a worker
+    // of its own, the shell included, and no flag in the binary that says
+    // otherwise (Concept.md §4).
 
     for (const binary of binaries) {
         const bin = new WebAssembly.Module(readFileSync(binary));
@@ -229,12 +227,10 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 6)
+        if (m[0] !== 0x6d617262 || m[1] !== 7)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
-        if (m[2] !== 3)
-            fail(`${basename(binary)} asks for tier ${m[2]}, expected 3`);
-        if (m[5] !== 256)
-            fail(`${basename(binary)} asks for ${m[5]} pages, expected 256`);
+        if (m[4] !== 256)
+            fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
     }
 
     instance.exports.init(0);
@@ -1174,7 +1170,7 @@ if (mode === "--kernel") {
     if (!rows(s).includes(prompt(126)))
         fail(`a non-binary left ${row(s, s.cursor_y)}, expected ${prompt(126)}`);
 
-    // help lists what is runnable, whatever tier it runs at.
+    // help lists what is runnable.
     addr = instance.exports.resize(100, 48);
     s = submit("clear", 9040);
     s = submit("help", 9041);
@@ -1183,24 +1179,22 @@ if (mode === "--kernel") {
             fail(`help did not list ${name}`);
     addr = instance.exports.resize(60, 16);
 
-    // M9. Every program is a tier-3 binary, the shell included, so everything
-    // above this line already ran in a worker of its own — those assertions are
-    // M4's to M8's, unedited, and this is the only line that notices. It is a
-    // latch on "anything ran", which since T8 is the same sentence as "anything
-    // ran at tier 3": the shell binds one at boot, before a command is typed.
+    // M9. Every program runs in a worker of its own, the shell included, so
+    // everything above this line already did — those assertions are M4's to
+    // M8's, unedited, and this is the only line that notices. A latch on
+    // "anything ran": the shell binds a worker at boot, before a command is
+    // typed.
     if (!net.bound.length)
-        fail("nothing ran at tier 3");
-    if (net.proc.stats().calls2)
-        fail(`${net.proc.stats().calls2} syscalls were answered at tier 2`);
+        fail("nothing bound a worker");
 
-    // A tier-3 program end to end: getpid answered inside its own worker, a
-    // write relayed back through the kernel, an exit status carried on the
-    // step that reported it.
+    // One end to end: getpid answered inside its own worker, a write relayed
+    // back through the kernel, an exit status carried on the step that
+    // reported it.
     net.terminated.length = 0;
     s = submit("clear", 9050);
     s = submit("spin 1", 9051);
     if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
-        fail(`a tier-3 program printed ${JSON.stringify(rows(s))}`);
+        fail(`a program printed ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt())
         fail(`spin 1 exited ${row(s, s.cursor_y)}, expected a bare prompt`);
     if (net.terminated.length !== 0)
@@ -1210,8 +1204,8 @@ if (mode === "--kernel") {
     // here. The pool grows only for a pipeline wider than what is idle and
     // shrinks only on a kill, so spin's own is in it — put back rather than
     // terminated, which is the assertion above. The shell's is not: it is a
-    // tier-3 process for as long as the system is up, so one worker is out of
-    // the pool from boot and each of the reboots above terminated the rest.
+    // process for as long as the system is up, so one worker is out of the pool
+    // from boot and each of the reboots above terminated the rest.
     if (net.proc.pooled() !== 1)
         fail(`the pool holds ${net.proc.pooled()} workers, expected one`);
 
@@ -1253,8 +1247,8 @@ if (mode === "--kernel") {
         fail(`the shell did not survive a killed process: ${JSON.stringify(rows(s))}`);
 
     // M9, second criterion: the shell keeps working while one is spinning.
-    // Backgrounded, since a foreground job is waited for at every tier — what
-    // is being asserted is that the kernel is free, not that the shell is rude.
+    // Backgrounded, since a foreground job is waited for — what is being
+    // asserted is that the kernel is free, not that the shell is rude.
     // The clear comes first: it is a program too, so a hold taken before it
     // would land on its worker rather than on the one that spins.
     s = submit("clear", 9070);
@@ -1371,13 +1365,13 @@ if (mode === "--kernel") {
     if (others() !== 0)
         fail(`${others()} instances outlived watch`);
 
-    // A child at tier 3 gets the worker kill through its parent, which is the
-    // proof that a spawned process is an ordinary scheduler job.
+    // A child gets the worker kill through its parent, which is the proof that
+    // a spawned process is an ordinary scheduler job.
     //
     // The pool has to be warm before the link is held: `spin` with no argument
-    // never comes back, and a tier-3 binary that cannot be given a worker runs
-    // at tier 2 instead (§4's fallback) — where the driver would step that loop
-    // on its own stack and never return.
+    // never comes back, and a spawn that cannot be given a worker backs off and
+    // asks again (§4) rather than running the loop anywhere the driver would
+    // have to step it.
     s = submit("spin 1", 9155);
     if (net.proc.pooled() !== 2)
         fail(`the pool holds ${net.proc.pooled()} workers, expected two — 23 hired by`
@@ -1391,14 +1385,14 @@ if (mode === "--kernel") {
     press(KEY.ENTER);
     run(9161);
     if (others() !== 2)
-        fail(`a supervised tier-3 child left ${others()} instances, expected 2`);
+        fail(`a supervised child left ${others()} instances, expected 2`);
     run(9200); // past the delay, so the kill is the alarm's and not ^C's
     net.release();
     run(9201);
     if (net.terminated.length !== 1)
-        fail(`timeout over a tier-3 child terminated ${net.terminated.length} workers, expected 1`);
+        fail(`timeout over a child terminated ${net.terminated.length} workers, expected 1`);
     if (others() !== 0)
-        fail(`${others()} instances outlived a killed tier-3 child`);
+        fail(`${others()} instances outlived a killed child`);
 
     // ^C reaches a whole chain: the shell cancels the stage, the stage's End
     // cancels the child, and neither is left behind.
@@ -1628,7 +1622,7 @@ if (mode === "--kernel") {
     // "the shell will not stay up" before `exit 7` is reached.
 
     // A worker taken away with a step still in it. `dropWorkers` is a host
-    // letting go of the whole tier where `broke()` lets go of one link, and
+    // letting go of every worker where `broke()` lets go of one link, and
     // either way the process has to be *failed* by whoever killed it: an
     // unanswered request the kernel is parked on is answered by nothing else.
     //
@@ -1660,15 +1654,14 @@ if (mode === "--kernel") {
         fail(`${others()} instances outlived the workers holding them`);
     net.release();
 
-    // And the replacement got the tier back, because `dropWorkers` lets go of
-    // the workers rather than of the tier: a host that can still make one
-    // answers the next `exec` with it.
+    // And the replacement got a worker, because `dropWorkers` lets go of the
+    // workers it has rather than of the ability to make one: a host that can
+    // still hire answers the next `exec` with one. There is no latch behind
+    // that any more — the kernel is what paces the asking (Concept.md §4).
     s = submit("clear", 9075.3);
     s = submit("echo alive", 9075.4);
     if (!rows(s).includes("alive"))
         fail(`the shell after a dropped worker printed ${JSON.stringify(rows(s))}`);
-    if (!net.proc.stats().workers)
-        fail("dropping the workers gave the tier up as well");
 
     // The shell's own worker going away, which is the thing T8 risks rather
     // than a stand-in for it: init notices its child *died* rather than exited
@@ -1704,9 +1697,9 @@ if (mode === "--kernel") {
     net.proc.kill(2);
     if (net.proc.live() !== live - 1)
         fail("pid 2 is not the shell, so the case below would assert nothing");
-    // The shell is a tier-3 process, so the kill reaches a worker rather than
-    // merely dropping the record. It is parked on Sys::Wait with no step
-    // outstanding, so this is the branch that has nothing to fail.
+    // The shell is a process like any other, so the kill reaches a worker
+    // rather than merely dropping the record. It is parked on Sys::Wait with no
+    // step outstanding, so this is the branch that has nothing to fail.
     if (net.terminated.length !== 1)
         fail(`killing the shell terminated ${net.terminated.length} workers, expected 1`);
     run(11078); // the timer fires, the child exits, and the shell steps to collect it
@@ -1767,16 +1760,14 @@ if (mode === "--kernel") {
     if (row(s, s.cursor_y) !== prompt())
         fail(`less did not give the replacement its screen back: ${JSON.stringify(rows(s))}`);
 
-    // The two ways the tier is lost, last of all: both give it up for the rest
-    // of the run, and with every program a tier-3 binary that would leave
-    // everything after them running one isolation weaker than it ships.
+    // The two ways a worker is not to be had, last of all, because both leave
+    // the session in a state nothing after them should have to work around.
     //
     // A worker that is made and never loads its script. The kernel learns at
-    // the first step, so the process reads as a crash — and the tier is given
-    // up there, because whether it works is a question about procworker.js and
-    // not about what is running. Nothing else can ask it: `procs` is never
-    // empty once the shell is a tier-3 process, which is what the old latch
-    // waited for and would never have seen again.
+    // the first step, so the process reads as a crash — and nothing is latched
+    // off by it: whether procworker.js loads is a question the host answers
+    // afresh every time it is asked, which is what lets a host that recovers be
+    // noticed (Concept.md §4).
     //
     // The pool is emptied by a *pipeline* rather than by `dropWorkers`, which
     // would take the shell's worker with it and make this a case about init.
@@ -1793,30 +1784,35 @@ if (mode === "--kernel") {
         fail(`a worker that never loaded printed ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt(132))
         fail(`a crashed process left ${row(s, s.cursor_y)}, expected ${prompt(132)}`);
-    if (net.proc.stats().workers)
-        fail("a worker that never loaded left tier 3 on");
     if (others() !== 0)
         fail(`${others()} instances outlived a pipeline with a broken stage`);
 
+    // And the next pipeline hires again and crashes the same way. That is the
+    // latch's absence stated as an assertion: a host whose workers are born
+    // broken is asked afresh rather than written off, and the cost of it is one
+    // dead worker per hire until it recovers. A pipeline rather than a command,
+    // because `echo` gave its own worker back to the pool when it exited and a
+    // single command would take that one and never hire.
     const made = net.links.length;
-    s = submit("clear", 13088);
-    s = submit("spin 1", 13089);
-    if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
-        fail(`the command after a broken worker printed ${JSON.stringify(rows(s))}`);
-    if (net.links.length !== made)
-        fail(`${net.links.length - made} workers were hired after the tier was given up`);
+    s = submit("echo hi | cat", 13089);
+    if (row(s, s.cursor_y) !== prompt(132))
+        fail(`a second pipeline after a broken worker left ${row(s, s.cursor_y)}`);
+    if (net.links.length === made)
+        fail("a broken worker stopped the next pipeline from hiring one");
     net.broken = false;
 
-    // Where a worker cannot be made at all, a binary asking for tier 3 runs at
-    // tier 2 — the same program, the same output, one isolation weaker (§4).
+    // Where a worker cannot be made at all, the spawn *waits* for one: 10 ms,
+    // then 20, 50, and so on to a second, saying so each time, until the host
+    // can give one (Concept.md §4). There is no second place to run a process,
+    // so this is the whole of what a host without workers gets.
+    //
     // The shell is one of them and dies here for the last time: the drop takes
-    // the worker it is holding, and the `exec` init answers with lands at tier
-    // 2, which is §4's promise coming out true for `/bin/sh` as it does for
-    // `spin`. Everything after this line runs at the weaker tier, which is why
-    // it is last but for `exit`.
+    // the worker it is holding, and the `exec` init answers with is the one
+    // that waits. Everything after this line depends on it coming back.
     s = submit("clear", 13089.4);
     net.workers = false;
     net.proc.dropWorkers();
+    net.bound.length = 0; // nothing may bind one from here until there is one
 
     // The kernel learns its shell is gone when it next tries to step it, and at
     // a prompt that is the next key: nothing is outstanding to be failed, since
@@ -1828,14 +1824,31 @@ if (mode === "--kernel") {
     if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
         fail(`losing the workers said ${JSON.stringify(rows(s))}`);
 
-    net.bound.length = 0;
-    s = submit("spin 1", 13091);
-    if (!rows(s).some((line) => /^spin: pid \d+, spinning briefly$/.test(line)))
-        fail(`the tier-2 fallback printed ${JSON.stringify(rows(s))}`);
+    const WAIT_LINE = "braam: /bin/sh: no worker, retrying";
+    const waiting = (d) => rows(d).filter((line) => line === WAIT_LINE).length;
+    if (waiting(s) !== 1)
+        fail(`a host with no worker said ${JSON.stringify(rows(s))}`);
+
+    // The backoff, on the clock the driver owns: 10 ms after the first refusal,
+    // then 20 after the second. Nothing else is running, so each is a line.
+    run(13099.6);
+    run(13119.7);
+    s = descriptor(addr);
+    if (waiting(s) !== 3)
+        fail(`the spawn backed off ${waiting(s)} times, expected three`);
     if (net.bound.length !== 0)
-        fail("the fallback still bound a worker");
+        fail("a spawn with no worker to be had bound one anyway");
+
+    // And it is a wait rather than a failure: the host finds a worker, the
+    // shell that has been waiting for one starts, and the session is back.
+    net.workers = true;
+    run(13169.8);
+    s = descriptor(addr);
     if (row(s, s.cursor_y) !== prompt())
-        fail(`the fallback exited ${row(s, s.cursor_y)}, expected a bare prompt`);
+        fail(`a shell that waited for a worker left ${row(s, s.cursor_y)}`);
+    s = submit("echo back", 13171);
+    if (!rows(s).includes("back"))
+        fail(`the shell after a wait printed ${JSON.stringify(rows(s))}`);
 
     // exit ends the shell, and nothing runs after it. Last, for that reason.
     s = submit("clear", 14097);

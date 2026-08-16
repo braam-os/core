@@ -1,5 +1,12 @@
 # TODO — every program at tier 3
 
+> **History.** The tiers are gone: tier 2 was deleted after T8, so there is one program model,
+> the `tier` word has left the `braam` custom section, and a host that cannot make a worker is
+> waited out rather than fallen back on (Concept.md §4, and "Tier 2 is deleted" in
+> Release_Notes.md). `make bench` went with it — the arms below cannot be packed any more, so
+> the figures in T1, T5 and T8 are a record of what was measured and not something to re-run.
+> Nothing here is a work item.
+
 Moving all of `src/cmd/` to the own-worker tier, the shell included. The tier is a claim in a
 binary's `braam` custom section and nothing else (Concept.md §4.3: *"the same binary runs at
 either tier"*), so no C++ changes: not `sysabi.h`, not `src/proc/`, not `src/sh/`, not

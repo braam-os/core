@@ -1785,6 +1785,45 @@ Task<i32> serve(ProcRef p, Call *c)
     co_return 0;
 }
 
+// Where a spawn waits. A program *is* a worker now and there is no second place
+// to put one, so a host with none to give is waited out rather than failed: 10
+// ms, then 20, 50, 100, 200, 500, and a second from there on, with a line each
+// time (Concept.md §4). Every other error is the caller's to report.
+//
+// The image goes with each attempt — the request record owns it past a
+// cancelled await — so a retry reads it back rather than keeping a copy the
+// first attempt would have paid for.
+Task<Result<void>> spawn_process(Executable &exe, u32 pid, Stream err)
+{
+    constexpr u32 BACKOFF_MS[] = { 10, 20, 50, 100, 200, 500, 1000 };
+    constexpr usize LAST       = sizeof(BACKOFF_MS) / sizeof(BACKOFF_MS[0]) - 1;
+
+    for (usize n = 0;; n++) {
+        Task<Result<void>> t = proc_spawn(pid, exe.path.str(), move(exe.image), exe.meta);
+        if (!t)
+            co_return Err(Error::NoMemory);
+        Result<void> r = co_await t;
+        if (r.is_ok() || r.error() != Error::Again)
+            co_return r;
+
+        if (Task<void> s = say(err, exe.path.str(), "no worker, retrying"))
+            co_await s;
+
+        Task<Result<void>> w = sleep_ms(BACKOFF_MS[n < LAST ? n : LAST]);
+        if (!w)
+            co_return Err(Error::NoMemory);
+        CO_TRY_VOID(co_await w);
+
+        Task<Result<String>> f = read_file(exe.path.str());
+        if (!f)
+            co_return Err(Error::NoMemory);
+        Result<String> image = co_await f;
+        if (image.is_err())
+            co_return Err(image.error());
+        exe.image = move(image.value());
+    }
+}
+
 } // namespace
 
 Result<ProcMeta> exec_meta(Str image)
@@ -1806,8 +1845,8 @@ Result<ProcMeta> exec_meta(Str image)
             Str name(reinterpret_cast<const char *>(p + at), name_len);
             if (name == PROC_SECTION && end - at - name_len >= sizeof(ProcMeta)) {
                 const u8 *q = p + at + name_len;
-                ProcMeta m{ sys_get_u32(q),      sys_get_u32(q + 4),  sys_get_u32(q + 8),
-                            sys_get_u32(q + 12), sys_get_u32(q + 16), sys_get_u32(q + 20) };
+                ProcMeta m{ sys_get_u32(q), sys_get_u32(q + 4), sys_get_u32(q + 8),
+                            sys_get_u32(q + 12), sys_get_u32(q + 16) };
                 if (m.magic != PROC_MAGIC)
                     return Err(Error::Invalid);
                 // Ours, but built against another kernel. Its own error, not
@@ -1853,15 +1892,9 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
 
     ProcMeta meta = CO_TRY(exec_meta(image.value().str()));
 
-    // A binary claiming tier 1 is a contradiction — an applet has no binary.
-    // Tier 3 is asked for here and granted by the host, which falls back to
-    // tier 2 where it cannot make a worker (Concept.md §4).
-    if (meta.tier != u32(Tier::Instance) && meta.tier != u32(Tier::Worker))
-        co_return Err(Error::Invalid);
     if (meta.max_pages == 0 || meta.max_pages > PROC_MAX_PAGES)
         meta.max_pages = PROC_MAX_PAGES;
 
-    out.tier  = Tier(meta.tier);
     out.meta  = meta;
     out.path  = move(path);
     out.image = move(image.value());
@@ -1921,7 +1954,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
         bool spawned = false;
     } end{ p };
 
-    Task<Result<void>> t = proc_spawn(p->pid, exe.path.str(), move(exe.image), exe.meta, exe.tier);
+    Task<Result<void>> t = spawn_process(exe, p->pid, io.err);
     if (!t)
         co_return 1;
     if (Result<void> r = co_await t; r.is_err()) {

@@ -2,14 +2,14 @@
 #include "kernel/text.h"
 #include "proc/io.h"
 
-// A program that will not stop being asked to. It is the tier-3 demonstration
+// A program that will not stop being asked to. It is what the worker is for
 // (Concept.md §4.2): between syscalls the kernel has no hold on a process at
 // all, so the only way out of the loop below is terminating the worker it runs
-// in — which is what tier 3 buys and tier 2 cannot.
+// in.
 //
 //     spin        loops until it is killed
-//     spin N      N million turns and exits, which is how the tier's ordinary
-//                 path is exercised without waiting for a kill
+//     spin N      N million turns and exits, which is how the ordinary path is
+//                 exercised without waiting for a kill
 Task<i32> proc_main(Args args)
 {
     // volatile because an infinite loop with no side effect is not required to

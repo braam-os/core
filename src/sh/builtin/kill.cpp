@@ -1,8 +1,7 @@
 // Cancellation, which is all a kill can be for anything cooperative: a
 // coroutine stops at its next await point and unwinds by returning. A program
 // that never awaits cannot be stopped that way at all — that is what M9's
-// own-worker tier and worker.terminate() are for, and a tier-3 process really
-// does die here.
+// worker and worker.terminate() are for, and a process really does die here.
 //
 // Jobs only. `Sys::Kill` refuses anything that is not a child of the caller
 // (Concept.md §4.3), and a bare pid the shell did not start is exactly that —

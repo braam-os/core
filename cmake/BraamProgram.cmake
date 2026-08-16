@@ -1,7 +1,7 @@
 # How a Braam program is built. Used by src/cmd/ and installed with the SDK, so
 # an out-of-tree program is built the way the system's own are.
 #
-#   braam_add_program(NAME hello SOURCES hello.cpp [TIER 3|2] [LIBS ...])
+#   braam_add_program(NAME hello SOURCES hello.cpp [LIBS ...])
 #
 # BRAAM_STAMP names tools/stamp.py, BRAAM_SYSABI the kernel/sysabi.h it reads
 # PROC_ABI from; the includer sets both.
@@ -11,15 +11,11 @@ set(BRAAM_BIN_MAX_PAGES 256)
 math(EXPR BRAAM_BIN_INITIAL_BYTES "${BRAAM_BIN_INITIAL_PAGES} * 65536")
 
 function(braam_add_program)
-    cmake_parse_arguments(P "" "NAME;TIER" "SOURCES;LIBS" ${ARGN})
+    cmake_parse_arguments(P "" "NAME" "SOURCES;LIBS" ${ARGN})
     # Compared as strings: one of the programs is named `false`, which
     # if(NOT P_NAME) would dereference to exactly that.
     if("${P_NAME}" STREQUAL "" OR "${P_SOURCES}" STREQUAL "")
         message(FATAL_ERROR "braam_add_program: NAME and SOURCES are required")
-    endif()
-    # A worker of its own is what a program gets unless it asks for less.
-    if("${P_TIER}" STREQUAL "")
-        set(P_TIER 3)
     endif()
 
     # The target carries a prefix the file does not: /bin/echo is a plain name.
@@ -37,7 +33,6 @@ function(braam_add_program)
         COMMAND ${Python3_EXECUTABLE} ${BRAAM_STAMP}
                 $<TARGET_FILE:bin_${P_NAME}>
                 --sysabi ${BRAAM_SYSABI}
-                --tier ${P_TIER}
                 --initial-pages ${BRAAM_BIN_INITIAL_PAGES}
                 --max-pages ${BRAAM_BIN_MAX_PAGES}
         VERBATIM)

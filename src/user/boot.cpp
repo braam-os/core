@@ -264,9 +264,10 @@ Task<i32> init_task(const u32 &pid)
         if (!died || status == 130)
             break;
 
-        // A shell that died is replaced, at whatever tier is left to it
-        // (Concept.md §4) — but not for ever, and a shell that lived a while is
-        // not a crash loop, so its death starts the count again.
+        // A shell that died is replaced (Concept.md §4) — but not for ever, and
+        // a shell that lived a while is not a crash loop, so its death starts
+        // the count again. A host with no worker to give is not a death: the
+        // spawn waits for one rather than returning.
         tries = sched_now() - started >= RESPAWN_FLOOR_MS ? 1 : tries + 1;
         if (tries >= RESPAWN_TRIES) {
             say("braam: the shell will not stay up — reload to start again");

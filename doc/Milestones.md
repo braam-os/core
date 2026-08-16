@@ -18,6 +18,13 @@ registry. **The acceptance criteria are unchanged and still hold** — they are 
 system does, not where the code lives — but the criteria that named `echo` and `sleep` as applets
 are now met by binaries, and by `test/run.mjs` rather than by the in-wasm suite.
 
+A second such change: **the tiers are gone too**, and with them M8's *"tier selection comes from
+binary metadata"*. It is retired rather than broken — there is no selection to come from
+anywhere, since every program runs in a worker of its own and the `braam` section carries no
+placement word. Where a milestone below says tier 2 or tier 3, read it as the record of what was
+built at the time; Concept.md §4 and "Tier 2 is deleted" in Release_Notes.md are what is true
+now. Every other criterion still holds.
+
 ---
 
 ## M0 — Nucleus — **done**
