@@ -16,7 +16,7 @@ Open the page and there is a prompt:
 ```
 $ ls /bin                            # every program, one wasm file each
 $ echo hello > notes                 # files under /home survive a reload
-$ curl https://example.com | less    # a real download, into a full-screen pager
+$ curl https://www.rfc-editor.org/rfc/rfc2324.txt | less   # a download, into a pager
 $ edit notes                         # ^S saves, ^Q quits
 $ tail -n 5 /share/doc/README | wc
 $ spin &                             # a program that loops forever
