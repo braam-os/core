@@ -6,7 +6,7 @@ Braam is a small, self-contained CLI environment — kernel, scheduler, filesyst
 shell, thirty-two programs and six builtins — written from scratch in freestanding C++20 and
 compiled to WebAssembly. It has no server side, needs no special HTTP headers, and deploys as a
 static site. Nothing is linked that was not written for it: no libc, no Emscripten runtime, no
-`xterm.js`. `kernel.wasm` is 165 KiB and holds no userland at all: every program is a binary of
+`xterm.js`. `kernel.wasm` is 146 KB and holds no userland at all: every program is a binary of
 its own, in an instance of its own.
 
 Open the page and there is a prompt:
@@ -48,11 +48,12 @@ stages run concurrently over pipes with real backpressure, `^C` reaches whatever
 and hands the prompt back, and a nonzero exit status shows up in the next prompt. Background
 jobs are managed with `jobs`, `fg` and `kill`.
 
-**A filesystem.** A mount table over three filesystems: `MemFs` for `/` and `/tmp`, `BundleFs`
-serving `/bin` and `/share` as two views of one archive loaded beside the kernel, and `OpfsFs`
-on `/home` — the Origin Private File System, and the only durable one. `ProcFs` on `/proc` makes the scheduler's tasks readable as files. `df`
-reports the quota, the usage, and whether the browser promised to keep the files or merely
-intends to; with OPFS unavailable the system boots on memory and says so.
+**A filesystem.** A mount table over four filesystems: `MemFs` for `/`, with `/tmp` a directory
+inside it; `BundleFs` serving `/bin` and `/share` as two views of one archive loaded beside the
+kernel; `OpfsFs` on `/home` — the Origin Private File System, and the only durable one; and
+`ProcFs` on `/proc`, which makes the scheduler's tasks readable as files. `df` reports the quota,
+the usage, and whether the browser promised to keep the files or merely intends to; with OPFS
+unavailable the system boots on memory and says so.
 
 **Host services.** `fetch`, WebSockets, the clipboard, the file picker, downloads and a wall
 clock, reached through one multiplexed import and an `externref` table the kernel owns. So
@@ -137,7 +138,7 @@ two libraries a program links, a CMake package and the toolchain file — and
 ```cpp
 #include "proc/io.h"
 
-Task<i32> proc_main(Args args)
+Task<i32> proc_main(Args)
 {
     co_await write_all(SYS_STDOUT, "Hello, world!\n");
     co_return 0;
@@ -149,9 +150,11 @@ find_package(braam REQUIRED)
 braam_add_program(NAME hello SOURCES hello.cpp)
 ```
 
-The result is a 6 KB module, and it does not have to be in the system image to run: `exec`
-resolves a path through the ordinary filesystem, so `import` the file through the browser's
-picker and run `/mnt/import/hello.wasm`, or `curl` it into `/home` and run it there.
+The result is a 6 KB module. The toolchain compiles with `-Wall -Wextra -Werror`, which is why
+the argument this one does not use is left unnamed. It does not have to be in the system image
+to run either: `exec` resolves a path through the ordinary filesystem, so `import` the file
+through the browser's picker and run `/mnt/import/hello.wasm`, or `curl` it into `/home` and run
+it there.
 [doc/Programming_Manual.md](doc/Programming_Manual.md) is the guide, and
 [examples/hello/](examples/hello/) is the worked example the SDK installs.
 
@@ -168,27 +171,33 @@ picker and run `/mnt/import/hello.wasm`, or `curl` it into `/home` and run it th
 | [src/sh/](src/sh/) | the shell: grammar, line editor, job runtime, builtins |
 | [src/cmd/](src/cmd/) | one file per program; every program is a binary, `sh` included |
 | [web/](web/) | the page, the worker, the renderer, the host side of every ABI |
+| [bundle/](bundle/) | what goes into the boot archive beside the binaries |
+| [test/](test/) | the in-wasm unit tests, the Node driver, and the faked host |
+| [tools/](tools/) | packing the boot archive, the version stamp, the size budget, `wsd` |
+| [cmake/](cmake/) | the toolchain file and `braam_add_program`, shared with the SDK |
 | [examples/](examples/) | a program built against the installed SDK |
 
 ## Documentation
 
-[doc/Concept.md](doc/Concept.md) is the specification — the architecture and the reasoning
-behind each decision. Read it first. [doc/Release_Notes.md](doc/Release_Notes.md) explains, per
-milestone, why the code that exists looks the way it does, and holds the plan that was followed:
-M0–M9 and the acceptance criteria they were taken against — comments in the source say *what*,
-and that file says *why*. [doc/System_Calls.md](doc/System_Calls.md) is the one walkthrough: how a user process
-talks to the kernel, from the principles down to the wire, with sequence diagrams of the calls
-that actually happen and the whole syscall table in one place. [doc/Programming_Manual.md](doc/Programming_Manual.md) is for
-writing a program of your own, outside this repository.
+[doc/Concept.md](doc/Concept.md) is the specification — what the system is, and the reasoning
+behind each decision. Read it first. [doc/Release_Notes.md](doc/Release_Notes.md) says why the
+code that exists looks the way it does: comments in the source say *what*, and that file says
+*why*, a section per change. It also holds M0–M9's objectives and the twenty-two acceptance
+criteria they were taken against, which are a standing contract rather than a to-do list.
+[doc/System_Calls.md](doc/System_Calls.md) is the one walkthrough: how a user process talks to
+the kernel, from the principles down to the wire, with sequence diagrams of the calls that
+actually happen and the whole syscall table in one place.
+[doc/Programming_Manual.md](doc/Programming_Manual.md) is for writing a program of your own,
+outside this repository.
 
 ## Status
 
 Complete, as a first version. All ten milestones are done, M0 through M9: the nucleus, the
 scheduler, the screen and keyboard, the shell, streams, the filesystem, host services, the
-layout layer and job control, isolated processes, and liveness isolation. Every acceptance
-criterion is ticked and the test suite passes. Since then the kernel applet has been retired and
-every program is a binary of its own: `kernel.wasm` is about 139 KB against a 256 KiB budget,
-and the boot archive that carries the thirty-two binaries is 485 KB.
+layout layer and job control, isolated processes, and liveness isolation. Every one of the
+twenty-two acceptance criteria is met and the test suite passes. `kernel.wasm` is 146 KB against
+a 256 KiB budget, and `bundle.bin` — the thirty-two binaries plus the motd, the help text and a
+doc — is 491 KB.
 
 What is deliberately absent is recorded rather than forgotten: no `bg` and no `^Z` (stopping
 a running coroutine is the resume-side twin of cancellation and would have to reach every

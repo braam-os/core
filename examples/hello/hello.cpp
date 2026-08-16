@@ -1,5 +1,5 @@
 // The smallest Braam program that does something: it greets the world, or
-// whoever it is given. doc/SDK.md walks through it.
+// whoever it is given. doc/Programming_Manual.md walks through it.
 #include "proc/io.h"
 
 Task<i32> proc_main(Args args)
