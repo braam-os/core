@@ -722,7 +722,7 @@ so from the second call onwards something *is* in front and the shell holds neit
 place in the set it is filling. The foreground therefore belongs to whoever armed it, and the
 console records that rather than inferring it from who holds the keyboard.
 
-**A colour took one more: `style`.** The table is thirty-five, and `PROC_ABI` is 5. §2.3 says the
+**A colour took one more: `style`.** The table is thirty-five. §2.3 says the
 terminal is a cell grid rather than a byte stream, so a colour cannot be written *in* the bytes —
 there is no escape sequence to reach for, by design — and a program that has no grid of its own
 had no way to name one at all. `style` is that way: two palette indices and the `ATTR_*` bits in
@@ -733,7 +733,7 @@ refused while another process holds the alternate screen, for `cursor`'s reason:
 the alternate screen paints cells and names their colours in them. `/bin/sh` is the caller, and
 `ScreenBlit` is why there is not a second one.
 
-**And a repaint took the last one: `echo`.** The table is thirty-six, and `PROC_ABI` is 6. It is
+**And a repaint took the last one: `echo`.** The table is thirty-six, and `PROC_ABI` is 8. It is
 `cursor`'s argument one step further on. A line editor's repaint was four operations — the cursor
 to the anchor, the bytes, `cursor` again to find out what had scrolled, and the cursor to where the
 caller wanted it — for **one** change to the grid. `echo` is all four: the anchor and a cursor
@@ -741,6 +741,20 @@ offset in the payload, the bytes after them, and a reply that says where the cur
 geometry is, and how many rows the write carried the anchor up. That last number is the whole
 reason `cursor` was ever called twice, and it is a counter the screen was already in a position to
 keep.
+
+**And then a whole prompt, which is the same argument at the scale above.** A prompt is three
+colours and a reset, so it was four `style`s and three `write`s between two `cursor` gets — seven
+round trips, nine when a failed status put a fourth colour in front. So `echo`'s payload is a
+*sequence of styled runs*: a run is a style word and a length, every header ahead of every byte,
+and `SYS_STYLE_KEEP` is a run that names no colour and is therefore exactly a `write`. Two bits in
+the op word carry what the `cursor` gets were for — `FRESH` anchors wherever the cursor is, on a
+row of its own, and `END` leaves the cursor where the write ended rather than `cur` cells past the
+anchor. A prompt is one round trip, and Enter to the next one was twelve and is five.
+
+The operation still **authorises nothing new**, and that is the constraint the shape was chosen
+under rather than a happy accident: a run is a `style` and a `write`, `FRESH` is a `cursor` get and
+a conditional newline, `END` is not calling `cursor` afterwards. Every byte still goes out through
+the process's own stdout, so a redirection behaves; the refusal is still `cursor`'s.
 
 The cost being paid is §4.4's, per operation and not per byte, so a keystroke is what it falls on:
 one key was five round trips and is two. Two things follow from its being one operation rather than
@@ -750,6 +764,13 @@ operation is one tick, and the intermediate states are never presented. And a re
 straddles three windows in which another process could move the cursor under it. `/bin/sh` is the
 caller. A program that paints cells has `ScreenBlit`, which carries the cursor in the same payload
 as the cells for exactly this reason.
+
+`cursor` and `style` stay, though `echo` has left them with no caller in `src/cmd/`. The rule that
+every operation has one is a rule against *growing* the table on speculation, not one that retires
+an operation when its caller is refactored — and `echo` is deliberately their fused form for the
+one caller that pays a round trip apiece, not their replacement. A program colouring a word on
+stdout has no anchor to name and does not want a row of its own, which is the one thing `echo`
+cannot express.
 
 All the rest are asynchronous, because the synchronous half is closed and stays closed. That costs a
 park and a step even for `wait` on a child that has already exited, which is the cost model of

@@ -330,21 +330,37 @@ Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on)
     co_return co_await cursor(1, Str(reinterpret_cast<const char *>(head), sizeof(head)));
 }
 
-Task<Result<Painted>> cursor_echo(u32 x, u32 y, u32 cur, bool on, Str s)
+Task<Result<Painted>> cursor_echo(u32 x, u32 y, u32 cur, u32 flags, Span<const StyledRun> runs)
 {
-    // The anchor, then the bytes, in one buffer — as Spawn's payload is. A copy
-    // of the line per repaint, against the round trips it replaces.
-    String payload;
-    u8 head[SYS_ECHO_HEAD * 4];
+    if (runs.size() > SYS_ECHO_RUNS_MAX)
+        co_return Err(Error::Invalid);
+
+    // The anchor, then the run headers, then the bytes, in one buffer — as
+    // Spawn's payload is. A copy of the line per repaint, against the round
+    // trips it replaces.
+    u8 head[(SYS_ECHO_HEAD + SYS_ECHO_RUNS_MAX * SYS_ECHO_RUN) * 4];
     sys_put_u32(head, x);
     sys_put_u32(head + 4, y);
     sys_put_u32(head + 8, cur);
-    if (!payload.reserve(sizeof(head) + s.size()) ||
-        !payload.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) ||
-        !payload.append(s))
-        co_return Err(Error::NoMemory);
+    sys_put_u32(head + 12, u32(runs.size()));
 
-    Result<SysReply> r = co_await sys_call(Sys::Echo, on ? 1 : 0, payload.str());
+    usize at = SYS_ECHO_HEAD * 4, bytes = 0;
+    for (const StyledRun &run : runs) {
+        sys_put_u32(head + at, run.style);
+        sys_put_u32(head + at + 4, u32(run.text.size()));
+        at += SYS_ECHO_RUN * 4;
+        bytes += run.text.size();
+    }
+
+    String payload;
+    if (!payload.reserve(at + bytes) ||
+        !payload.append(Str(reinterpret_cast<const char *>(head), at)))
+        co_return Err(Error::NoMemory);
+    for (const StyledRun &run : runs)
+        if (!payload.append(run.text))
+            co_return Err(Error::NoMemory);
+
+    Result<SysReply> r = co_await sys_call(Sys::Echo, flags, payload.str());
     if (r.is_err())
         co_return Err(r.error());
     if (r.value().data.size() < 24)

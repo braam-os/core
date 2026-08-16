@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 7;
+constexpr u32 PROC_ABI       = 8;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -132,17 +132,17 @@ enum class Sys : u32 {
     // alternate screen — Cursor's rule, for Cursor's reason.
     Style, // arg = fg | bg << 8 | attrs << 16 (sys_style_pack)
 
-    // A line editor's whole repaint, in one operation: the cursor to the
-    // anchor, the bytes, and the cursor left `cur` cells past it — adjusted by
-    // whatever the write scrolled under it, which is what `scrolled` reports
-    // and what Cursor was being asked for. Cursor's rules, for Cursor's reason.
+    // A line editor's whole repaint, in one operation: the anchor, a run per
+    // colour, the bytes, and where to leave the cursor — carried up by whatever
+    // the write scrolled under it, which is what `scrolled` reports and what
+    // Cursor was being asked for. Cursor's rules, for Cursor's reason.
     //
-    // Four operations were one screen change, and the grid is presented at the
-    // end of every tick — so a keystroke painted three times where it changes
-    // the grid once, and the cursor had to be hidden to keep it from being seen
-    // walking the line.
-    Echo, // arg bit 0 = the cursor is shown afterwards
-          //   payload = u32 x, y, cur, then the bytes
+    // A run is a Style and a Write, FRESH is a Cursor get and a newline, and
+    // END is not calling Cursor afterwards: nothing four existing operations
+    // could not already do, at one round trip instead of seven.
+    Echo, // arg = SYS_ECHO_SHOW | SYS_ECHO_FRESH | SYS_ECHO_END
+          //   payload = u32 x, y, cur, runs, then runs * (u32 style, u32 len),
+          //             then the runs' bytes end to end
           //   data    = u32 x, y, on, cols, rows, scrolled
 
     // Processes. A program that supervises another one cannot be a shell
@@ -176,8 +176,22 @@ constexpr usize SYS_BLIT_HEAD = 7;
 // The three descriptor words Sys::Spawn's payload begins with, in u32s.
 constexpr usize SYS_SPAWN_HEAD = 3;
 
-// The anchor and cursor offset Sys::Echo's payload begins with, in u32s.
-constexpr usize SYS_ECHO_HEAD = 3;
+// The anchor, cursor offset and run count Sys::Echo's payload begins with, and
+// the style and length of each run header after them, in u32s. Every header
+// precedes every byte, so the whole shape is checkable in one pass.
+constexpr usize SYS_ECHO_HEAD = 4;
+constexpr usize SYS_ECHO_RUN  = 2;
+
+// The most runs one Echo may carry. A prompt is four, and an unbounded count is
+// a loop a hostile binary chooses.
+constexpr u32 SYS_ECHO_RUNS_MAX = 8;
+
+// Sys::Echo's op-word argument. FRESH anchors wherever the cursor is, on a row
+// of its own; END leaves the cursor where the write ended rather than `cur`
+// cells past the anchor.
+constexpr u32 SYS_ECHO_SHOW  = 1;
+constexpr u32 SYS_ECHO_FRESH = 2;
+constexpr u32 SYS_ECHO_END   = 4;
 
 // Sys::Wait's "whichever finishes first". Zero is never a pid.
 constexpr u32 SYS_WAIT_ANY = 0;
@@ -258,6 +272,11 @@ inline u8 sys_style_attrs(u32 arg)
 {
     return u8(arg >> 16);
 }
+
+// The style of a Sys::Echo run that names no colour: the sticky one stands, as
+// it does for a Write. Outside sys_style_pack's range, whose top byte is zero.
+constexpr u32 SYS_STYLE_KEEP = 0xffffffff;
+static_assert(SYS_STYLE_KEEP > 0x00ffffff, "SYS_STYLE_KEEP collides with sys_style_pack");
 
 // The three stdio descriptors are the stage's Stdio; anything above indexes
 // the open-file table the process record owns.

@@ -466,10 +466,36 @@ feels slow, correctly.
 
 ### What T8 did not fix
 
-`anchor()` is seven or eight round trips and `interactive()` adds a `cwd_get`, so **Enter to the
-next prompt is an order of magnitude more than a keystroke**. It is paid once a line rather than
-once a key, which is why it is not what the flip turned on — and it is the next thing anyone will
-notice.
+`anchor()` is seven round trips — nine when a failed status adds a fourth colour — and
+`interactive()` adds a `cwd_get`, so **Enter to the next prompt is an order of magnitude more than
+a keystroke**. It is paid once a line rather than once a key, which is why it is not what the flip
+turned on — and it is the next thing anyone will notice.
+
+**Done, the same way and one level up.** `Sys::Echo`'s bytes are a sequence of *styled runs* now —
+a style word and a length per run, every header ahead of every byte — and two op-word bits carry
+what the two `cursor` gets were for: `SYS_ECHO_FRESH` anchors on a row of its own, `SYS_ECHO_END`
+leaves the cursor where the write ended. So `anchor()` is one call with four runs and
+`place_cursor()` is gone. The table is still thirty-six; `PROC_ABI` is 8.
+
+**Enter to the next prompt was twelve round trips and is five**, measured rather than counted, and
+a keystroke is still two — `redraw()` sends one `SYS_STYLE_KEEP` run, which is byte-for-byte the
+old single-run payload plus a header. The five are the `Echo` for the committed line, the newline
+ending its row, the `cwd_get`, the `Echo` that draws the prompt, and the `key_read`. Five is the
+floor: the sixth would be caching the cwd, which was refused when the directory went into the
+prompt and is refused again, because a wrong prompt is believed.
+
+It also fixed a bug nobody had reported. The old leading newline rode inside the first coloured
+run, so a prompt that scrolled the grid blanked the new bottom row white-on-blue — a blue bar from
+the `$` to the right margin, every time the screen was full. `FRESH` writes it before any run's
+style.
+
+**Two operations now have no caller in the tree: `cursor` at 69 and `style` at 70.** They stay.
+Concept.md §4.3's "every operation has a caller in `src/cmd/`" is a rule against *growing* the
+table on speculation, not one that retires an operation when its caller is refactored — and `echo`
+is deliberately their fused form for the one caller that pays a round trip apiece, not their
+replacement. A program colouring a word on stdout has no anchor to name and does not want a row of
+its own. Deleting them would be free today and re-adding either would be an ABI bump that
+invalidates every stamped binary and every installed SDK.
 
 ## T9. Documentation, in the same commits as the code
 

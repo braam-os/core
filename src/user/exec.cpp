@@ -722,6 +722,23 @@ Task<void> say(Stream err, Str who, Str what)
     co_await err.write("\n");
 }
 
+// Every byte Sys::Echo writes goes through the process's own stdout, where
+// Sys::Write's go. Again is retried and a short write resumed.
+Task<Result<void>> echo_write(Stream out, Str s)
+{
+    while (!s.empty()) {
+        Result<usize> r = Err(Error::Again);
+        while (r.is_err() && r.error() == Error::Again)
+            r = co_await out.write(s);
+        if (r.is_err())
+            co_return Err(r.error());
+        if (r.value() == 0)
+            co_return Err(Error::Io);
+        s = s.substr(r.value());
+    }
+    co_return {};
+}
+
 // Performs the request the process is parked on, and builds the payload
 // _resume will hand back: an i32 status, then any data. Every wait in here is
 // the proxy task's own, so ^C reaches a process through exactly the awaitables
@@ -1513,65 +1530,127 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
         }
 
         // A line editor's whole repaint. The cursor rules are Sys::Cursor's,
-        // the bytes go where Sys::Write's go, and `scrolled` is the answer the
-        // caller used to have to go back and ask Cursor for.
+        // a run is a Sys::Style and a Sys::Write, every byte goes where
+        // Sys::Write's go, and `scrolled` is the answer the caller used to have
+        // to go back and ask Cursor for.
         case Sys::Echo: {
             u32 owner = tty_screen_owner();
             if (owner && owner != p.pid) {
                 status = -i32(Error::Perm);
                 break;
             }
-            if (payload.size() < SYS_ECHO_HEAD * 4 || !screen().cols) {
+            constexpr usize head = SYS_ECHO_HEAD * 4;
+            if (payload.size() < head || !screen().cols) {
                 status = -i32(Error::Invalid);
                 break;
             }
-            u32 x   = sys_get_u32(c.stage);
-            u32 y   = sys_get_u32(c.stage + 4);
-            u32 cur = sys_get_u32(c.stage + 8);
+            u32 x    = sys_get_u32(c.stage);
+            u32 y    = sys_get_u32(c.stage + 4);
+            u32 cur  = sys_get_u32(c.stage + 8);
+            u32 runs = sys_get_u32(c.stage + 12);
+
+            // The whole shape before a cell moves, so a malformed payload
+            // paints nothing.
+            if (runs > SYS_ECHO_RUNS_MAX) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            usize table = usize(runs) * SYS_ECHO_RUN * 4;
+            if (payload.size() < head + table) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u64 want = u64(head) + table; // a u64: eight u32 lengths overflow one
+            for (u32 i = 0; i < runs; i++)
+                want += sys_get_u32(c.stage + head + usize(i) * SYS_ECHO_RUN * 4 + 4);
+            if (want != payload.size()) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+
+            u32 arg    = sys_op_arg(c.op);
+            Stream out = p.io.out;
+            Result<void> wrote;
 
             // Dark for the write, whatever it is left as: one tick, so nothing
             // between here and the placement below is ever presented.
-            screen_move(x, y);
             screen_cursor(false);
+            u64 was = screen_scrolled();
 
-            u64 was    = screen_scrolled();
-            Str rest   = payload.substr(SYS_ECHO_HEAD * 4);
-            Stream out = p.io.out;
-            while (!rest.empty()) {
-                Result<usize> r = Err(Error::Again);
-                while (r.is_err() && r.error() == Error::Again)
-                    r = co_await out.write(rest);
-                if (r.is_err()) {
-                    if (r.error() == Error::Cancelled)
-                        co_return Err(Error::Cancelled);
-                    status = -i32(r.error());
-                    break;
+            // FRESH: the anchor is wherever the cursor is, on a row of its own.
+            // The newline goes through the Stream, so a redirected stdout sees
+            // it, and ahead of any run's style, so a scroll blanks the new row
+            // in the default colour rather than the prompt's.
+            if (arg & SYS_ECHO_FRESH) {
+                if (screen().cursor_x != 0) {
+                    if (Task<Result<void>> t = echo_write(out, "\n"))
+                        wrote = co_await t;
+                    else
+                        wrote = Err(Error::NoMemory);
                 }
-                if (r.value() == 0) {
-                    status = -i32(Error::Io);
-                    break;
+            } else
+                screen_move(x, y);
+
+            usize at = head + table;
+            for (u32 i = 0; wrote.is_ok() && i < runs; i++) {
+                const u8 *h = c.stage + head + usize(i) * SYS_ECHO_RUN * 4;
+                u32 style   = sys_get_u32(h);
+                usize len   = sys_get_u32(h + 4);
+
+                // A run naming no colour paints in the sticky one; one with no
+                // bytes only sets the colour.
+                if (style != SYS_STYLE_KEEP)
+                    screen_style(sys_style_fg(style), sys_style_bg(style), sys_style_attrs(style));
+                if (len) {
+                    if (Task<Result<void>> t = echo_write(out, payload.substr(at, len)))
+                        wrote = co_await t;
+                    else
+                        wrote = Err(Error::NoMemory);
                 }
-                rest = rest.substr(r.value());
+                at += len;
             }
-            if (!rest.empty())
-                break; // the loop above set the status
 
-            // Where the caller wants the cursor left, measured from the anchor
-            // and carried up by whatever the write scrolled under it.
             u32 scrolled = u32(screen_scrolled() - was);
-            u32 off      = x + cur;
-            u32 row      = y + off / screen().cols;
-            screen_move(off % screen().cols, row >= scrolled ? row - scrolled : 0);
-            screen_cursor((sys_op_arg(c.op) & 1) != 0);
+            if (wrote.is_err()) {
+                if (wrote.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(wrote.error());
+                break;
+            }
+            if (arg & SYS_ECHO_END) {
+                // The deferred wrap column is not one screen_move can name, so
+                // a write that filled a row is carried to the next. That can
+                // scroll, so `scrolled` is taken again after it.
+                if (screen().cursor_x >= screen().cols) {
+                    if (Task<Result<void>> t = echo_write(out, "\n"))
+                        wrote = co_await t;
+                    else
+                        wrote = Err(Error::NoMemory);
+                    scrolled = u32(screen_scrolled() - was);
+                }
+            } else {
+                // Where the caller wants the cursor left, measured from the
+                // anchor and carried up by whatever the write scrolled under it.
+                u32 off = x + cur;
+                u32 row = y + off / screen().cols;
+                screen_move(off % screen().cols, row >= scrolled ? row - scrolled : 0);
+            }
+            if (wrote.is_err()) {
+                if (wrote.error() == Error::Cancelled)
+                    co_return Err(Error::Cancelled);
+                status = -i32(wrote.error());
+                break;
+            }
+            screen_cursor((arg & SYS_ECHO_SHOW) != 0);
 
-            u8 head[24];
-            sys_put_u32(head, screen().cursor_x);
-            sys_put_u32(head + 4, screen().cursor_y);
-            sys_put_u32(head + 8, screen().cursor_on);
-            sys_put_u32(head + 12, screen().cols);
-            sys_put_u32(head + 16, screen().rows);
-            sys_put_u32(head + 20, scrolled);
-            if (!reply.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+            u8 at_head[24];
+            sys_put_u32(at_head, screen().cursor_x);
+            sys_put_u32(at_head + 4, screen().cursor_y);
+            sys_put_u32(at_head + 8, screen().cursor_on);
+            sys_put_u32(at_head + 12, screen().cols);
+            sys_put_u32(at_head + 16, screen().rows);
+            sys_put_u32(at_head + 20, scrolled);
+            if (!reply.append(Str(reinterpret_cast<const char *>(at_head), sizeof(at_head))))
                 co_return Err(Error::NoMemory);
             status = 0;
             break;

@@ -237,7 +237,7 @@ how much memory to give it. It lives in a wasm custom section named `braam`, fiv
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 7
+    u32 abi;            // PROC_ABI, currently 8
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -646,7 +646,7 @@ calls is an ABI nothing tests.
 ### Asynchronous — `sys_async(op, token, ptr, len)`
 
 Reply is `i32 status` then data. A negative status is `-Error`. Served in
-`proc_syscall`, `src/user/exec.cpp:767-1940`.
+`proc_syscall`, `src/user/exec.cpp:746-1823`.
 
 | # | Name | Op-word arg | Payload | Status | Data |
 |---|---|---|---|---|---|
@@ -676,7 +676,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 68 | `ScreenClear` | — | — | 0 | — |
 | 69 | `Cursor` | bit 0 = set, else report | `u32 x, y, on` when setting | 0 | `u32 x`, `y`, `on`, `cols`, `rows` |
 | 70 | `Style` | `fg \| bg << 8 \| attrs << 16` | — | 0 | — |
-| 71 | `Echo` | bit 0 = show the cursor after | `u32 x, y, cur`, then the bytes | 0 | `u32 x`, `y`, `on`, `cols`, `rows`, `scrolled` |
+| 71 | `Echo` | `SYS_ECHO_SHOW \| FRESH \| END` | `u32 x, y, cur, runs`, then `u32 style, len` each, then the bytes | 0 | `u32 x`, `y`, `on`, `cols`, `rows`, `scrolled` |
 | 80 | `Pipe` | — | — | 0 | `u32 read fd`, `u32 write fd` |
 | 81 | `Spawn` | — | `u32 fd0, fd1, fd2`, then the argv blob | the child's pid | — |
 | 82 | `Wait` | a pid, or `SYS_WAIT_ANY` | — | the child's status, 0–255 | `u32 pid` |
@@ -693,8 +693,8 @@ program that never spawns anything still uses it. `pwd` is its caller.
 side effect — it goes through the same `screen_write` that wraps and scrolls — and reports a byte
 count, so a program that draws a prompt has no way to know where it ended up. A *set* is refused
 with `Err(Perm)` while another process holds the alternate screen, for the reason `ScreenBlit` is;
-a get is always allowed. `/bin/sh` is the caller, at the two places a prompt starts — before it
-writes the prompt, and again to find the anchor the prompt ended on.
+a get is always allowed. It has **no caller in the tree** any more — `Echo` is what a prompt uses
+— and it stays because a program that wants to know where it is has nothing else to ask.
 
 **`Echo` is those two and a `Write` in one operation**, because a repaint is one change to the
 grid and was four round trips. The payload names the anchor and how many cells past it to leave
@@ -705,22 +705,44 @@ nothing else counts scrolls, since the grid moves under a write and `cursor_y` d
 `screen_scrolled()` is a counter the screen keeps, and the operation reports the difference across
 itself, so a resize that drops rows from the top is folded in the same way a scroll is.
 
-Its refusal and its rules are `Cursor`'s, and it needs no others: everything it can do, four calls
-could already do. What it buys is §4.4's cost paid once instead of four times — a keystroke is two
-round trips where it was five — and one *tick* instead of four, which is why the
-cursor no longer has to be hidden through a repaint. The grid is presented at the end of every
-tick, so four operations painted a keystroke three times and the cursor was visibly walking the
-line. `/bin/sh` is the caller.
+**Its bytes are a sequence of styled runs**, because a prompt is three colours and a reset and was
+seven round trips of its own. Every run header comes before every byte — `runs` of them, each a
+style word and a length — so the whole shape is checkable in one bounded pass before a cell moves:
+the count against `SYS_ECHO_RUNS_MAX`, the headers against the payload, and the lengths summed in
+a `u64` against exactly what is left. Anything else is `Err(Invalid)` and paints nothing. A run's
+style is applied even when its length is zero, which is how the default goes back on; a style of
+`SYS_STYLE_KEEP` names no colour and leaves the sticky one standing, which makes that run exactly
+a `Write`.
+
+**Two bits carry what the `Cursor` gets were for.** `SYS_ECHO_FRESH` anchors wherever the cursor
+is, on a row of its own — a newline first unless the cursor is already in column 0 — so `x` and
+`y` are ignored. `SYS_ECHO_END` leaves the cursor where the write ended, off the deferred wrap
+column, so `cur` is ignored. Both newlines go out through the `Stream` like every other byte, so a
+redirected stdout sees them; and `FRESH`'s goes out *ahead of the first run's style*, which is why
+a prompt that scrolls the grid no longer blanks the new bottom row in the prompt's own colour.
+
+Its refusal and its rules are `Cursor`'s, and it needs no others: everything it can do, `Cursor`,
+`Style` and `Write` could already do. What it buys is §4.4's cost paid once instead of per
+operation — a keystroke is two round trips where it was five, and Enter to the next prompt is five
+where it was twelve — and one *tick* instead of many, which is why the cursor no longer has to be
+hidden through a repaint. The grid is presented at the end of every tick, so a keystroke painted
+three times and a prompt seven, with the cursor visibly walking the line. `/bin/sh` is the caller.
 
 **`Style` is the colour `Write` cannot carry.** The grid is cells and not a byte stream
 (Concept.md §2.3), so there is no escape sequence to put in the bytes and the colour is an
 operation instead — two palette indices and the `ATTR_*` bits, packed into the op word's argument
 by `sys_style_pack`, so it stages nothing. It is *sticky* grid state, exactly as it is for the
-kernel's own writers: whoever sets a colour puts the default back after it. `/bin/sh` is the
-caller — a prompt in bright white with a failed status in red before it — and the reset it does
-afterwards is also what corrects a program that died mid-colour, at the next prompt. Refused with
+kernel's own writers: whoever sets a colour puts the default back after it. Refused with
 `Err(Perm)` while another process holds the alternate screen, as a cursor set is; a program that
 has the alternate screen paints its own cells and names their colours in them.
+
+Like `Cursor`, it has **no caller in the tree**: `Echo` carries the prompt's colours as runs now,
+and the reset that corrects a program which died mid-colour is the last of them. It stays for the
+same reason — `Echo` is its fused form for the one caller that pays a round trip per operation,
+not its replacement. A program colouring a word on stdout has no anchor to name and does not want
+a row of its own, which is the one thing `Echo` cannot express. Neither operation is speculative:
+Concept.md §4.3's "every operation has a caller in `src/cmd/`" bars *growing* the table on a
+guess, and re-adding either later would cost an ABI bump that invalidates every stamped binary.
 
 **`Fg` decides where `^C` goes.** The console keeps a set of foreground pids; the pump cancels
 them all on `^C`, and delivers the interrupt as an ordinary key to whoever holds the raw route
@@ -770,6 +792,11 @@ the page with it.
 | `SYS_KIND_FILE`/`DIR` | 0, 1 | what `Stat` and `List` report |
 | `SYS_STORE_*` | 1, 2, 4, 8 | OPFS, sync, persisted, and "the host answered at all" |
 | `SYS_SPAWN_HEAD` | 3 | the descriptor words before `Spawn`'s argv blob, in `u32`s |
+| `SYS_ECHO_HEAD` | 4 | `Echo`'s anchor, cursor offset and run count, in `u32`s |
+| `SYS_ECHO_RUN` | 2 | the style and length of one `Echo` run, in `u32`s |
+| `SYS_ECHO_RUNS_MAX` | 8 | runs per `Echo`; a prompt is four |
+| `SYS_ECHO_SHOW`/`FRESH`/`END` | 1, 2, 4 | show the cursor after, anchor on a fresh row, end where the write did |
+| `SYS_STYLE_KEEP` | 0xffffffff | an `Echo` run naming no colour, so the sticky one stands |
 | `SYS_WAIT_ANY` | 0 | `Wait`'s "whichever finishes first"; zero is never a pid |
 | `SYS_PID_MAX` | 0xffffff | the largest pid `Wait` and `Kill` can name — the op word's arg is 24 bits |
 | `SYS_CHILD_MAX` | 16 | live children per process |

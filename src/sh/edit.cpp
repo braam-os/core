@@ -12,48 +12,7 @@ bool is_word(char32_t c)
     return c != ' ' && c != '\t';
 }
 
-// One run of the prompt: the colour, then the bytes. Empty text sets the style
-// and writes nothing, which is how the default goes back on afterwards.
-Task<Result<void>> put_styled(u8 fg, u8 bg, Str s)
-{
-    if (Task<Result<void>> t = style_set(fg, bg, 0)) {
-        if (Result<void> r = co_await t; r.is_err())
-            co_return Err(r.error());
-    } else
-        co_return Err(Error::NoMemory);
-
-    if (s.empty())
-        co_return {};
-
-    if (Task<Result<void>> t = write_all(SYS_STDOUT, s)) {
-        if (Result<void> r = co_await t; r.is_err())
-            co_return Err(r.error());
-    } else
-        co_return Err(Error::NoMemory);
-    co_return {};
-}
-
 } // namespace
-
-Task<Result<void>> LineEditor::place_cursor()
-{
-    if (!cols_)
-        co_return {};
-
-    // At an exact multiple of cols the wrap column is unreachable, and column
-    // 0 of the next row is where the next character actually lands — which the
-    // division already gives.
-    usize off                = x0_ + cur_;
-    Task<Result<CursorAt>> t = cursor_set(u32(off % cols_), y0_ + u32(off / cols_), true);
-    if (!t)
-        co_return Err(Error::NoMemory);
-    Result<CursorAt> r = co_await t;
-    if (r.is_err())
-        co_return Err(r.error());
-    cols_ = r.value().at.cols;
-    rows_ = r.value().at.rows;
-    co_return {};
-}
 
 // One unconditional repaint from the anchor. There is no erase-to-end-of-line,
 // so the tail of a shortened line is blanked by hand — and the whole thing is
@@ -78,8 +37,10 @@ Task<Result<void>> LineEditor::redraw()
 
     // Anchor, bytes and cursor in one operation, so one tick and one present:
     // nothing hides the cursor because it is never seen walking the line, and
-    // nothing asks where the write ended because `scrolled` says.
-    Task<Result<Painted>> t = cursor_echo(x0_, y0_, cur_, true, out.str());
+    // nothing asks where the write ended because `scrolled` says. One run, in
+    // whatever colour the prompt left sticky.
+    const StyledRun runs[]  = { { SYS_STYLE_KEEP, out.str() } };
+    Task<Result<Painted>> t = cursor_echo(x0_, y0_, cur_, SYS_ECHO_SHOW, runs);
     if (!t)
         co_return Err(Error::NoMemory);
     Result<Painted> r = co_await t;
@@ -92,86 +53,34 @@ Task<Result<void>> LineEditor::redraw()
     co_return {};
 }
 
-// The prompt goes out first and the anchor is where it ends — on a column the
-// cursor can be set to, which the deferred wrap column is not.
+// The prompt, the anchor and the cursor in one operation: a run per colour, a
+// last run with no bytes to put the default back under what is typed, and the
+// two flags that ask for a fresh row and for the cursor where the write ended.
+// An empty status or directory is an empty run rather than a skipped one, so
+// the count is always four.
 Task<Result<void>> LineEditor::anchor(Prompt prompt)
 {
-    Task<Result<CursorAt>> t = cursor_get();
+    const StyledRun runs[] = {
+        { sys_style_pack(COLOR_RED, COLOR_BLACK, 0), prompt.status },
+        { sys_style_pack(COLOR_WHITE, COLOR_BLUE, 0), prompt.dir },
+        { sys_style_pack(COLOR_WHITE | COLOR_BRIGHT, COLOR_BLACK, 0), prompt.text },
+        { sys_style_pack(COLOR_WHITE, COLOR_BLACK, 0), Str() },
+    };
+
+    Task<Result<Painted>> t =
+        cursor_echo(0, 0, 0, SYS_ECHO_FRESH | SYS_ECHO_END | SYS_ECHO_SHOW, runs);
     if (!t)
         co_return Err(Error::NoMemory);
-    Result<CursorAt> at = co_await t;
-    if (at.is_err())
-        co_return Err(at.error());
+    Result<Painted> r = co_await t;
+    if (r.is_err())
+        co_return Err(r.error());
 
-    // A newline paints no cell, so it rides with whichever run goes out first
-    // whatever colour that run is in.
-    String out;
-    if (at.value().x != 0 && !out.push('\n'))
-        co_return Err(Error::NoMemory);
-
-    if (!prompt.status.empty()) {
-        if (!out.append(prompt.status))
-            co_return Err(Error::NoMemory);
-        if (Task<Result<void>> w = put_styled(COLOR_RED, COLOR_BLACK, out.str())) {
-            if (Result<void> r = co_await w; r.is_err())
-                co_return Err(r.error());
-        } else
-            co_return Err(Error::NoMemory);
-        out.clear();
-    }
-
-    if (!prompt.dir.empty()) {
-        if (!out.append(prompt.dir))
-            co_return Err(Error::NoMemory);
-        if (Task<Result<void>> w = put_styled(COLOR_WHITE, COLOR_BLUE, out.str())) {
-            if (Result<void> r = co_await w; r.is_err())
-                co_return Err(r.error());
-        } else
-            co_return Err(Error::NoMemory);
-        out.clear();
-    }
-
-    if (!out.append(prompt.text))
-        co_return Err(Error::NoMemory);
-    if (Task<Result<void>> w = put_styled(COLOR_WHITE | COLOR_BRIGHT, COLOR_BLACK, out.str())) {
-        if (Result<void> r = co_await w; r.is_err())
-            co_return Err(r.error());
-    } else
-        co_return Err(Error::NoMemory);
-
-    // Back to the default, so what is typed under it is ordinary text and so
-    // that a program the line starts inherits nothing.
-    if (Task<Result<void>> w = put_styled(COLOR_WHITE, COLOR_BLACK, Str())) {
-        if (Result<void> r = co_await w; r.is_err())
-            co_return Err(r.error());
-    } else
-        co_return Err(Error::NoMemory);
-
-    t = cursor_get();
-    if (!t)
-        co_return Err(Error::NoMemory);
-    at = co_await t;
-    if (at.is_err())
-        co_return Err(at.error());
-    cols_ = at.value().at.cols;
-    rows_ = at.value().at.rows;
-
-    if (at.value().x >= cols_) {
-        if (Task<Result<void>> w = write_all(SYS_STDOUT, "\n")) {
-            if (Result<void> r = co_await w; r.is_err())
-                co_return Err(r.error());
-        } else
-            co_return Err(Error::NoMemory);
-        t = cursor_get();
-        if (!t)
-            co_return Err(Error::NoMemory);
-        at = co_await t;
-        if (at.is_err())
-            co_return Err(at.error());
-    }
-
-    x0_ = at.value().x;
-    y0_ = at.value().y;
+    // Straight from the reply, not through `scrolled`: under END the reply is
+    // where the write ended, wrap column and resize and all.
+    x0_   = r.value().cursor.x;
+    y0_   = r.value().cursor.y;
+    cols_ = r.value().cursor.at.cols;
+    rows_ = r.value().cursor.at.rows;
     co_return {};
 }
 
@@ -243,12 +152,6 @@ Task<Result<Line>> LineEditor::read_line(Prompt prompt)
     hist_    = history_.size();
 
     if (Task<Result<void>> t = anchor(prompt)) {
-        if (Result<void> r = co_await t; r.is_err())
-            co_return Err(r.error());
-    } else
-        co_return Err(Error::NoMemory);
-
-    if (Task<Result<void>> t = place_cursor()) {
         if (Result<void> r = co_await t; r.is_err())
             co_return Err(r.error());
     } else

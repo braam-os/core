@@ -7,6 +7,80 @@ of the two needs amending.
 
 ---
 
+## A prompt is one syscall
+
+doc/TODO.md T8 cut the keystroke and said outright what it had not cut: `anchor()` is seven round
+trips, `interactive()` adds a `cwd_get`, and *"Enter to the next prompt is an order of magnitude
+more than a keystroke — the next thing anyone will notice"*. This is that.
+
+**Enter to the next prompt was twelve round trips and is five**, measured the way the keystroke
+was — `net.proc.stats().calls` across one Enter at an empty prompt in `test/run.mjs`'s driver
+reads 12 before and 5 after, and a keystroke reads 2 either side. Both spans run from one parked
+`key_read` to the next, so the five are the `Echo` that repaints the committed line, the newline
+that ends its row, the `cwd_get` the next prompt names, the `Echo` that draws it, and the
+`key_read`. The seven that went were `anchor()`'s: a `cursor` get, a `style`+`write` for the
+directory, a `style`+`write` for the prompt proper, a `style` to put the default back, a second
+`cursor` get — nine when a failed status put a fourth colour in front — plus the `cursor` set that
+followed it.
+
+**`Sys::Echo`'s bytes are a sequence of styled runs.** A run is a style word and a length, every
+header ahead of every byte; `SYS_ECHO_FRESH` and `SYS_ECHO_END` in the op word carry what the two
+`cursor` gets were for. The §4.3 table is still thirty-six and `PROC_ABI` is 8. `anchor()` is one
+call with four runs — red status, white-on-blue directory, bright-white prompt, and a run with no
+bytes that puts the default back — and `redraw()` is one run of `SYS_STYLE_KEEP`, which is why the
+keystroke is unchanged rather than merely un-regressed.
+
+Four things are worth recording about the shape it took.
+
+- **`SYS_STYLE_KEEP` is load-bearing, not a convenience.** Without a style that means *leave the
+  sticky one alone*, a run could not be exactly a `Write`, and `Echo` would stop being a
+  composition of operations that already exist — which is the sentence the previous note rests on
+  and the constraint this one was designed under. A run is a `Style` and a `Write`, `FRESH` is a
+  `Cursor` get and a conditional newline, `END` is not calling `Cursor` afterwards. Nothing here
+  reaches a cell, a claim or a stream the caller could not already reach.
+- **It fixed a colour bug nobody had reported.** `blank()` takes the *current* `g_fg`/`g_bg`, and
+  `scroll()` clears the new bottom row with it. The old `anchor()` put its leading newline inside
+  the first non-empty coloured run, so with a directory and no failed status that newline went out
+  white-on-blue — and every prompt drawn at the bottom of a full screen left a blue bar from the
+  `$` to the right margin. `FRESH` writes it before any run's style. It is the concrete form of
+  "whoever sets a colour puts the default back", violated for exactly one byte, and `test/run.mjs`
+  pins it now: six `echo -n`s on a 24×4 grid, then every column past the prompt must be on black.
+- **Two bits rather than one.** `FRESH` and `END` answer different questions — where the write
+  starts, where the cursor rests — and each independently kills one payload field, `FRESH` the
+  anchor and `END` the cursor offset. One combined bit would have retired all three fields at once
+  and left the next reader wondering why they were in the payload at all. Neither is a sentinel in
+  `x`/`y` either: `FRESH` is an action, not a coordinate, and a sentinel would be invisible in the
+  constants table.
+- **The `cwd_get` stays, and that is a decision.** A prompt at four round trips instead of five is
+  available for the price of `cd` stashing what `cwd_set` already hands back. It was refused when
+  the directory went into the prompt and it is refused again for the same reason: `cd` being the
+  only thing that moves the shell is true today and is not a property anything enforces, and a
+  wrong prompt is believed. Five is the floor while that holds.
+
+The rejected alternatives. **Keeping a thin `cursor_echo(…, bool on, Str s)` overload** for
+`redraw()` would have made `cursor_echo(x, y, cur, 1, s)` convert to both `bool` and `u32` — a
+trap `-Werror` does not catch — and it could not have been a plain forwarder, because a `Task` is
+eager and a local `StyledRun` on a forwarder's stack would be correct only by accident; making it
+a real coroutine costs a second frame per keystroke, on the one path this change exists to
+protect. `redraw()` builds a one-element array instead. **Deleting `Cursor` and `Style`**, which
+this leaves with no caller in the tree, was refused: `Echo` is their fused form for the caller
+that pays a round trip apiece, not their replacement, and a program colouring a word on stdout has
+no anchor to name and does not want a row of its own. Deleting now is free and re-adding later is
+an ABI bump that invalidates every stamped binary and every installed SDK. **A third bit `HERE`**
+— anchor at the cursor, no newline — would have let `Echo` subsume `Style`+`Write` and taken the
+table to thirty-four, but it makes the cheap thing require the expensive shape and adds a bit with
+no caller in `src/cmd/`, breaking the rule it is invoked to satisfy. **Interleaving the run
+headers with their bytes** costs the single bounded validation pass: with the headers first the
+kernel checks the count, the table and the summed lengths before it reads a byte, rather than
+deriving each bound from the previous read the way `argv_at` has to.
+
+One correction while here: the alignment argument for headers-first, which is the obvious one, is
+false in this codebase. `sys_get_u32` is four byte loads and nothing in a staged payload is ever
+an aligned access — `ScreenBlit` is the one place alignment matters, and that is why *its* header
+is a fixed seven words.
+
+---
+
 ## Tier 2 is deleted
 
 Every binary in the tree has asked for a worker of its own since T8, and `stamp.py --tier` has
@@ -228,10 +302,12 @@ all — is 5 → 2 for plain typing, but only for typing: backspace, the arrows,
 history recall all stay at five, and it costs the invariant that `redraw()` is one unconditional
 repaint, which is what keeps the editor right across a resize, a `^L` and the deferred wrap column.
 
-**What is still five is a whole line.** `anchor()` costs seven or eight round trips — two
-`cursor_get`s and three `put_styled`s of a `style` and a `write` each — and `interactive()` adds a
-`cwd_get` per line. That is the Enter-to-next-prompt cost, and it is the next thing anyone will
-notice; it is not this change, because it is paid once a line rather than once a key.
+**What is still five is a whole line.** `anchor()` costs seven round trips — two `cursor_get`s and
+three `put_styled`s of a `style` and a `write` each, nine when a failed status adds a fourth
+colour — and `interactive()` adds a `cwd_get` per line. That is the Enter-to-next-prompt cost, and
+it is the next thing anyone will notice; it is not this change, because it is paid once a line
+rather than once a key. *(It was the next thing: "A prompt is one syscall", above, took the whole
+line to five.)*
 
 ## The shell gets a pid, and `Sys::Fg` gets the rule it meant
 

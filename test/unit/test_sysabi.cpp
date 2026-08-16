@@ -1,4 +1,5 @@
 #include "harness.h"
+#include "kernel/screen.h"
 #include "kernel/string.h"
 #include "kernel/sysabi.h"
 #include "user/exec.h"
@@ -137,6 +138,40 @@ void test_sysabi()
     CHECK_EQ(sys_get_u32(q + 8), SYS_STDERR);
     CHECK_EQ(argv_count(q + SYS_SPAWN_HEAD * 4, req.size() - SYS_SPAWN_HEAD * 4), 4);
     CHECK(argv_at(q + SYS_SPAWN_HEAD * 4, req.size() - SYS_SPAWN_HEAD * 4, 0) == "tail");
+
+    // Sys::Echo's payload is the anchor, then a header per run, then the runs'
+    // bytes end to end — every header before every byte, so the kernel can
+    // check the whole shape before it reads any of it.
+    String paint;
+    u8 anchor[(SYS_ECHO_HEAD + 2 * SYS_ECHO_RUN) * 4];
+    sys_put_u32(anchor, 3);      // x
+    sys_put_u32(anchor + 4, 7);  // y
+    sys_put_u32(anchor + 8, 2);  // cur
+    sys_put_u32(anchor + 12, 2); // runs
+    sys_put_u32(anchor + 16, sys_style_pack(COLOR_WHITE, COLOR_BLUE, 0));
+    sys_put_u32(anchor + 20, 4);
+    sys_put_u32(anchor + 24, SYS_STYLE_KEEP);
+    sys_put_u32(anchor + 28, 0); // a run with no bytes only sets the colour
+    CHECK(paint.append(Str(reinterpret_cast<const char *>(anchor), sizeof(anchor))));
+    CHECK(paint.append("home"));
+
+    const u8 *e = reinterpret_cast<const u8 *>(paint.data());
+    CHECK_EQ(sys_get_u32(e + 12), 2u);
+    u64 want = u64(SYS_ECHO_HEAD * 4) + 2 * SYS_ECHO_RUN * 4;
+    for (u32 i = 0; i < 2; i++)
+        want += sys_get_u32(e + SYS_ECHO_HEAD * 4 + usize(i) * SYS_ECHO_RUN * 4 + 4);
+    CHECK_EQ(want, paint.size());
+    CHECK_EQ(sys_style_bg(sys_get_u32(e + 16)), COLOR_BLUE);
+    CHECK(Str(paint.data() + (SYS_ECHO_HEAD + 2 * SYS_ECHO_RUN) * 4, 4) == "home");
+
+    // The sentinel that leaves the sticky colour alone is outside every style a
+    // caller could name, so the two cannot be confused.
+    CHECK(SYS_STYLE_KEEP != sys_style_pack(0xff, 0xff, 0xff));
+
+    // The three flags share the op word's argument with nothing else.
+    u32 op = sys_op(Sys::Echo, SYS_ECHO_SHOW | SYS_ECHO_FRESH | SYS_ECHO_END);
+    CHECK(sys_op_code(op) == Sys::Echo);
+    CHECK_EQ(sys_op_arg(op), SYS_ECHO_SHOW | SYS_ECHO_FRESH | SYS_ECHO_END);
 
     // The metadata is what says how much memory a process gets, and it is found
     // after any number of sections the parser does not care about.

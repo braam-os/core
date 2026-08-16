@@ -5,6 +5,7 @@
 // of the Stream/Source machinery is needed to bridge a synchronous read.
 #pragma once
 
+#include "kernel/span.h"
 #include "kernel/str.h"
 #include "kernel/string.h"
 #include "kernel/task.h"
@@ -149,16 +150,24 @@ Task<Result<CursorAt>> cursor_get();
 
 Task<Result<CursorAt>> cursor_set(u32 x, u32 y, bool on);
 
-// A repaint, in one call: the cursor to the anchor (x, y), the bytes, then the
-// cursor left `cur` cells past the anchor. `scrolled` is how far the anchor row
-// went up while the write was happening, which is the only thing a caller could
-// not work out for itself.
+// One run of a repaint: the colour it paints in, and the bytes. SYS_STYLE_KEEP
+// leaves the sticky style alone; no text sets the colour and paints nothing.
+struct StyledRun {
+    u32 style = SYS_STYLE_KEEP;
+    Str text;
+};
+
+// A repaint, in one call: the cursor to the anchor (x, y), a run per colour,
+// then the cursor left `cur` cells past the anchor. `scrolled` is how far the
+// anchor row went up while the write was happening, which is the only thing a
+// caller could not work out for itself.
 struct Painted {
     CursorAt cursor;
     u32 scrolled = 0;
 };
 
-Task<Result<Painted>> cursor_echo(u32 x, u32 y, u32 cur, bool on, Str s);
+// `flags` is SYS_ECHO_SHOW, FRESH and END of sysabi.h.
+Task<Result<Painted>> cursor_echo(u32 x, u32 y, u32 cur, u32 flags, Span<const StyledRun> runs);
 
 // The colours the next write paints with — COLOR_* and ATTR_* of screen.h. The
 // grid is cells, so a colour is not in the bytes; and it is sticky, so a

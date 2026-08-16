@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **The plan is finished: M0–M9 are all done.** Since then the kernel applet has been retired and
 then the shell followed it: every program is a binary, including `/bin/sh`, and thirty-two of
 them live in `src/cmd/` with the shell's own parts in `src/sh/`. There is no in-kernel program of
-any kind and no program registry. `kernel.wasm` is about 141 KB against a 256 KiB budget and
-`bundle.bin` is 497 KB; the wasm ABI is still six imports and nine exports, and the three CTest
+any kind and no program registry. `kernel.wasm` is about 146 KB against a 256 KiB budget and
+`bundle.bin` is 491 KB; the wasm ABI is still six imports and nine exports, and the three CTest
 cases pass. Work here is change to a working system, so the bar is that nothing above regresses,
 and Milestones.md is history rather than a to-do list.
 
@@ -149,6 +149,19 @@ a worker is waited out rather than fallen back on**: the spawn is refused with `
 indefinitely, saying `no worker, retrying` on the program's own stderr, which `^C` abandons like
 any other await. `make bench` went with the tier it was built to A/B — the target, `web/bench.*`
 and `tools/bench.mjs` are deleted — and doc/TODO.md is a record rather than a harness.
+
+**And then a whole prompt became one syscall.** doc/TODO.md T8's leftover, the same argument one
+level up: `echo`'s bytes are a sequence of *styled runs* — a style word and a length per run,
+every header ahead of every byte, `SYS_STYLE_KEEP` for a run that names no colour — and two
+op-word bits carry what the two `cursor` gets were for, `SYS_ECHO_FRESH` anchoring on a row of its
+own and `SYS_ECHO_END` leaving the cursor where the write ended. So `anchor()` in `src/sh/edit.cpp`
+is one call with four runs, `put_styled` and `place_cursor` are gone, and **Enter to the next
+prompt was twelve round trips and is five** while a keystroke is still two. The table is still
+thirty-six and `PROC_ABI` is 8. It also fixed a blue bar nobody had reported: the old leading
+newline rode inside the first coloured run, so a prompt that scrolled a full screen blanked the new
+bottom row in the prompt's own colour. Two operations are left with no caller in the tree — `cursor`
+at 69 and `style` at 70 — and both stay, because `echo` is their fused form for the caller that
+pays a round trip apiece, not their replacement.
 
 **[doc/Concept.md](doc/Concept.md) is the specification.** Read it before doing anything
 substantive — it carries decisions whose rationale is not recoverable from the code. It is
@@ -563,14 +576,14 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   a megabyte through three processes, and **decided against T6** — a bigger chunk or a batched
   step protocol — because nothing written for this system can perceive it. A workload that moves
   megabytes is what would reopen it, not a better figure.
-- **A whole line costs an order of magnitude more than a keystroke.** `anchor()` in
-  `src/sh/edit.cpp` is seven or eight round trips — two `cursor_get`s and three `style`+`write`
-  pairs for the coloured runs — and `interactive()` adds a `cwd_get` per line. T8 cut the
-  *keystroke* because that is what sustained typing pays; Enter to the next prompt was not what
-  the flip turned on, and is the next thing anyone will notice.
-- **The boot archive is ~497 KB**, against 47 KB when four programs were binaries. That is §4.4's
+- **A whole line still costs more than a keystroke, and five is its floor.** Enter to the next
+  prompt is five round trips against a keystroke's two: the `echo` for the committed line, the
+  newline ending its row, the `cwd_get`, the `echo` that draws the prompt, and the `key_read`. The
+  sixth would be caching the cwd, which is refused — a wrong prompt is believed — so the only way
+  below five is fusing the keyboard into the paint, which would be a worse ABI than it saved.
+- **The boot archive is ~491 KB**, against 47 KB when four programs were binaries. That is §4.4's
   duplication: every binary carries the allocator, the string types and the coroutine runtime,
-  and `sh.wasm` is 86 KB of it. `bundle.bin` carries a size budget and the binaries under it do
+  and `sh.wasm` is 81 KB of it. `bundle.bin` carries a size budget and the binaries under it do
   not, so that one number is where the duplication stays visible.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything that is not a child of
   the caller, and a bare pid the shell never started is exactly that.

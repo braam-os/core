@@ -227,7 +227,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 7)
+        if (m[0] !== 0x6d617262 || m[1] !== 8)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         if (m[4] !== 256)
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
@@ -276,8 +276,8 @@ if (mode === "--kernel") {
     if (row(s, s.cursor_y) !== prompt())
         fail(`the boot prompt is ${row(s, s.cursor_y)}, expected ${prompt()}`);
     // The directory is white on blue, the space beside it is not, and the $ is
-    // bright white: three runs, three Sys::Style calls. COLOR_WHITE is 7,
-    // COLOR_BLUE is 4 and COLOR_BLACK is 0.
+    // bright white: three of one Sys::Echo's four runs, the fourth being the
+    // reset. COLOR_WHITE is 7, COLOR_BLUE is 4 and COLOR_BLACK is 0.
     const dir_end = prompt().length - 2; // "home" is columns 0..3
     if (cell(s, 0, s.cursor_y).fg !== 7 || cell(s, 0, s.cursor_y).bg !== 4)
         fail(`the cwd is ${JSON.stringify(cell(s, 0, s.cursor_y))}, expected white on blue`);
@@ -435,8 +435,8 @@ if (mode === "--kernel") {
     s = submit("false", 1060);
     if (!rows(s).includes(prompt(1)))
         fail(`a failing program left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
-    // And it is red, ahead of the cwd on blue and the bright white $: three
-    // runs, three Sys::Style calls. COLOR_RED is 1.
+    // And it is red, ahead of the cwd on blue and the bright white $: three of
+    // the four runs one Sys::Echo carries. COLOR_RED is 1.
     if (cell(s, 0, s.cursor_y).fg !== 1)
         fail(`the status is colour ${cell(s, 0, s.cursor_y).fg}, expected red`);
     if (cell(s, 4, s.cursor_y).bg !== 4)
@@ -481,10 +481,10 @@ if (mode === "--kernel") {
     // every cell the editor drew and the cell the cursor left — that one has to
     // repaint or it ghosts.
     //
-    // A keystroke is several ticks rather than one now. The editor is a program
-    // (Concept.md §4), so repainting a line is a handful of syscalls and each is
-    // a step of its own; what M2 asked for was one present per *tick*, and that
-    // is still exactly what happens.
+    // The editor is a program (Concept.md §4), so every operation it makes is a
+    // step of its own; what M2 asked for was one present per *tick*, and that is
+    // still exactly what happens. Since Sys::Echo carries the whole repaint,
+    // both a keystroke and a whole prompt are one tick.
     presented.length = 0;
     ticks = 0;
     const x0 = s.cursor_x;
@@ -504,6 +504,33 @@ if (mode === "--kernel") {
     }));
     if (r.x > x0 || r.y > y0 || r.x + r.w < s.cursor_x + 1 || r.y + r.h <= y0)
         fail(`presents ${r.x},${r.y} ${r.w}x${r.h} miss ${x0}..${s.cursor_x},${y0}`);
+
+    // §4.4's cost is per operation, so the count is the measurement — and it is
+    // measured rather than read off the source, where a wrapper that grew a
+    // call would not show. Both spans run from one parked key_read to the next.
+    // A keystroke is the Echo that repaints and that key_read. Enter is that
+    // Echo, the newline ending the row, the cwd the next prompt names, the Echo
+    // that draws it, and the key_read: the directory is asked for every line on
+    // purpose, since a stale prompt is believed.
+    const calls = () => net.proc.stats().calls;
+    let was = calls();
+    type("x");
+    run(1121);
+    if (calls() - was !== 2)
+        fail(`a keystroke costs ${calls() - was} round trips, expected 2`);
+
+    press("u".codePointAt(0), CTRL); // an empty line, so the count is the prompt's
+    run(1122);
+    was = calls();
+    press(KEY.ENTER);
+    run(1123);
+    if (calls() - was !== 5)
+        fail(`Enter to the next prompt costs ${calls() - was} round trips, expected 5`);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`an empty line left ${row(s, s.cursor_y)}, expected ${prompt()}`);
+    type("hi"); // what the resize below reflows
+    run(1124);
 
     // M2's second criterion: resize reflows, keeping the rows in use.
     addr = instance.exports.resize(20, 2);
@@ -1610,6 +1637,50 @@ if (mode === "--kernel") {
     s = submit("echo narrow", 9230.5);
     if (!rows(s).includes("narrow"))
         fail(`the shell did not survive the narrow screen: ${JSON.stringify(rows(s))}`);
+
+    // SYS_ECHO_FRESH: output that does not end its row leaves the cursor mid-
+    // line, and the prompt must open one of its own rather than land beside it.
+    s = submit("echo -n tail", 9230.6);
+    if (!rows(s).some((line) => line === "tail"))
+        fail(`echo -n did not get a row of its own: ${JSON.stringify(rows(s))}`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`the prompt after echo -n is ${row(s, s.cursor_y)}, expected ${prompt()}`);
+
+    // And the newline that opens that row goes out before any run's style, so a
+    // scroll blanks the new bottom row in the default colour. It did not when
+    // the newline rode with the first coloured run: screen.cpp's blank() takes
+    // the sticky colour, so every prompt at the bottom of a full screen left a
+    // blue bar from the $ to the right margin.
+    addr = instance.exports.resize(24, 4);
+    s = submit("clear", 9230.7);
+    for (let i = 0; i < 6; i++)
+        s = submit("echo -n filling", 9230.71 + i / 100);
+    for (let x = prompt().length; x < s.cols; x++)
+        if (cell(s, x, s.cursor_y).bg !== 0)
+            fail(`column ${x} past the prompt is on ${cell(s, x, s.cursor_y).bg}, expected black`);
+    addr = instance.exports.resize(60, 16);
+    s = submit("clear", 9230.8);
+
+    // ^L: the screen goes, the prompt is redrawn at the top with the line still
+    // on it, and the cursor lands after what was typed. That last part used to
+    // be a cursor_set of its own after the prompt; SYS_ECHO_END is what places
+    // it now, and this is the case that says so.
+    s = submit("echo scrollback", 9230.9);
+    type("keep me");
+    run(9230.91);
+    press("l".codePointAt(0), CTRL);
+    run(9230.92);
+    s = descriptor(addr);
+    if (rows(s).some((line) => line.includes("scrollback")))
+        fail(`^L left the screen behind: ${JSON.stringify(rows(s))}`);
+    if (s.cursor_y !== 0)
+        fail(`^L drew the prompt on row ${s.cursor_y}, expected the top`);
+    if (row(s, 0) !== `${prompt()} keep me`)
+        fail(`^L left ${JSON.stringify(row(s, 0))}, expected the line`);
+    if (s.cursor_x !== prompt().length + 1 + "keep me".length)
+        fail(`^L left the cursor at column ${s.cursor_x}`);
+    press("c".codePointAt(0), CTRL);
+    run(9230.93);
 
     // From here to `exit`, every case takes a worker away — and the shell is
     // one of the processes holding one, so each of them kills it and init

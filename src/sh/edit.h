@@ -1,7 +1,7 @@
 // The line discipline, in userland and now inside a *program* (Concept.md
-// §3.5): history, cursor movement and kill-word, over the two operations a
-// prompt needs — Write, which wraps and scrolls the screen exactly as it always
-// did, and Cursor, which says where that left off.
+// §3.5): history, cursor movement and kill-word, over the one operation a
+// prompt needs — Echo, which paints a run per colour, wraps and scrolls exactly
+// as Write does, and says where that left off.
 //
 // There is no termios state machine and no escape sequence anywhere in it, and
 // there was none when this was kernel code either. What changed is that every
@@ -48,7 +48,6 @@ struct LineEditor {
 
 private:
     Task<Result<void>> redraw();
-    Task<Result<void>> place_cursor();
     Task<Result<void>> anchor(Prompt prompt);
     bool set_text(Str utf8);
     bool set_text(const Vec<char32_t> &from);
