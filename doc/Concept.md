@@ -882,9 +882,9 @@ call inside one worker would have been a call and one copy. A syscall-bound prog
 `SYS_CHUNK`.
 
 *Measured* since, at 0.2.44 and again at 0.2.47, in three engines: **34–45 µs** a round trip, not
-the 0.1 ms this section estimated, and unmoved by putting every program in a worker. doc/TODO.md
-T1 and T5 have the numbers, the method, and the decision not to cut the number of round trips in
-bulk I/O.
+the 0.1 ms this section estimated, and unmoved by putting every program in a worker.
+doc/Release_Notes.md opens with the numbers, the method, and the decision not to cut the number of
+round trips in bulk I/O.
 
 What that leaves on the interactive path is the *line* rather than the key. A keystroke is two
 round trips — a key, then a repaint, which `echo` (§4.3) made one operation — but `anchor()` costs

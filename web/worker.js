@@ -265,7 +265,7 @@ self.onmessage = ({ data }) => {
         return;
     }
 
-    // What the measurement reads (doc/TODO.md T1). Answered before the kernel
+    // What the measurement read (doc/Release_Notes.md). Answered before the kernel
     // exists too, so a driver can poll from the moment it mounts, and it draws
     // nothing: a `selectall` poll would repaint the grid it is timing.
     if (data.kind === "stats") {

@@ -96,7 +96,8 @@ points into a `String` the loop body owns — `Prompt`'s `Str`s are non-owning a
 is not a literal. `test/run.mjs` composes the expected prompt from the directory it is in rather
 than spelling it.
 
-**And every program took a worker.** doc/TODO.md T3: a worker of its own became what
+**And every program took a worker.** T3 of the worker plan, whose items are cited as T1–T9 and
+whose record and figures are in doc/Release_Notes.md: a worker of its own became what
 `cmake/BraamProgram.cmake` gives a program by default, so a program can be killed rather than
 waited on. Nothing in C++ moved — the choice is a `u32` in the `braam` custom section and the
 same binary runs either way (§4.3) — so this was `stamp.py`'s argument and the documents the
@@ -112,7 +113,7 @@ pid. It takes init's pid now, and the rule gained the clause it meant: the foreg
 whoever armed it. `cat | wc` with a `^C` is the case that would have caught the difference, and
 nothing like it existed.
 
-**And init started replacing the shell.** doc/TODO.md T7, the design question T8 waits on: a
+**And init started replacing the shell.** The plan's T7, the design question T8 waits on: a
 process dies with its worker and there is no moving a running one back, so once `/bin/sh` has a
 worker of its own a lost one would be the session rather than a command. `init_task` is a loop
 now — a shell that **died** is replaced by an ordinary `exec`, which lands wherever a worker can
@@ -121,7 +122,7 @@ still be had; one that **exited** is not, so `exit` still ends the session. `exe
 have decided T7 by itself: `dropWorkers()` terminated a worker without failing the step in it,
 which is a kernel parked for ever rather than a process that died.
 
-**And a repaint became one syscall.** doc/TODO.md T8's first half: `echo` at 71 is the anchor, the
+**And a repaint became one syscall.** The plan's T8, first half: `echo` at 71 is the anchor, the
 bytes and the cursor in one operation, so the table is thirty-six and `PROC_ABI` is 6. A keystroke
 was five round trips — `key_read`, then `cursor`, `write`, `cursor`, `cursor` — and is two, for
 **one** change to the grid. It is also one *tick* rather than four: the grid is presented at the end
@@ -129,7 +130,7 @@ of every tick, so a repaint painted three times and the cursor had to be hidden 
 walking the line. `scrolled` in the reply is what the second `cursor` call was for, and it is a
 counter `src/kernel/screen.cpp` now keeps. `redraw()` in `src/sh/edit.cpp` is the only caller.
 
-**And then the shell took a worker.** doc/TODO.md T8, and with it **every binary in the system
+**And then the shell took a worker.** The plan's T8, and with it **every binary in the system
 makes the same claim**. What made it safe was T7 (init replaces a shell that died, so a lost
 worker costs a shell rather than the session) and what made it *affordable* was `echo` above.
 Four cases in `test/run.mjs` changed meaning rather than merely numbers: `dropWorkers()` kills
@@ -148,9 +149,9 @@ a worker is waited out rather than fallen back on**: the spawn is refused with `
 `spawn_process` in `src/user/exec.cpp` backs off 10, 20, 50, 100, 200, 500 ms and then a second
 indefinitely, saying `no worker, retrying` on the program's own stderr, which `^C` abandons like
 any other await. `make bench` went with the tier it was built to A/B — the target, `web/bench.*`
-and `tools/bench.mjs` are deleted — and doc/TODO.md is a record rather than a harness.
+and `tools/bench.mjs` are deleted — and the plan became a record rather than a harness.
 
-**And then a whole prompt became one syscall.** doc/TODO.md T8's leftover, the same argument one
+**And then a whole prompt became one syscall.** The plan's T8 left it, the same argument one
 level up: `echo`'s bytes are a sequence of *styled runs* — a style word and a length per run,
 every header ahead of every byte, `SYS_STYLE_KEEP` for a run that names no colour — and two
 op-word bits carry what the two `cursor` gets were for, `SYS_ECHO_FRESH` anchoring on a row of its
@@ -313,7 +314,7 @@ service where that gap matters: a real WebSocket server, so `make serve` gives t
 conversation rather than a loopback.
 
 **`make bench` is gone with tier 2**, because it existed to A/B the two tiers and there is one.
-The figures it produced are in doc/TODO.md T1, T5 and T8 and stand as a record; the counters it
+The figures it produced open doc/Release_Notes.md and stand as a record; the counters it
 read are still there and still unconditional — `makeProc`'s `stats()`, and `paint`/`tick` plus
 the `stats` and `render` messages in `web/worker.js` — so a page that wants to measure again has
 what it needs, but nothing in the tree consumes them.
@@ -456,7 +457,7 @@ from binary metadata where to put it, so userland does not notice (Concept.md §
   `braam_add_program` arranges it unasked and takes no argument for anything else, and the
   binary's `braam` section carries no placement word for `exec` to read. The protocol is one
   message each way per step, and a syscall costs two `postMessage` hops rather than a call:
-  34–45 µs measured, which doc/TODO.md T1 is the argument for paying everywhere and T5
+  34–45 µs measured, which the plan's T1 is the argument for paying everywhere and T5
   re-measured unmoved after the flip.
 
 **A host with no worker to give is waited out, not worked around.** There is no fallback and no
@@ -466,7 +467,7 @@ printing `no worker, retrying` on the program's own stderr each time. It is an o
 `^C` abandons it. Nothing latches on the host side either — `hire()` tries afresh every time,
 because the kernel is what paces the asking, so a host that recovers is noticed.
 
-**A process that loses its worker dies with it, and init replaces the shell** (doc/TODO.md T7).
+**A process that loses its worker dies with it, and init replaces the shell** (the plan's T7).
 There is no moving a *running* process anywhere, since the instance went with the worker. So init
 starts another `/bin/sh` when its shell **died** (a trap, a step that failed, an instance that
 would not be made) and does not when it **exited**: `exit` still ends the session.
@@ -572,7 +573,7 @@ None is a bug, and adding one is a design change to be argued in Concept.md firs
   process for as long as the system is up.
 - **Every syscall a program makes is two `postMessage` hops**, 34–45 µs, since T3 and T8 put every
   program in a worker of its own. Bulk I/O pays it per `SYS_CHUNK`, which is 512 bytes:
-  doc/TODO.md T5 re-measured that at 6–13 ms more than a syscall that is a call, for a quarter of
+  the plan's T5 re-measured that at 6–13 ms more than a syscall that is a call, for a quarter of
   a megabyte through three processes, and **decided against T6** — a bigger chunk or a batched
   step protocol — because nothing written for this system can perceive it. A workload that moves
   megabytes is what would reopen it, not a better figure.

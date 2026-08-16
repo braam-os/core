@@ -7,9 +7,163 @@ of the two needs amending.
 
 ---
 
+## The plan is deleted, and its figures are here
+
+`doc/TODO.md` was the plan for putting every program in a worker of its own — nine items, T1 to T9,
+written before anything moved and annotated as each was finished. Every one of them has a note of
+its own further down this file, so what the plan still held once T9 was done was a to-do list with
+nothing to do, plus two things that were not written anywhere else: **the measured figures**, and
+**the one measurement that was never taken**. It is deleted and those are here. The T-numbers are
+kept as citations — this file and CLAUDE.md refer to "the plan's T5" and mean this — and there is
+nothing left in the plan that is a work item.
+
+The figures are a record, not something to re-run: `make bench` was the harness, and it was deleted
+with tier 2 ("Tier 2 is deleted" below), because its three arms were an A/B between two program
+models and there is one. The counters it read are still there and still unconditional —
+`makeProc`'s `stats()`, and `paint`/`tick` plus the `stats` and `render` messages in
+`web/worker.js` — so a page that wants to measure again has what it needs.
+
+### The method, and why it is a difference
+
+"What a syscall costs, measured" below has the reasoning in full; the short of it is that the
+number is ΔT/ΔN over two runs of the *same command* — `wc` over one file against `wc` over eight —
+so the spawn, the compile-cache hit, the instantiate, the exit and the prompt redraw all subtract
+out, and ΔN is read out of counters rather than predicted from `SYS_CHUNK`. Both runs below are ten
+timed runs after two warm-ups, medians, on the same 8-core Mac, in three engines. Gecko and WebKit
+step `performance.now()` in whole milliseconds without cross-origin isolation, so their columns are
+quantised — 297 round trips into a 1 ms grid is a ±3.4 µs quantum, and a 0.00 ms keystroke is a
+clock step rather than a free one.
+
+### T1, before anything moved — 0.2.44-e6a8552
+
+A round trip, in microseconds:
+
+| | Blink (Vivaldi) | Gecko (Firefox) | WebKit (Safari) |
+|---|---|---|---|
+| every program at tier 2 (as it shipped then) | 40.2 | 80.8 | 5.1 |
+| the same, less the every-64th timer wait | 6.2 | 16.8 | 1.7 |
+| every program at tier 3 | 42.3 | 33.7 | 33.7 |
+
+So §4.4's *"order 0.1 ms"* was two to three times pessimistic and a worker of one's own cost about
+**30–40 µs a round trip**: `wc` of 86 KB went from 4.2 ms to 11.4 ms in Blink and 6.5 to 12 in
+WebKit. The middle row is the finding that mattered most at the time — most of tier 2's bulk cost
+was `web/worker.js`'s every-64th `setTimeout(drain, 0)`, which waited 1.3 ms in Blink, 2.4 in Gecko
+and 0.25 in WebKit, and which a worker of one's own never took.
+
+A keystroke, in milliseconds, key to the last repaint it caused:
+
+| | Blink | Gecko | WebKit |
+|---|---|---|---|
+| tier-2 shell | 0.17 | 1.66 | 0.36 |
+| tier-3 shell | 0.63 | 1.89 | 3.26 |
+| 64 keys back to back, per key | 0.10 → 0.34 | 0.42 → 2.70 | 0.27 → 5.09 |
+
+Nothing was dropped at either tier in any engine — the ring holds 64 — but sustained typing at
+2.7 ms a key in Gecko and 5.1 in WebKit is a shell that feels slow while it is being typed into,
+and that is the number T7 and T8 had to answer to. WebKit's pass was marked tainted (its tab lost
+focus mid-session), so its absolute milliseconds are the weakest column here; its round-trip and
+keystroke *ratios* agree with the other two, which is the check that matters.
+
+### T5, with thirty-one programs moved — 0.2.47-8ca8053
+
+The gate on the other side of T3, and the decision not to write T6. Same method, three arms —
+every program at tier 2, tier 3 but for the shell (what shipped then), tier 3 including the shell
+(what ships now) — with T1's figure in brackets. No pass was tainted and no keystroke was dropped.
+
+A round trip, in microseconds:
+
+| | Blink | Gecko | WebKit |
+|---|---|---|---|
+| every program at tier 2 | 41.8 (40.2) | 79.1 (80.8) | 10.1 (5.1) |
+| tier 3 but for the shell | **44.9** (42.3) | **38.7** (33.7) | **33.7** (33.7) |
+| tier 3, shell included | 47.0 (44.4) | 40.4 (38.7) | 35.4 (38.7) |
+
+WebKit's 5.1 → 10.1 on the first row is one grid step, not a regression.
+
+A keystroke, in milliseconds:
+
+| | Blink | Gecko | WebKit |
+|---|---|---|---|
+| every program at tier 2 | 0.20 | 2.00 | 0.00 |
+| tier 3 but for the shell | **0.20** | **2.00** | **0.00** |
+| tier 3, shell included | 0.65 | 2.00 | 3.00 |
+| 64 keys, per key — tier 3 but for the shell | 0.09–0.12 | 0.41–0.42 | 0.25–0.27 |
+| 64 keys, per key — tier 3, shell included | 0.27–0.28 | 2.58–2.62 | 6.20–6.25 |
+
+The shipped row was the tier-2 control's row to the clock in all three engines, which is what says
+the keystroke's cost was the *shell's* tier and not the programs'. T1's alarming figures were never
+the shipped system's; they were the tier-3-shell arm's, and in WebKit that arm got *worse* on the
+re-run.
+
+Bulk I/O, in milliseconds, which is what the T6 decision turned on:
+
+| | Blink | Gecko | WebKit |
+|---|---|---|---|
+| `wc /bin/sh` — tier 2 | 4.2 (4.2) | 9.5 (9.0) | 6.0 (6.5) |
+| `wc /bin/sh` — tier 3 but for the shell | 11.0 (11.4) | 15.5 (16.0) | 12.0 (12.0) |
+| `wc` over eight files — tier 2 | 16.6 (16.2) | 33.0 (33.0) | 9.0 (8.0) |
+| `wc` over eight files — tier 3 but for the shell | 24.4 (24.0) | **27.0** (26.0) | 22.0 (22.0) |
+| `cat /bin/sh \| cat \| wc` — tier 2 | 7.8 (7.7) | 13.0 (13.0) | 9.5 (11.5) |
+| `cat /bin/sh \| cat \| wc` — tier 3 but for the shell | 19.7 (25.6) | 26.0 (30.0) | 19.0 (27.0) |
+
+The tier cost **10–13 ms** on the heaviest thing in the suite — a quarter of a megabyte through
+three processes — and 6–7 ms on an 86 KB file. In Gecko `wc` over eight files was *faster* than
+with everything at tier 2, because the every-64th timer had retired itself: as shipped that command
+took the slow route zero times, since the only tier-2 process left was the shell and it takes 21
+steps rather than 483. All of it is round trips and none of it is the worker — `true`, one spawn
+and one exit with no I/O, cost the same either way to within 1.5 ms in every engine, because the
+pool has a worker waiting.
+
+### The bar T8 was taken against
+
+Sustained typing, 64 keys back to back, milliseconds per key:
+
+| | tier-2 shell (T5) | tier-3 shell as T5 measured | bar |
+|---|---|---|---|
+| Blink | 0.09–0.12 | 0.27–0.28 | ≤ 0.20 |
+| Gecko | 0.41–0.42 | 2.58–2.62 | ≤ 0.90 |
+| WebKit | 0.25–0.27 | 6.20–6.25 | ≤ 0.90 |
+
+plus zero dropped keystrokes and no regression beyond the clock on the bulk figures. "Under a
+frame" was explicitly *not* the bar: 6.2 ms a key is already under a frame, and T5 called it a
+shell that feels slow, correctly. Cutting the keystroke from five round trips to two ("A repaint is
+one syscall") is what got under it.
+
+### The measurement that was never taken
+
+T8 instrumented an attribution A/B and never ran it, and the harness for it is gone. The question
+is live and worth stating, because the arithmetic does not close: **five round trips at the
+measured 34–45 µs is 0.25 ms, which was Blink's tier-3 keystroke to the clock, 13× short of
+Gecko's and 35× short of WebKit's.** So Blink's keystroke *was* its round trips and the other two
+engines' was not. The only per-turn asymmetry between the prompt's round trips and `wc`'s anywhere
+in the tree is that the prompt's damage the grid and the kernel worker presents once per tick — a
+repaint of four operations painted the same keystroke three times, which is why the cursor had to
+be hidden through one or it would be seen walking the line. The A/B was a burst with drawing turned
+off against the same burst lit: if the dark one drops to the lit one's figure the residual is the
+canvas commit per task, and if it does not, the bare worker↔worker turn is slow on that path.
+
+`echo` has since made the repaint one operation and one present, so whichever answer it would have
+given, most of what it was measuring is no longer being paid.
+
+### T6, which was never started and should not be started on a guess
+
+T5 decided against it and the decision stands: what would reopen it is a workload, not a figure —
+something moving megabytes rather than a quarter of one, where 34–45 µs per 512 bytes is 70–90 ms
+a megabyte. Neither of its two shapes is cheap, and this is what they were:
+
+- **A bigger `SYS_CHUNK`.** It is 512 because that is the allocator's top size class on both sides
+  of the wire (§8.2); raising it costs a 64 KiB span per buffer, so it is an allocator change as
+  much as an ABI one.
+- **Batching the replies.** The step protocol already carries a *list* of parked calls up and
+  exactly one reply down — `_resume(token, ptr, len)` answers one call. Batching means the kernel
+  coalescing the steps it owes one pid, both halves of `web/proc.js`, `web/procworker.js`,
+  `test/fakeworker.mjs`, and an amendment to System_Calls.md.
+
+---
+
 ## A prompt is one syscall
 
-doc/TODO.md T8 cut the keystroke and said outright what it had not cut: `anchor()` is seven round
+The plan's T8 cut the keystroke and said outright what it had not cut: `anchor()` is seven round
 trips, `interactive()` adds a `cwd_get`, and *"Enter to the next prompt is an order of magnitude
 more than a keystroke — the next thing anyone will notice"*. This is that.
 
@@ -158,7 +312,7 @@ the wire, dropped on the floor as it was before T2 gave it a job.
 re-stamping the staged binaries, against the shipped archive. With one tier there is no A/B, so
 the cmake target, `web/bench.html`, `web/bench.js` and `tools/bench.mjs` are deleted, along with
 the `defer` counters in `web/worker.js` that only its arms read. T1, T5 and T8's figures stay
-recorded in doc/TODO.md, which is now history rather than a harness.
+recorded at the top of this file, under the plan they belonged to.
 
 Deleting `tools/release.py`'s `SKIP` set resolved a live bug on the way: it named `bundle3.bin`
 while the cmake target emitted `bundle3nosh.bin`, so that twin was packed into the released site
@@ -184,7 +338,7 @@ own clock, nothing binds a worker while there is none to bind, and the session c
 
 ## The shell takes a worker
 
-doc/TODO.md T8, and the end of "every program at tier 3": `set(BRAAM_BIN_TIER_sh 2)` is gone,
+The plan's T8, and the end of "every program at tier 3": `set(BRAAM_BIN_TIER_sh 2)` is gone,
 `src/cmd/CMakeLists.txt` passes no `TIER` at all, and there is no name left in §4's tier table.
 `stamp.py`'s `--tier` is required rather than defaulting to 2, which had become the answer no
 caller wants.
@@ -259,7 +413,7 @@ be written next rather than a regression.
 
 ## A repaint is one syscall
 
-doc/TODO.md T8's first half. T1 and T5 both measured the same thing and said it twice: a shell at
+The plan's T8, first half. T1 and T5 both measured the same thing and said it twice: a shell at
 tier 3 costs 0.27 ms a key in Blink, 2.6 in Gecko and 6.2 in WebKit while it is being typed into,
 against 0.09, 0.41 and 0.25 at tier 2. T5 called that "the strongest thing in this table" and §4.4
 went further — *"the only program that cannot afford it is the one being typed into"*. So the flip
@@ -374,7 +528,7 @@ found by disabling init's `console_fg_clear()` and watching the case still pass.
 
 ## Init replaces a shell that died
 
-[doc/TODO.md](TODO.md) T7, and the design question T8 is waiting on: what happens to `/bin/sh`
+The plan's T7, and the design question T8 is waiting on: what happens to `/bin/sh`
 when the workers go. **Init starts another shell.** Concept.md §4 says so now, and this is why.
 
 The question exists because §4's fallback is decided *before* a process starts. `exec` asks the
@@ -470,12 +624,12 @@ written to keep working.
 
 ## The re-measurement, and why T6 is not being written
 
-[doc/TODO.md](TODO.md) T5. T3 put thirty-one programs in workers of their own on the strength of
+The plan's T5. T3 put thirty-one programs in workers of their own on the strength of
 T1's figures; T5 is the gate on the other side of that, and it decides one thing — whether to spend
 a week on T6, which is either a bigger `SYS_CHUNK` or a batched step protocol. **No.** The prompt
 costs 0.09–0.42 ms a key under sustained typing and bulk I/O costs 10–13 ms more than tier 2 on the
 largest workload in the suite, which are T5's own two conditions for skipping it. The figures are
-in T5; this is why they mean that.
+at the top of this file; this is why they mean that.
 
 ### The harness had lost its control, which is the whole of the code change
 
@@ -535,7 +689,7 @@ Recording that distinction is the point of skipping T6 in writing rather than by
 
 ## Every program in a worker of its own
 
-[doc/TODO.md](TODO.md) T3 and T4. Thirty-one of the thirty-two binaries in `/bin` now ask for
+The plan's T3 and T4. Thirty-one of the thirty-two binaries in `/bin` now ask for
 tier 3, and `/bin/sh` is the one that asks for tier 2. So every command a user can start is a
 process the system can *kill* rather than one it can only ask to stop — which is what tier 3 buys
 and the only thing it buys (§4.2).
@@ -614,7 +768,7 @@ before it moves — a tier-3 shell dies with the workers, and nothing re-execs i
 
 ## A pool for a system where every command needs a worker
 
-[doc/TODO.md](TODO.md) T2. The pool in `web/proc.js` was sized for the two tier-3 binaries that
+The plan's T2. The pool in `web/proc.js` was sized for the two tier-3 binaries that
 exist — `MAX_IDLE` 2, one worker hired at boot — and T1 measured what that costs the moment a
 pipeline is at the tier: `cat /bin/sh | cat | wc` **hires one worker and terminates one on every
 run**, in all three engines, while reusing two. Three stages want three workers at once and the
@@ -674,13 +828,14 @@ yields and it wants its own measurement; sizing the pool does not depend on it.
 
 ## What a syscall costs, measured
 
-[doc/TODO.md](TODO.md) proposes moving every program to tier 3, and its first item is the gate:
+The plan proposes moving every program to tier 3, and its first item, T1, is the gate:
 the whole argument for the change is the cost of a syscall, and nobody had measured one.
 Concept.md §4.4 asserts *"two `postMessage` hops and two copies, order 0.1 ms"* and the M9 note
 repeats it, but both were estimates — `test/run.mjs` counts ticks rather than wall time, and its
 links have no thread in them. The answer is **34–44 µs** for a tier-3 round trip and **0.2–2.9 ms**
 added to a keystroke, which is two to three times better than the guess in one place and worse than
-it looks in another. The figures are in T1; this is why they are the ones that were taken.
+it looks in another. The figures are at the top of this file; this is why they are the ones that
+were taken.
 
 ### The measurement is a difference, not a stopwatch
 
