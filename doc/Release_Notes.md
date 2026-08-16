@@ -7,6 +7,54 @@ of the two needs amending.
 
 ---
 
+## Concept.md says what the system is, not how it got here
+
+The spec had accumulated its own history. Half of it was written in the past tense about the
+present: "M5's `/bin` was `BinFs`", "this section once said it would", "a `host_fetch` was on the
+list too, and that is not what M6 built", "the cost is paid twice over" with the byte counts of a
+model that no longer exists. Every one of those was true and every one of them was an amendment
+narrated rather than applied — a reader had to follow the argument to the end to find out what the
+rule *is*. It is 1,303 lines down to about 950, and what went was the narration, not a decision.
+
+The division of labour is the one CLAUDE.md already states and the spec was not keeping: this file
+holds the *why*, Concept.md holds the *what*. So a paragraph that ended in a rule keeps the rule
+and loses the case for it, because the case is here under the note that argued it. Nothing was
+deleted that is not either still in the spec as a statement or already in this file as a section —
+the applet's byte counts are in "One program model", `BinFs` is in M5 and M6, the unbuilt
+`host_random` is in "System_Calls.md, and what writing it found", and the measured syscall cost is
+in "What a syscall costs, measured".
+
+**Nothing was renumbered**, because the numbering is cited from source comments — thirty-one
+citations of §4.3 alone. Two sections changed what they contain instead:
+
+- **§6 was "Milestones" and is now "Host services".** The milestones were a pointer to this file
+  and a note that the section kept its number, which is a heading holding a place for nothing.
+  `src/proc/io.h` already cited §6 for the wall clock — a citation that meant M6 and landed on the
+  milestone list — so filling §6 with fetch, WebSocket, the clipboard, file transfer and the clock
+  makes an existing citation right rather than breaking a live one. The material came from the
+  scattered halves of §3.4 and §5.4 that described those services and never named them together.
+- **Appendix D was provenance** — three earlier design notes consolidated, and the one
+  disagreement between them resolved in favour of the process model. That is the definition of
+  history in a spec, and it is deleted rather than moved: the notes are gone, the disagreement was
+  settled two milestones before every program became a binary, and §4 states the outcome flatly.
+
+**Reading it against the source found four numbers that had rotted**, which is the argument for
+the trim in one line: a spec that narrates is a spec nobody re-checks. `PROC_TASKS` was quoted as
+four and is eight; the child bounds were "eight live children, eight levels deep" and are
+`SYS_CHILD_MAX` sixteen and `SYS_PROC_DEPTH` eight; the renderer was "under 200 lines" and is
+about 300. All three now name the constant or round honestly, because a constant that moves
+should not need this document edited. (CLAUDE.md repeats the `PROC_TASKS` figure and is wrong the
+same way.) The fourth was §7's repository layout, which listed no `examples/` and no
+`Programming_Manual.md`.
+
+Three other things changed in kind rather than in length. The §3 diagram now draws the process
+worker with its imports and exports, since a process is a peer of the kernel worker and was
+described in prose under a "(M9+)" label. §4.3's rules about the operation table were four
+paragraphs of when-and-why and are now four named rules — a caller in `src/cmd/`, the synchronous
+half closed at four, a stream is a descriptor, and text under `/proc` is not a syscall — which is
+what someone adding an operation actually needs to check. And §8 lost "early" from its title: the
+five things in it are standing constraints, not advice to a project that has not started.
+
 ## The plan is deleted, and its figures are here
 
 `doc/TODO.md` was the plan for putting every program in a worker of its own — nine items, T1 to T9,

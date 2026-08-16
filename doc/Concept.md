@@ -1,98 +1,82 @@
 # Braam — Concept
 
-An interactive, CLI-oriented operating system that runs entirely inside a browser tab,
-written from scratch in freestanding C++20 and compiled to WebAssembly.
+An interactive, CLI-oriented operating system that runs entirely inside a browser tab, written
+from scratch in freestanding C++20 and compiled to WebAssembly.
 
-This document is the project's single design reference. It states the goal, sets out the
-architecture, and records the decisions we have already made and why. It changes when a
-decision changes, and then in the same commit as the code. The plan that was carried out —
-milestones M0–M9 and the criteria they were accepted against — and the reasoning behind what
-landed are both in [Release_Notes.md](Release_Notes.md).
-[System_Calls.md](System_Calls.md) is derived from this one: it walks §4.3's kernel↔process
-mechanism end to end, with the operation table in full. Read it to understand the mechanism;
-amend this document to change it.
+This document is the specification: what the system is and what its parts must do. It changes
+only when a design decision changes, in the same commit as the code. Its section numbers are
+cited from source comments — amend a section, do not renumber it.
+
+The other three documents are subordinate to this one.
+[Release_Notes.md](Release_Notes.md) says *why* the code is the way it is, and holds the
+milestones M0–M9 with the criteria they were accepted against.
+[System_Calls.md](System_Calls.md) walks §4.3's kernel↔process mechanism end to end, with the
+operation table in full. [Programming_Manual.md](Programming_Manual.md) is the SDK's guide.
 
 ---
 
 ## 1. Goal
 
-Build a small, self-contained operating environment — a kernel, a shell, a filesystem, a
-terminal, and a set of programs — that a user reaches by opening a URL. It must be
-deployable as a **static site**, with no server, no build-time secrets, and no special
-HTTP headers.
+A kernel, a shell, a filesystem, a terminal and a set of programs, reached by opening a URL and
+deployable as a **static site** — no server, no build-time secrets, no special HTTP headers.
 
-That last constraint is not cosmetic; it drives the whole design:
+That constraint drives the design:
 
-- **No `SharedArrayBuffer`**, therefore no `COOP`/`COEP` headers, therefore GitHub Pages
-  and any dumb static host will serve it as-is.
+- **No `SharedArrayBuffer`**, therefore no `COOP`/`COEP` headers, therefore any dumb static
+  host serves it as-is.
 - **No Asyncify**, no JSPI, no stack-switching machinery of any kind.
-- **No Emscripten runtime.** We link nothing we did not write.
+- **No Emscripten runtime.** Nothing is linked that we did not write.
 
-### Non-goals, chosen deliberately
+Non-goals, chosen deliberately:
 
-- **POSIX compatibility.** We are not implementing `open`/`read`/`write`/`fork`, and we are
-  not aiming to run third-party C code.
+- **POSIX compatibility.** No `open`/`read`/`write`/`fork`, and no aim to run third-party C.
 - **A VT100 emulator.** No ANSI escape parsing, no `xterm.js`.
-- **A general-purpose libc.** We supply exactly the foundation our own code needs.
+- **A general-purpose libc.** Exactly the foundation our own code needs.
 
-Dropping POSIX is the single highest-leverage decision in the project. We give up the
-ability to drop in existing C programs; in exchange we get a system an order of magnitude
-smaller, with no emulation layers, no escape-sequence parser to be attacked through, and a
-design whose every mechanism is native to the browser rather than pretending to be Unix.
+Dropping POSIX is the highest-leverage decision in the project: it costs the ability to drop in
+existing C programs and buys a system an order of magnitude smaller, with no emulation layer, no
+escape-sequence parser to be attacked through, and every mechanism native to the browser.
 
 ---
 
 ## 2. Organizing principles
 
-Three invariants hold the design together. Nearly every question about "how should X work?"
-is answered by one of them.
+Three invariants hold the design together, and nearly every "how should X work?" is answered by
+one of them.
 
 ### 2.1 Coroutines are processes; the event loop is the scheduler
 
-**C++20 coroutines *are* the process abstraction, and the browser event loop *is* the
-scheduler.** Every operation that would block in a conventional OS becomes a `co_await`.
+C++20 coroutines *are* the process abstraction and the browser event loop *is* the scheduler.
+Everything that would block becomes a `co_await`. Nothing blocks, so nothing needs a stack of
+its own: a suspended process is a coroutine frame in a hash map, costing one allocation.
 
-Nothing ever blocks, so nothing ever needs a separate stack, and stack-switching magic
-(Asyncify, JSPI, threads) is simply not part of the system. A process suspended on input is
-a coroutine frame sitting in a hash map, costing one allocation.
+### 2.2 An import never returns data — only accepts a token
 
-### 2.2 An import never returns data — only a token
+Every JS import is non-blocking and returns immediately. It accepts a *wake token*; the result
+arrives later through the `wake()` export. This keeps the boundary uniform and makes any new
+asynchronous browser API a ~20-line change on each side.
 
-**Every JS import is non-blocking and returns immediately.** An import accepts a *wake
-token*; the result arrives later through the `wake()` export. Uniformly. Without exception,
-except where noted below.
-
-This single rule is what keeps the boundary uniform and makes adding any new asynchronous
-browser API a ~20-line change on each side. It is worth defending aggressively.
-
-**The two conscious exceptions**, both because no promise is involved at all:
+**Two exceptions are sanctioned**, both because no promise is involved at any point:
 
 1. `host_now()` — a clock read.
 2. **OPFS sync access handles** — once a file is open, `read`/`write`/`getSize`/`truncate`/
-   `flush` are genuinely synchronous (see §5.2).
+   `flush` are genuinely synchronous (§5.2).
 
-One or two pragmatic exceptions are fine. Three become an ad-hoc second calling convention,
-and then we have two ABIs and no invariant. Each new exception needs a written justification
-in this document.
+A third needs a written justification in this document. One or two pragmatic exceptions are
+fine; three are a second calling convention, and then there are two ABIs and no invariant.
 
-M6 added `fetch`, WebSocket, the clipboard, file transfer and a wall clock, and asked for no
-third exception: every one of them is a promise on the host side, so every one of them takes
-a token. The wall clock is the near miss — `Date.now()` is as synchronous as `host_now()` —
-but a service already had an import and one more operation on it costs nothing, while a
-second value-returning import costs the invariant.
-
-There is one call in the other direction that carries no token, and it is not an exception to
-this rule because it is an *export*: `ref(slot, obj)` (§3.7) is how the host puts a JS object
-into the kernel's table. It stores and returns; nothing is scheduled by it.
+Calls in the other direction are not exceptions to this rule, because they are *exports*:
+`ref(slot, obj)` (§3.7) stores a JS object and returns, and `sys`/`sys_async` (§4.3) are a
+process's imports that the host forwards.
 
 ### 2.3 The terminal is a cell grid, not a byte stream
 
-The kernel owns a screen buffer of cells in linear memory. The renderer draws it. There is
-no stream of bytes carrying control codes, because there are no control codes.
+The kernel owns a buffer of cells in linear memory and the renderer draws it. There is no stream
+of bytes carrying control codes, because there are no control codes.
 
-Consequences: colours and styling are struct fields; cursor addressing is array indexing; a
-`curses`-style layout layer becomes trivial rather than a parser; and there is no escape
-sequence to mis-parse. Rendering is under 200 lines of JavaScript.
+Colours and styling are struct fields, cursor addressing is array indexing, a `curses`-style
+layout layer is trivial rather than a parser, and there is no escape sequence to mis-parse. The
+whole renderer is ~300 lines of JavaScript.
 
 ---
 
@@ -102,78 +86,76 @@ sequence to mis-parse. Rendering is under 200 lines of JavaScript.
 ┌─────────────────────── main thread ────────────────────────┐
 │  boot: capability probe, navigator.storage.persist()       │
 │  input: KeyboardEvent → {code, mods} → postMessage         │
-│  render: OffscreenCanvas (transferred to worker)           │
+│  selection: pointer events → cells → clipboard             │
+│  render: OffscreenCanvas (transferred to the worker)       │
 └───────────────────────────┬────────────────────────────────┘
                             │  postMessage (no SharedArrayBuffer)
 ┌───────────────────────────┴────────────────────────────────┐
-│                       Web Worker                           │
-│  ┌───────────── JS host shim (~1,600 lines) ─────────────┐ │
-│  │  imports: log, now, present, fs, fs_sync, svc         │ │
-│  │  exports: init, wake, tick, key, resize, ref,         │ │
-│  │           sys, sys_async                              │ │
-│  │  externref table · OPFS handle table · canvas blit    │ │
-│  └────────────────────┬──────────────────────────────────┘ │
-│  ┌────────────────────┴──── kernel.wasm ─────────────────┐ │
-│  │  allocator · core types · Task<T> · scheduler         │ │
-│  │  Channel<T> · scheduler jobs · CancelToken            │ │
-│  │  screen cells · VFS mount table · console · exec      │ │
-│  └───────────────────────────────────────────────────────┘ │
-│  ┌─────── (M8+) per-process WebAssembly.Instance ────────┐ │
-│  │  own linear memory, own import closure, own limits    │ │
-│  └───────────────────────────────────────────────────────┘ │
+│                   kernel Web Worker                        │
+│  ┌──────────────── JS host shim ────────────────────────┐  │
+│  │  imports: log, now, present, fs, fs_sync, svc        │  │
+│  │  exports: init, wake, tick, key, resize, ref,        │  │
+│  │           sys, sys_async, memory                     │  │
+│  │  externref table · OPFS handle table · canvas blit   │  │
+│  │  compiled-Module cache · worker pool                 │  │
+│  └───────────────────────┬──────────────────────────────┘  │
+│  ┌───────────────────────┴──── kernel.wasm ─────────────┐  │
+│  │  allocator · core types · Task<T> · scheduler        │  │
+│  │  Channel<T> · scheduler jobs · CancelToken           │  │
+│  │  screen cells · VFS mount table · console · exec     │  │
+│  └──────────────────────────────────────────────────────┘  │
 └───────────────────────────┬────────────────────────────────┘
                             │  postMessage: bind, step
 ┌───────────────────────────┴────────────────────────────────┐
-│       (M9+) Web Worker, one process — every program        │
-│  the same instance, one thread further out, where          │
-│  terminate() does not need its cooperation                 │
+│         Web Worker, one process — every program            │
+│  imports: env.memory, kernel.sys, kernel.sys_async         │
+│  exports: _start, _resume, _alloc, _free                   │
+│  own linear memory, own import closure, own memory cap     │
 └────────────────────────────────────────────────────────────┘
 ```
 
-The kernel runs in a **Web Worker** and communicates by plain `postMessage`. Rendering
-happens against an `OffscreenCanvas` transferred into the worker, so the main thread stays
-free. A runaway program hangs its own worker rather than the page, and a "reset kernel"
-button is just `worker.terminate()` followed by a reboot.
-
-Since M9 a runaway program does not even hang the kernel's worker: a process is a worker of its
-own (§4.2), and the kernel is merely waiting for a reply it can stop waiting for.
+The kernel runs in a Web Worker and communicates by plain `postMessage`. Rendering happens
+against an `OffscreenCanvas` transferred into that worker, so the main thread stays free, and a
+"reset kernel" button is `worker.terminate()` followed by a reboot. A runaway program hangs
+neither: it is a worker of its own (§4.2), and the kernel is merely waiting for a reply it can
+stop waiting for.
 
 ### 3.1 Toolchain and language subset
 
 Target `wasm32-unknown-unknown`, freestanding. Any clang with the wasm32 target and `wasm-ld`
-will do, because we use it purely as a compiler: we link none of its runtime and, as it turns
-out, none of its headers either (see Appendix C). Homebrew's **`llvm`** and **`lld`** are the
-local default and Debian's **`clang`**, **`lld`** and **`llvm`** are what CI installs; nothing
-is pinned, because nothing of a distribution's but the compiler is used.
+will do, because it is used purely as a compiler: none of its runtime and none of its headers
+are linked or included. Homebrew's `llvm` and `lld` are the local default and Debian's `clang`,
+`lld` and `llvm` are what CI installs; nothing is pinned.
 
 ```
-clang++ \
-    --target=wasm32-unknown-unknown \
-    -std=c++20 -Os \
-    -nostdlib -nostdinc++ \
-    -fno-exceptions -fno-rtti -fno-threadsafe-statics \
-    -Wl,--no-entry -Wl,--gc-sections
+clang++ --no-default-config --target=wasm32-unknown-unknown -std=gnu++20 -Os \
+    -nostdlib -nostdinc++ -fno-exceptions -fno-rtti -fno-threadsafe-statics \
+    -mreference-types -mbulk-memory -msign-ext -mmutable-globals -mnontrapping-fptoint \
+    -ffunction-sections -fdata-sections \
+    -Wl,--no-entry -Wl,--gc-sections -Wl,--stack-first -Wl,-z,stack-size=131072
 ```
 
-This command line is verified to compile a coroutine that suspends and resumes. See
-Appendix C for the one gotcha — libc++'s `<coroutine>` header cannot be used freestanding,
-so we supply our own shim over the `__builtin_coro_*` intrinsics, which is
-[src/kernel/coroutine.h](../src/kernel/coroutine.h).
+Appendix C explains each flag, and why `--export-dynamic` and `--allow-undefined` are
+deliberately absent: adding either back is a regression. libc++'s `<coroutine>` cannot be used
+freestanding, so [src/kernel/coroutine.h](../src/kernel/coroutine.h) is a shim over the
+`__builtin_coro_*` intrinsics.
 
-`--export-dynamic` and `--allow-undefined` were on this line as first written and are
-deliberately gone; C.3 says why, and putting either back would be a regression.
-
-**No exceptions, no RTTI.** Errors are values: `Result<T, E>`. Propagation through
-`co_await` uses a small `TRY()` macro rather than unwinding.
+**No exceptions, no RTTI.** Errors are values: `Result<T, E>`, propagated through `co_await`
+with a `TRY()` macro rather than by unwinding.
 
 ### 3.2 The foundation we own
 
-Roughly 1700 lines of code that we will be glad to control:
+About 1,500 lines that we are glad to control:
 
-- **Allocator** — a bump arena plus size-class free lists over `memory.grow`. Under 400
-  lines. Coroutine frames go through it, so it must be fast (see §8.2).
+- **Allocator** — a bump arena plus size-class free lists over `memory.grow`. Coroutine frames
+  go through it, so it must be fast (§8.2).
 - **Core types** — `Str` (a UTF-8 view), `String`, `Vec<T>`, `Span<T>`, `Result<T, E>`,
-  `Option<T>`, `HashMap<K, V>`. About 1500 lines.
+  `Option<T>`, `HashMap<K, V>`.
+
+Nothing else is available: there is no libc, `new` is not used (`heap_new`/`heap_delete` are),
+and a namespace-scope global must be trivially destructible, since a non-trivial destructor
+needs `__cxa_atexit`. State that needs a constructor lives behind a pointer built on first use,
+as `Sched` and the process runtime's `Rt` do.
 
 ### 3.3 The core abstraction
 
@@ -183,103 +165,74 @@ template <class T> struct Task {           // lazy, movable, awaitable
 };
 
 struct Waker { u32 token; };               // handed to JS, comes back later
-
-// Every syscall is one of these:
-Task<Line>    read_line(Tty&);
-Task<void>    sleep_ms(u32);
-Task<Bytes>   http_get(Str url);
-Task<void>    write(Stream&, Span<const u8>);
 ```
 
 The scheduler is a ready queue of `std::coroutine_handle<>` plus a
 `HashMap<u32, coroutine_handle<>>` of suspended tasks keyed by wake token. An awaitable's
-`await_suspend` allocates a token, registers the handle, and calls a JS import that tells
-the host "notify me on token N."
-
-That is the entire kernel core: a few hundred lines.
+`await_suspend` allocates a token, registers the handle, and calls a JS import that tells the
+host "notify me on token N". `tick()` is the only thing that ever resumes a coroutine.
 
 ### 3.4 The JS boundary
-
-Deliberately tiny, one-directional per call.
 
 **Wasm exports** (host → kernel):
 
 ```
 init(heap_base)
 wake(token, payload_ptr, payload_len)   // host signals an event
-tick(now_ms)                            // drains ready queue; returns ms-until-next-timer, or -1
-key(code, mods) -> u32                  // fast path, avoids allocation; 0 if the ring was full
+tick(now_ms)                            // drains the ready queue; ms until the next timer, or -1
+key(code, mods) -> u32                  // fast path, no allocation; 0 if the ring was full
 resize(cols, rows)                      // returns the screen descriptor's address, or 0
 ref(slot, obj)                          // host deposits a JS object in the table (§3.7)
 sys(pid, op, a0, a1, a2) -> i32         // a process's synchronous syscall (§4.3)
 sys_async(pid, op, token, len) -> i32   // a process's asynchronous syscall (§4.3)
 ```
 
-The last two arrived with M8 and are the only exports that are not the host's own business:
-they are an isolated process's two imports, which the host forwards with the pid it bound into
-that process's closure. A process therefore cannot name another — there is no argument for it
-on its side of the call. Both are entered from JS at top level, never from inside a kernel
-import, which is what keeps them as ordinary as `key()`.
+The last two are not the host's own business: they are an isolated process's two imports, which
+the host forwards with the pid it bound into that process's closure. A process therefore cannot
+name another — there is no argument for it on its side of the call. Both are entered from JS at
+top level, never from inside a kernel import, which is what keeps them as ordinary as `key()`.
 
 `resize` returns where the screen descriptor (§3.5) lives, which is how the host learns the
 geometry and the address of the cell array. It is the only call that moves the cells, so it is
-also where the renderer re-derives its views (§8.4). The kernel clamps the geometry it is
-given, so the host reads `cols` and `rows` back out of the descriptor rather than assuming its
-request was honoured.
+where the renderer re-derives its views (§8.4). The kernel clamps the geometry it is given, so
+the host reads `cols` and `rows` back out of the descriptor rather than assuming its request was
+honoured.
 
-**Wasm imports** (kernel → host), all non-blocking, all returning immediately:
+**Wasm imports** (kernel → host), all non-blocking:
 
 ```
 host_now(), host_log(ptr, len)
 host_present(dirty_x, dirty_y, dirty_w, dirty_h)
-host_fs(op, token, req)                       // storage, async  (§5.2)
+host_fs(op, token, req)                        // storage, async  (§5.2)
 host_fs_sync(op, handle, ptr, len, off) -> i32 // storage, sync   (§5.2)
-host_svc(op, token, req, ref)                 // host services, async (§3.7)
+host_svc(op, token, req, ref)                  // host services, async (§6)
 ```
 
-Six, and the smoke test asserts exactly these. A `host_random(ptr, len)` was on this list as
-first written and is **unbuilt**: nothing has needed entropy, and an import nothing calls is an
-ABI nothing tests. Adding it would make the count seven everywhere it is quoted, which is the
-only reason it is worth a sentence.
+Six, and the smoke test asserts exactly these.
 
-A `host_fetch` was on the list too, and that is not what M6 built: naming an import per
-operation is the style M5 replaced. `host_svc` carries fetch, WebSocket, the clipboard, file
-transfer and the wall clock over the same `req` record `host_fs` uses, with the object the
-operation acts on passed alongside as an `externref`.
+Storage and services are **multiplexed rather than named per operation**: one import per
+*calling convention*, so a new operation is an enum value on each side rather than a new import,
+and the exact-import assertion stays stable while operations are added. `req` is the address of
+a `HostRequest` (`src/kernel/hostcall.h`) carrying the string argument, the flags, a reply
+buffer, an `aux` word and the status. Both asynchronous interfaces share that record, one orphan
+list and one reaper. **The kernel owns the record for as long as the host may touch it**, which
+is past a cancelled await, so it outlives its awaiter rather than being freed under the host.
 
-There is no `host_timer`. The kernel owns the timer queue, so `tick()`'s return value already
-says when the host must call back, and one `setTimeout` serves every sleeping task.
+There is no `host_timer`: the kernel owns the timer queue, so `tick()`'s return value says when
+the host must call back and one `setTimeout` serves every sleeping task. Compiling,
+instantiating and stepping a process are `host_svc` operations rather than imports of their own.
 
-Storage is **multiplexed rather than named per operation**, which is what a `host_storage_read`
-and a `host_storage_write` became in M5. One import per *calling convention* — one
-asynchronous, one synchronous — is the shape §4.3 already fixes for the process ABI, and it
-keeps the exact-import assertion in the smoke test stable while operations are added. `req` is
-the address of a request record carrying the string argument, the flags, a reply buffer and
-the status; the kernel owns that record for as long as the host may touch it, which is past a
-cancelled await, so it outlives its awaiter rather than being freed under the host.
-
-M6 generalised that record rather than writing a second one: it is `HostRequest` in
-`src/kernel/hostcall.h`, and the interface a call belongs to picks the import. Both
-asynchronous imports therefore have one wire format, one orphan list and one reaper.
-
-M8 added **no import at all**. Compiling a binary, instantiating it and stepping it are
-asynchronous operations on the host, which is `host_svc`'s convention exactly, so they are three
-more of its operations rather than an interface of their own. The record gained one word, `aux`,
-because those three need to name a process and `op` and `flags` were spoken for.
-
-### 3.5 The screen
+### 3.5 The screen and the keyboard
 
 ```cpp
 struct Cell { char32_t ch; u8 fg, bg, attrs, reserved; };   // 8 bytes; fg and bg are palette indices
-Cell screen[rows * cols];
 ```
 
-The renderer holds a view over that region and blits monospace glyphs to the canvas, plus a
+The renderer holds a view over the cell array and blits monospace glyphs to the canvas, plus a
 cursor. Damage tracking is a dirty rectangle the kernel updates as it writes, passed to
-`host_present` once per `tick`. The cursor is drawn, never stored, so moving it dirties the
-cell it left as well as the one it entered.
-
-The host finds all of this through a descriptor, whose address `resize` returns:
+`host_present` once per `tick`. The cursor is drawn, never stored, so moving it dirties the cell
+it left as well as the one it entered. The host finds all of it through a descriptor, whose
+address `resize` returns:
 
 ```cpp
 struct Screen {
@@ -291,147 +244,115 @@ struct Screen {
 };
 ```
 
-The wrap is deferred, so filling the last column does not scroll the screen on its own. A
-resize keeps the rows in use — `0..cursor_y` — dropping from the top when they no longer fit,
-and lands them at the top of the new grid. Re-wrapping logical lines needs a line model the
-grid does not have; M7 built the layout layer and left the promise unkept, because the model
-belongs *in* the grid rather than above it — a per-row continuation bit written by
-`screen_put` — and it lands with whichever milestone needs scrollback.
+The wrap is deferred, so filling the last column does not scroll the screen on its own. A resize
+keeps the rows in use — `0..cursor_y` — dropping from the top when they no longer fit, and lands
+them at the top of the new grid. Re-wrapping logical lines needs a per-row continuation bit the
+grid does not have, and lands with whichever milestone needs scrollback.
 
-The layout layer over the grid arrived with M7, in `src/ui/`, and it is four small things
-rather than a widget toolkit:
+**The layout layer over the grid** is `src/ui/`, four small things rather than a widget toolkit:
 
 - **`Grid`** — cells, a cursor and a damage rectangle, and nothing else. The kernel's screen is
   one; a full-screen program paints another of its own, in its own address space, and blits the
-  damaged part across with one syscall (§4.3). That is what makes the layer linkable by a
-  process at all.
-- **`Pane`** — a rectangle with its own coordinates, style and cursor. Every write is clipped
-  to it, so a status line cannot scribble on the text above it. A pane writes cells directly
-  and marks them in its `Grid`; it never scrolls, because scrolling moves the whole grid.
+  damaged part across with one syscall (§4.3).
+- **`Pane`** — a rectangle with its own coordinates, style and cursor. Every write is clipped to
+  it, so a status line cannot scribble on the text above it. It never scrolls, because scrolling
+  moves the whole grid.
 - **`TextBuf` and `TextView`** — logical lines and a window onto them. `less` and `edit` differ
   in what they do with keys, not in how they scroll.
 
-`src/ui/` is a library a *process binary* links, and the kernel does not link it at all. The
-alternate screen is the one piece that stayed kernel-side, as **`FullScreen`** in
-`src/user/tty.h`: it copies the grid to a heap block, blanks it, and copies it back in its
-destructor, which is what gives the shell's screen back when a program is killed — and a killed
-process runs no destructor of its own, so it could not have been the program's (§4.3).
+`src/ui/` is a library a *process binary* links; the kernel does not link it at all. The
+alternate screen is the one piece that stays kernel-side, as `FullScreen` in `src/user/tty.h`:
+it copies the grid to a heap block, blanks it, and copies it back in its destructor, which is
+what gives the shell's screen back when a program is killed — a killed process runs no
+destructor of its own.
 
-Input is symmetric: a normalised `KeyboardEvent` becomes `{code, mods}`, is posted to the
-worker, and lands in a `Channel<Key>`. A printable key carries its Unicode codepoint; named
-keys take values above the Unicode range. **No control characters exist anywhere in the
-system**: `^C` is `'c'` with the control modifier set, and the reader decides what that means.
-That is §2.3 applied to input. Line editing — history, cursor movement, kill-word, completion —
-lives in a **userland** `LineEditor` coroutine, not in the kernel. That is where the "line
-discipline" belongs, and it is far nicer as a coroutine than as a termios state machine.
+**Input is symmetric.** A normalised `KeyboardEvent` becomes `{code, mods}`, is posted to the
+worker, and lands in a `Channel<Key>`. A printable key carries its Unicode codepoint; named keys
+take values above the Unicode range. **No control characters exist anywhere in the system**:
+`^C` is `'c'` with the control modifier set, and the reader decides what that means. That is
+§2.3 applied to input. Line editing — history, cursor movement, kill-word, completion — is a
+userland `LineEditor` coroutine, not a termios state machine in the kernel.
 
-There is exactly one receiver on that channel and it is the **console pump**, which init spawns
-and which never ends (`src/user/console.h`). It used to belong to the foreground pipeline and be
-spawned per job; it cannot, now that the shell is a program — something has to hold the keyboard
-while nothing is running, and a process has no `keys()` at all. A program therefore **does not
-take the keyboard — it claims a route through the pump**, and the prompt is no exception: the
-shell claims `KeyInput` for raw keys and gives it back around anything it runs.
+**One receiver on that channel, and it is the console pump** (`src/user/console.h`), which init
+spawns and which never ends: something must hold the keyboard while nothing is running, and a
+process has no `keys()` at all. A program therefore does not take the keyboard — it **claims a
+route through the pump**, and the prompt is no exception.
 
 **Each of the two routes — raw keys and the screen — has one holder at a time, on the kernel,
-named by the pid that took it.** A second claim is `Err(Perm)`; it does not nest, and a claim
-clears its route only if it is still the holder, so a parent and a child may die in either
-order. Nesting would mean restoring a predecessor that has already gone: a freed key ring for
-`KeyInput`, and for `FullScreen` a snapshot of the blanked grid the first claimant was painting
-— the shell's screen thrown away rather than given back. Painting is held to the same rule: a
-`ScreenBlit` from a process that does not hold the screen is refused (§4.3).
+named by the pid that took it.** A second claim is `Err(Perm)` rather than a nested one, and a
+claim clears its route only if it is still the holder, so a parent and a child may die in either
+order. Nesting would mean restoring a predecessor that may already be gone. Painting is held to
+the same rule: a `ScreenBlit` from a process that does not hold the screen is refused (§4.3).
 
-**`^C` goes to whatever is in front, and to the claimant when nothing is.** The foreground is a
-set of pids a process names with `Sys::Fg`, which is what a shell does for each stage of a
-pipeline before it waits; the pump cancels them, and a program that has taken the screen and
-stopped answering stays killable. With nobody in front it is an ordinary key, delivered to
-whoever holds the raw route — and *that* is what lets a line editor abandon the line being typed
-instead of being cancelled by it. A shell that is a process could not exist without the
-distinction: it would be killed by its own interrupt.
+**`^C` cancels the foreground if there is one, and is delivered to the claimant if there is
+not.** The foreground is a set of pids a process arms with `Sys::Fg`, which is what a shell does
+for each stage of a pipeline before it waits; the pump cancels them, so a program that has taken
+the screen and stopped answering stays killable. With nobody in front the interrupt is an
+ordinary key going to whoever holds the raw route — which is what lets a line editor abandon the
+line being typed instead of being cancelled by it. Without that split, a shell that is a process
+would be killed by its own `^C`.
 
 Everything the pump does not route to a claimant it **cooks**: echo, a line at a time, `^D` for
 end of input, into one console channel that is the stdin of whatever is in front. A shell hands
-that channel to a child simply by letting go of the keyboard, which is why `cat` with no argument
-reads what is typed.
+that channel to a child by letting go of the keyboard, which is why `cat` with no argument reads
+what is typed.
 
 **Selecting and copying are the page's business, and the kernel is told nothing.** A drag over
 the canvas never reaches wasm: `web/braam.js` turns it into device pixels, `web/render.js` turns
-those into cells and reverses them exactly as it reverses the cursor, and the text it reads back
-out of the grid crosses to the page when the drag settles. There is no mouse event in the ABI, no
-selection in the `Screen` descriptor and nothing a program can ask — because a selection is a
-*view* over the grid rather than input, and the grid is already shared (§2.3). `Ctrl+C` — `Cmd+C`
-on a Mac — copies when there is a selection and is `^C` when there is not, since a terminal with
-no second copy key must overload it; copying clears the selection, so the next one interrupts.
-The clipboard write happens inside the keydown handler because that keystroke is the transient
-activation permitting it (§A.2), which is why the page holds the text rather than asking the
-worker for it once the chord has arrived. Any other keystroke, and any resize, drops the
-selection: the cells it named mean something else the moment the grid moves under it.
+those into cells and reverses them as it reverses the cursor, and the text it reads back out of
+the grid crosses to the page when the drag settles. There is no mouse event in the ABI, no
+selection in the `Screen` descriptor and nothing a program can ask, because a selection is a
+*view* over the grid rather than input and the grid is already shared (§2.3). `Ctrl+C` — `Cmd+C`
+on a Mac — copies when there is a selection and is `^C` when there is not; copying clears the
+selection, so the next one interrupts. The clipboard write happens inside the keydown handler,
+because that keystroke is the transient activation permitting it (§A.2). Any other keystroke,
+and any resize, drops the selection. Select all is `Cmd+A`, or `Ctrl+Shift+A` where there is no
+`Cmd`, and deliberately not `Ctrl+A`, which is the line editor's beginning-of-line.
 
 **A paste is a run of keystrokes, and nothing downstream can tell it from fast typing.** There
 is no byte stream to write into (§2.3), so `web/keys.js` turns the pasted text into key codes —
-one `Enter` per newline however the platform spells it, `Tab` for a tab, and nothing at all for
-a control character no key produces — and the worker feeds them through `key()` like any other
-keystroke. That is also why the paste needs no import, no export and no syscall of its own: the
-route it takes is the one the keyboard already has, so it reaches a cooked reader, a claimant of
-the raw route, and the line editor alike, each on its own terms.
+one `Enter` per newline, `Tab` for a tab, nothing for a control character no key produces — and
+the worker feeds them through `key()`. That is why a paste needs no import, export or syscall of
+its own. What a run does need is **back-pressure**, and that is the whole reason `key()` returns
+something: the ring holds 64 keystrokes, so the host feeds a paste at the rate the console
+drains it rather than losing the tail. That return value reports a fact the host cannot
+otherwise observe; it is not an answer arriving from the kernel, so §2.2 is untouched.
 
-What a run does need is **back-pressure**, and that is the whole reason `key()` returns
-something: the ring holds 64 keystrokes and a paste is routinely longer, so the host feeds it at
-the rate the console drains it rather than pushing it in one go and losing the tail. A refusal
-means the ring is full and the rest of the run waits for the tick that empties it. This is the
-only return value on the input path, and it reports a fact the host cannot otherwise observe —
-it is not an answer arriving from the kernel, so §2.2 is untouched.
-
-`Cmd+V`, or `Ctrl+V` where that is the chord, is the browser's own gesture: the page never reads
-the clipboard for it, and neither key is prevented, precisely so the `paste` event is produced.
-That event is the document's rather than the canvas's, so a terminal claims one only while it
-holds the focus — an embedded one must not swallow a paste meant for a field beside it, nor let a
-`pbpaste` waiting in the terminal next to it steal one. Within the terminal that has the focus, a
-`pbpaste` waiting for the same gesture (§5.4) takes the text and nothing is typed: it asked for
-exactly this gesture, and a program reading the clipboard wants the text and not the keystrokes.
-
-**Select all is `Cmd+A`, or `Ctrl+Shift+A` where there is no `Cmd`, and is deliberately not
-`Ctrl+A`** — which is the line editor's beginning-of-line and has no "is there a selection?" to
-tell the two apart the way copy does. It selects the grid, because there is no scrollback for it
-to mean anything else. Trailing blank rows never travel with a selection either way: the grid is
-a fixed rectangle and the rows below the last line of output are padding, not content.
+`Cmd+V`, or `Ctrl+V` where that is the chord, is the browser's own gesture and is not prevented,
+precisely so the `paste` event is produced. That event is the document's rather than the
+canvas's, so a terminal claims one only while it holds the focus. Within the terminal that has
+the focus, a `pbpaste` waiting for the same gesture (§6) takes the text and nothing is typed.
 
 ### 3.6 Kernel objects
 
 - **`Channel<T>`** — an async MPSC queue with bounded capacity: `co_await ch.recv()` and
-  `co_await ch.send(v)`. This one type is our pipe, our stdin, and our IPC.
+  `co_await ch.send(v)`. This one type is the pipe, the stdin and the IPC. It has **one
+  receiver**, and panics on a second blocked sender rather than losing a wakeup quietly.
 - **A scheduler job** — a `Task<i32>`, a name and a `CancelToken`, which is all the scheduler
   keeps. `sched_spawn()` pushes one on and hands back its pid; killing means signalling the
-  token, and every `co_await` point checks it and unwinds by returning, so destructors run
-  correctly. The name is a view the scheduler holds rather than owns, and `sched_procs()` reads
-  the table back out — which is what /proc is made of (§5.1). There is no `Process` type: argv
-  and stdio belong to the pipeline stage (`src/user/prog.h`) and a working directory to the
-  process record `exec` keeps (§5.1), so a job is the smaller thing the kernel actually needs.
+  token, and every `co_await` point checks it and unwinds by returning, so destructors run.
+  `sched_procs()` reads the table back out, which is what `/proc` is made of (§5.1). There is no
+  `Process` type: argv and stdio belong to the pipeline stage (`src/user/prog.h`) and a working
+  directory to the process record `exec` keeps.
 
-  **Cancellation does not propagate down a tree, and this section once said it would.**
-  `CancelState::waiting` is a single slot, so a job cannot have two children parked at once —
-  which a pipeline needs, since its stages run at the same time. So a pipeline's stages are
-  independent jobs, and the parent-child relationship is put back by hand: `run_line`'s frame
-  holds a destructor that cancels every stage it started, on its way out for any reason. The
-  cost is that a cancelled child does not unwind until the scheduler resumes it, a tick or two
-  after its parent is gone, so it must touch nothing the parent owns. A real child-group
-  awaitable needs intrusive queue links inside `Waiter` first — the same work a channel with two
-  blocked senders would need — and Release_Notes.md's "Structured concurrency, put back by hand"
-  is the full argument.
-- **The job table is not one of these any more.** It was a kernel object while the shell was
-  kernel code; the shell is a process now, so the table is that process's own memory — an id, the
-  command text and the stages' pids — and `jobs`, `fg` and `kill` read and signal it without a
-  syscall between them. What the kernel keeps is what a syscall must serve: the children on each
-  process's record (§4.3). A finished background job is noticed at the next prompt by asking
-  `/proc` whether its pids are still there, because a `wait` would park and the prompt has to come
-  back either way. There is still no `bg` and no `^Z`: stopping a running coroutine at an
-  arbitrary point is the resume-side twin of `CancelToken` and would have to reach every
-  awaitable.
+  **Cancellation does not propagate down a tree.** `CancelState::waiting` is a single slot, so a
+  job cannot have two children parked at once — which a pipeline needs, since its stages run at
+  the same time. So a pipeline's stages are independent jobs and §3.6's parent-child
+  relationship is put back by hand: `run_line`'s frame holds a destructor that cancels every
+  stage it started, on its way out for any reason. The cost is that a cancelled child does not
+  unwind until the scheduler resumes it, a tick or two after its parent is gone, so it must
+  touch nothing the parent owns. A real child-group awaitable needs intrusive queue links inside
+  `Waiter` first.
 - **Filesystem** — an async node tree, not inodes. One interface, split by *when* the work can
   happen rather than by what it does: naming a file may need the host and therefore a wake
   token, but an already-open file does not (§5.2).
 
   ```cpp
   struct Fs {
+      virtual Str kind() const;                     // what `mount` prints
+      virtual bool writable() const;
+      virtual u64 bytes() const;                    // for `df`; 0 when it cannot know
+
       virtual Task<Result<Stat>>       stat(Str path);
       virtual Task<Result<Vec<Entry>>> list(Str path);
       virtual Task<Result<u32>>        open(Str path, u32 flags);
@@ -446,206 +367,118 @@ a fixed rectangle and the rows below the last line of output are padding, not co
   };
   ```
 
-  `read` returns bytes into a caller's buffer rather than a `Bytes`, for the reason a pipe
-  carries a `String`: a `Span` is a pointer and a length, and nothing below this line owns a
-  buffer the caller can keep. An implementation sees paths already resolved and relative to its
-  own mount point, so it never has to know where it was mounted.
-
-  A mount table maps prefix → `Fs`, longest prefix winning, and an open-file table above it
-  holds the descriptors. Implementations in §5.
-- **Programs** — one file in `src/cmd/`, built into a binary of its own, so adding a command
-  means adding one file and a line naming it. There was a registry of `Task<int>(Args, Stdio)`
-  functions here until every program became a binary (§4), and then a table of six shell builtins
-  until the shell became one too. Nothing of that shape is left in the kernel. The builtins'
-  table went with them and is still written out by hand rather than filled in at static-init
-  time — `braam_sh` is an archive, and a registrar nothing references would be dropped by
-  `--gc-sections` without a word.
+  `read` fills a caller's buffer rather than returning a `Bytes`, because nothing below this
+  line owns a buffer the caller can keep. An implementation sees paths already resolved and
+  relative to its own mount point, so it never has to know where it was mounted. A mount table
+  maps prefix → `Fs`, longest prefix winning, and an open-file table above it holds the
+  descriptors. Implementations in §5.1.
+- **Programs are not kernel objects.** One file in `src/cmd/`, built into a binary of its own
+  (§4). The job table is not one either: it is the shell process's own memory.
 
 ### 3.7 Holding JS objects
 
-Use an **`externref` table** rather than a hand-rolled map of integer IDs. Reference types
-are supported everywhere now: a table of `externref` that wasm indexes into means a
-`Response`, a `FileSystemFileHandle`, or a `WebSocket` is just a slot index, with no
-serialisation. Wrap it in an RAII `JsRef` that frees the slot in its destructor.
+A `Response`, a `FileSystemFileHandle` or a `WebSocket` is held in an **`externref` table** as a
+slot index, with no serialisation, wrapped in an RAII `JsRef` that frees the slot in its
+destructor.
 
-M5's OPFS handles are a plain JS array indexed by slot number, not this. The table arrived
-with M6, where `fetch` and `WebSocket` make more than one kind of object need holding; a
-filesystem handle is already only ever an integer on the wasm side, so it gained nothing from
-going first.
-
-**The table is the kernel's, and the host never indexes it.** That is the one detail this
-section had backwards. `import_module`/`import_name` apply to functions only, so a table
-cannot be imported from JS; a module-defined one is what the toolchain supports. So the
-traffic runs the other way round:
+**The table is the kernel's, and JS never indexes it.** `import_module`/`import_name` apply to
+functions only, so a table cannot be imported; a module-defined one is what the toolchain
+supports. The traffic therefore runs this way round:
 
 - The kernel reserves a slot and publishes the number in the request record.
 - The host, when its promise resolves, calls the `ref(slot, obj)` export to deposit the object.
-- To *use* it, the kernel reads the slot and passes the object as `host_svc`'s fourth
-  argument. JS sees the object, never the table.
+- To *use* it, the kernel reads the slot and passes the object as `host_svc`'s fourth argument.
+  JS sees the object, never the table.
 
-That also makes M8's capability story simpler than the original sketch: an instance's table is
-part of the instance, so an isolated process can only reach the objects its own kernel put
-there, with no per-instance table to hand out.
+An instance's table is part of the instance, so a process can only reach the objects its own
+kernel put there. A slot is owned: `JsRef` is move-only, and a request that reserved one owns it
+until `await_resume` hands it over, so a cancelled request frees the slot along with the record.
+A slot the host deposits into belongs to the record rather than to a frame (`reserve_ref()`).
+Releasing a *service* object additionally tells the host to let go — a socket has event handlers
+holding it alive on the JS side — which is what `JsHandle` in `src/svc/svc.h` adds.
 
-A slot is owned. `JsRef` is move-only and clears its slot in its destructor; a request that
-reserved one owns it until `await_resume` hands it over, so a cancelled request frees the slot
-along with the record. Releasing a *service* object additionally tells the host to let go —
-a socket has event handlers holding it alive on the JS side — which is what `JsHandle` in
-`src/svc/svc.h` adds on top.
+OPFS handles are not in this table: a filesystem handle is only ever an integer on the wasm
+side, so it is a plain JS array indexed by slot number.
 
 ---
 
 ## 4. Process model
 
 **Every program is a binary in its own instance, in a worker of its own.** There is no in-kernel
-program and no way to write one. A program gets its own address space, its own capabilities, its
-own descriptors and a memory cap the kernel sets, and it gets them inside a Web Worker holding
-nothing else — so `worker.terminate()` ends it without its cooperation.
+program, no program registry and no way to write one. A program gets its own address space, its
+own capabilities, its own descriptors and a memory cap the kernel sets, inside a Web Worker
+holding nothing else — so `worker.terminate()` ends it without its cooperation. There is nowhere
+else to put a process: `braam_add_program` arranges it unasked, and the binary's `braam` section
+carries a memory cap and an ABI number but no placement flag (§4.3).
 
-| Where it runs | Isolation | Spawn cost | Kill |
-|---|---|---|---|
-| **In a worker of its own** | address space + capabilities + memory cap + liveness | ~10 ms, few MB | `worker.terminate()` |
+**A host with no worker to give is waited out, not worked around.** Where the constructor throws
+— a browser without nested workers, a host disposing of its pool — the spawn is refused with
+`Error::Again` and `spawn_process` (`src/user/exec.cpp`) backs off 10, 20, 50, 100, 200, 500 ms
+and then a second indefinitely, printing `no worker, retrying` on the program's own stderr. It
+is an ordinary await, so `^C` abandons it. Nothing is latched, so a host that recovers is
+noticed. The alternative — instantiating in the kernel's worker — is a process with no kill
+switch sharing the kernel's liveness, and a browser that cannot make a nested worker cannot run
+Braam.
 
-One row, and there is no second: a process is a worker, and there is nowhere else to put one.
-The binary says nothing about it either — the `braam` custom section carries a memory cap and an
-ABI number and no placement flag (§4.3), so there is no claim for `exec` to read and no choice
-for userland to make.
+**The shell is not an exception.** `/bin/sh` is a binary in `/bin` that init runs, and
+everything a prompt needs — a pipeline, a redirection, a job, a working directory, the keyboard,
+the cursor — it asks for through §4.3. What is left inside the kernel is not a weaker kind of
+process: it is the dispatcher those requests arrive at.
 
-**A host that cannot give a worker is waited out, not worked around.** Where the constructor
-throws — a browser without nested workers, a host disposing of its pool — the spawn is refused
-with `Again` and the kernel *pauses and asks again*: 10 ms, then 20, 50, 100, 200, 500, and a
-second from there on, saying `no worker, retrying` on the program's own stderr each time. The
-wait is an ordinary await, so `^C` abandons it and a cancelled job unwinds it. Nothing is
-latched off by a refusal, because a host whose workers come back has to be noticed; the kernel's
-backoff is what keeps the asking cheap.
+**A process that loses its worker dies with it, and init replaces the shell.** There is no
+moving a running process; the instance went with the worker. Init starts another `/bin/sh` when
+its shell **died** — a trap, a failed step, an instance that would not be made — and not when it
+**exited**, which is the user's own `exit` and the end of the session. It is bounded at three
+deaths in quick succession; a shell *waiting* for a worker is not one, since it has not started.
+A replaced shell is a fresh one: kernel `/home`, empty job table.
 
-This is deliberately a wait rather than a degraded run. The alternative — instantiating in the
-kernel's worker, which is what this section used to do — is a process with no kill switch
-sharing the kernel's liveness, and once every program is one of these, a host that quietly
-withdrew the kill would be a system that had stopped being what §4.2 describes. A browser that
-cannot make a nested worker cannot run Braam, and the honest answer is to say so until it can.
-
-**The shell is not an exception.** `/bin/sh` is a binary in `/bin` that init runs, and everything
-a prompt needs — a pipeline, a redirection, a job, a working directory, the keyboard, the cursor —
-it asks for through §4.3 like any other program. What is left inside the kernel is not a weaker
-kind of process: it is the dispatcher those requests arrive at.
-
-**A host that loses its workers takes every process with it, and init replaces the shell.** Every
-process in a worker dies there, and once `/bin/sh` is one of them that would be the session
-rather than a command, because nothing re-execs init. So **init starts another shell when its
-shell *died* — a trap, a step that failed, an instance that would not be made — and does not when
-it *exited***, which is the user's own `exit` and the end of the session. The replacement is an
-ordinary `exec` of `/bin/sh`, and where there is no worker to be had it is the `exec` that waits,
-above, rather than a death: a host with none gets a line a second and a shell the moment one can
-be made. That is what makes the kill switch something `/bin/sh` can survive rather than something
-that ends the session.
-
-There is no moving a *running* process anywhere, and there could not be: the instance is gone
-with the worker and there is no state to carry over. Replacing the shell is the whole of the
-answer, and it is bounded — three deaths in quick succession and init says so and stops, since a
-shell that cannot get as far as a prompt would otherwise say it for ever. A shell that is waiting
-for a worker is not one of those deaths; it has not started yet.
-
-**Every program gets a worker**, which is a decision taken once the cost had been measured: 34–45
-µs a syscall round trip against §4.4's estimated 0.1 ms, so a command pays a few hundred
-microseconds for a kill switch it cannot be denied. The recipe that builds a program arranges it
-unasked (`cmake/BraamProgram.cmake`) and takes no argument for anything else, so an out-of-tree
-program is built the way the system's own are — the prompt included, since a keystroke costs two
-round trips rather than the five it cost when a repaint was four operations for one change to the
-grid.
-
-**There was a third program model, and it is gone.** The **kernel applet** — a program as an
-in-kernel coroutine, sharing the kernel's heap and its whole authority — was how every program
-was written before M8 gave them an alternative. Two program models meant two `Args` types, two
-`io.h`s and two copies of every filter's logic waiting to diverge, and the weaker model was the
-one with no memory cap, no descriptor table and nothing between a bug and the kernel's heap. So
-the applets became binaries and the ABI grew to meet them (§4.3). Nothing of the applet is
-reserved in the wire format: the `abi` word is what refuses a binary from an older build, and it
-does that for every change rather than for this one.
-
-A **shell builtin** is still not a program and still has no file in `/bin`, but it is no longer
-kernel code: the six live inside `/bin/sh`, in `src/sh/builtin/`. What makes one a builtin has
-changed with them. It is not "no syscall could serve it" — `chdir`, `wait` and `kill` all exist.
-It is that the thing it touches is *the shell process's own*: `cd` moves the working directory a
-typed command inherits (§5.1), `jobs`, `fg` and `kill` read and signal a table no syscall shows to
-anybody else, `exit` ends the shell's loop, and `help` lists the rest.
-
-A builtin runs inside the shell rather than as a child, so it pipes and redirects by reading and
-writing descriptors like anything else. One discipline goes with that, and it is worth stating
-because it is a real constraint rather than a style: **a builtin buffers its output and writes it
-once.** Nothing inside a process can wait for a sibling task — the only resumption a task has is a
-syscall reply — so a builtin in a pipeline runs to completion in its turn rather than alongside,
-and a pipe holds eight chunks. A builtin that wrote a line at a time would fill one and park with
-nobody left to drain it.
-
-The cost is paid twice over and is worth naming. Retiring the applet took `kernel.wasm` from
-236,965 bytes to under 170,000, because a quarter of it was userland; the same code now ships as
-~29 binaries, each carrying its own copy of the allocator, the string types and the coroutine
-runtime, and the boot archive grew from 47 KB to some 370 KB for it. That is §4.4's duplication
-arriving in full. It buys a memory cap, a descriptor table and a kill switch for every command
-the system has, which is the trade this section has always described.
-
-One consequence lands on the tests. The in-wasm unit tests cannot drive a binary — stepping an
-instance means returning to the host, and `run_tests()` does that once — so with the shell a
-binary too they can drive nothing that runs. What they can still reach is everything below a
-program: the console and its claims, the pipes, `/proc`, the VFS, and the grammar, which is pure
-and is compiled straight into the suite. Everything else is asserted in `test/run.mjs`, against
-the real shell and the real programs.
+**A shell builtin is not a program and has no file in `/bin`**, but it is not kernel code
+either: `cd`, `fg`, `jobs`, `kill`, `help` and `exit` live inside `/bin/sh`, in
+`src/sh/builtin/`. What makes one a builtin is that it touches the shell *process's own* state —
+its working directory, which a typed command inherits at spawn; its job table, which no syscall
+shows anyone; its loop. It pipes and redirects through descriptors like anything else, but runs
+**in its turn rather than alongside**, since nothing inside a process can wait for a sibling
+task. So **a builtin buffers its output and writes it once**: one that wrote a line at a time
+would fill an eight-slot pipe and park with nobody left to drain it.
 
 ### 4.1 What separate instances buy
 
-- **Address space: isolated, for free.** Two `WebAssembly.Instance`s have two separate
-  `WebAssembly.Memory` objects, and there is *no* instruction that reaches outside your own
-  linear memory. A wasm pointer is an offset, not an address; there is nothing to forge.
-  This is a stronger guarantee than MMU-based process isolation, because it is enforced by
-  the type system and bounds checks rather than by page tables you might misconfigure.
-- **Capabilities: isolated, if we are careful.** An instance can only call the imports we
-  supply at instantiation. Give each instance an import closure bound to its PID and we have
-  a genuine capability system: process 7 physically cannot issue a syscall as process 3,
-  because it holds no function that does so. The same applies to the `externref` table — hand
-  each instance its own and it can only touch the objects we put in it.
-- **Memory limits: isolated, and a bonus.**
-  `new WebAssembly.Memory({initial: 2, maximum: 256})` is a hard 16 MB ceiling;
-  `memory.grow` simply fails past it. That is an rlimit without cgroups. When a process
-  exits we drop the instance and *all* its memory returns at once, sidestepping the
-  fragmentation and leak problems an in-kernel program had, sharing the kernel heap.
+- **Address space: isolated, for free.** Two instances have two `WebAssembly.Memory` objects,
+  and no instruction reaches outside your own linear memory. A wasm pointer is an offset, not an
+  address; there is nothing to forge. This is stronger than MMU-based isolation, because it is
+  enforced by the type system and bounds checks rather than by page tables one might
+  misconfigure.
+- **Capabilities: isolated, if we are careful.** An instance can only call the imports supplied
+  at instantiation. Each closure is bound to its pid, so process 7 physically cannot issue a
+  syscall as process 3: it holds no function that does so. The same applies to the `externref`
+  table (§3.7).
+- **Memory limits: isolated, and a bonus.** `new WebAssembly.Memory({initial, maximum})` is a
+  hard ceiling — 256 pages, 16 MB — and `memory.grow` simply fails past it. That is an rlimit
+  without cgroups. When a process ends the instance is dropped and *all* its memory returns at
+  once.
 
 ### 4.2 What they do not buy: CPU time
 
-**`while(1){}` cannot be preempted.** Nothing in the wasm specification allows it. Address-space
-isolation and *liveness* isolation are separate problems, and we should be explicit about
-which one we are solving. Two options:
+**`while(1){}` cannot be preempted.** Nothing in the wasm specification allows it, so
+address-space isolation and *liveness* isolation are separate problems. One worker per process
+makes `worker.terminate()` the `SIGKILL`, which is what an operating system owes its user, and
+it needs no metering: a step is one more asynchronous host request, so a process that never
+answers is a request that never lands, and `^C`, `kill` and a cancelled job already know what to
+do with one of those. **Fuel counters** — a binary-rewriting pass injecting
+`if (--fuel < 0) trap;` at loop headers — remain the only way to *bound* CPU rather than end it,
+and are unbuilt.
 
-1. **One worker per untrusted process**, so `worker.terminate()` is our `SIGKILL`. This is what
-   M9 built.
-2. **Fuel counters** — a binary-rewriting pass injecting `if (--fuel < 0) trap;` at loop
-   headers and function entries. This is what standalone runtimes do for metering; it costs
-   perhaps 5–15% throughput. Optional, and a self-contained project of its own.
-
-The first is enough for a *kill*, which is what an operating system owes its user, and it needs
-no metering: the kernel does not have to notice that a process is looping, because it is not
-waiting on anything it cannot abandon. A step is one more asynchronous host request, so a
-process that never answers is a request that never lands — and `^C`, `kill` and a cancelled job
-already know what to do with one of those. The second option is still the only way to *bound*
-CPU rather than end it, and is still unbuilt.
-
-What the worker does not change is the shape: one worker per process, hired from a small pool and
-terminated rather than pooled when it is killed, and the process's own memory created inside it,
-so the kernel's page counts still decide the cap. A worker that has finished its process is
-clean — the instance is dropped and wasm cannot have touched the worker's own scope — so it goes
-back to the pool. One that was terminated is gone, which is the point.
-
-The pool is sized for a pipeline *above* what the session holds permanently, because the shell is
-one of these processes and never gives its worker back. It is also the whole of the capability
-question: a worker is asked for when one is needed, and a host that will not give one is refused
-per spawn rather than written off once. Nothing is latched, so a host that recovers is noticed
-the next time the kernel asks — which §4 has it doing at a known rate.
+Workers are hired from a small pool, sized for a pipeline *above* what the session holds
+permanently, since the shell is one of these processes and never gives its worker back. A worker
+that has finished its process is clean — the instance is dropped and wasm cannot have touched
+the worker's own scope — so it goes back to the pool. One that was terminated is gone, which is
+the point.
 
 ### 4.3 The kernel↔process ABI
 
-The shape is the one this section fixed in M0; the details amended since are marked below, and
-the `abi` word in the custom section is what makes an amendment safe — `exec` refuses a binary
-whose number is not the kernel's, so a stale binary is a diagnostic rather than a wrong answer.
+`src/kernel/sysabi.h` is the wire, included by both ends so neither can drift alone. The `abi`
+word in the custom section is what makes an amendment safe: `exec` refuses a binary whose number
+is not the kernel's, so a stale binary is a diagnostic rather than a wrong answer.
 
 ```
 process imports:  env.memory                        // the kernel's, so the cap is the kernel's
@@ -660,251 +493,146 @@ custom section "braam":  magic, abi, flags, initial_pages, max_pages
 ```
 
 The coroutine model survives the boundary intact: the process's `co_await` suspends, its
-scheduler returns control out through `_start`/`_resume`, the kernel continues, and later
-calls `_resume` with the payload. Reentrant scheduling across an instance boundary, with no
-stack switching.
+scheduler returns control out through `_start`/`_resume`, the kernel continues, and later calls
+`_resume` with the payload. Reentrant scheduling across an instance boundary, with no stack
+switching.
 
-**Memory is imported rather than exported.** `--import-memory` and no declared maximum means
-the host supplies `new WebAssembly.Memory({initial, maximum})`, so the 16 MB ceiling of §4.1 is
-the kernel's decision and not a number the binary could have written differently.
+The wire's conventions:
 
-**`_start` takes argv rather than argc.** The host has to place the argv blob in the process's
-memory — through `_alloc`, which is what `_alloc` is for — and `argc` alone cannot say where it
-put it. The blob is `u32 argc`, then a length and bytes per word.
+- **Memory is imported rather than exported**, with no declared maximum, so §4.1's ceiling is
+  the kernel's decision and not a number the binary could have written differently.
+- **`_start` takes argv rather than argc**, because the host places the blob through `_alloc`
+  and `argc` alone cannot say where it put it. The blob is `u32 argc`, then a length and bytes
+  per word.
+- **A reply payload begins with an `i32` status**: `_resume`'s signature has room for a buffer
+  and not for an errno, and every asynchronous syscall needs both.
+- **The op word's upper bits are the operation's argument** — a descriptor, the open flags, or
+  one small immediate — so a payload is only ever the operation's *data*, with no header glued
+  on the front.
+- **A process may have several syscalls outstanding** — one per task, and `PROC_TASKS` is eight
+  — and the step request's `flags` says which one a reply answers. Kernel-side each parked call
+  is a record with its own staging block and its own scheduler job, so a socket read that never
+  completes cannot starve the keystroke behind it.
 
-**A reply payload begins with an `i32` status.** `_resume`'s signature has room for a buffer and
-not for an errno, and every asynchronous syscall needs both.
+**The table is thirty-six operations and `PROC_ABI` is 8**: four synchronous — `exit`, `getpid`,
+`now`, `stage` — and thirty-two asynchronous.
+[System_Calls.md](System_Calls.md) lists them all with what each carries.
 
-**The op word's upper bits are the operation's argument** — a descriptor at `write`, `read` and
-`close`, the open flags at `open`, one small immediate elsewhere. One convention rather than two,
-so a payload is only ever the operation's *data*: a write hands over its bytes and an open hands
-over its path, neither with a header glued on the front.
+Four rules bound the table:
 
-**The operation table grew with the programs.** M8 fixed it at eight — `exit`, `getpid`, `now`
-and `stage` synchronously, `write`, `read`, `open` and `close` asynchronously — because those
-were what a binary needed when only two were binaries. Retiring the applet meant every
-program needed what it had reached for directly, and the table grew to twenty-seven: `stat`,
-`list`, `mkdir` and `remove` beside the descriptor operations; `sleep` for the timer queue;
-`clock` and `storage` for the two host services no file can stand in for; `fetch`, `wsopen`, the
-two clipboard operations and `pick`/`pickopen`/`save` for the ones that hand back a stream; and
-five terminal operations for a program that takes the whole screen. Every one has a caller in
-`src/cmd/`, which is the rule that keeps the table from growing on speculation.
-[System_Calls.md](System_Calls.md) lists them all, with what each carries.
-
-**A process can start a process, and that took five more.** The table is thirty-two: `chdir`
-beside the filesystem operations, and `pipe`, `spawn`, `wait` and `kill` as a family of their
-own. What forced them is that a program whose job is to run another program had nowhere to
-live — a builtin is the shell's own frame, so `timeout` and `watch` were unwritable rather than
-merely unwritten. Those two were the first callers, and the rule above is why there were two and
-not a plausible half-dozen. The shell is the third, and the one that made the family general: a
-prompt is a supervisor, and it needs every one of the five.
-
-**And the shell took two: `cursor` and `fg`.** The table is thirty-four. Both exist because a
-prompt is a program now, and both are the terminal rather than the process:
-
-- **`cursor`** reports and moves the cursor of the *scrolling* screen, get and set in one
-  operation. A line editor writes with `write` — which wraps and scrolls, exactly as it did when
-  the editor was kernel code — and then has to know where that landed, because nothing counts
-  scrolls. `ScreenBlit` could not serve it: it is refused without the alternate screen, and taking
-  the alternate screen blanks the grid the prompt lives in.
-- **`fg`** names which of a process's children is in front, and therefore what `^C` reaches. With
-  nobody in front the interrupt is delivered to whoever holds the raw keys instead (§3.5). Without
-  it a shell that is a process would be cancelled by the interrupt meant for the command it ran,
-  which is not a thing that can be worked around from userland.
-
-`fg` is authorised the way `kill` is, and then some: the pid must be a child of the caller, and
-the caller must have the terminal already — it holds the raw keys, or it is itself in front, or
-nobody is, or **what is in front is what it put there**. The last two clauses are not slack. A
-shell must let go of the keyboard *before* it spawns, because a child is a scheduler job that runs
-as soon as the shell next parks and a full-screen program claims the keys in its very first step;
-handing them over afterwards is a race the child loses. And it arms a pipeline a stage at a time,
-so from the second call onwards something *is* in front and the shell holds neither the keys nor a
-place in the set it is filling. The foreground therefore belongs to whoever armed it, and the
-console records that rather than inferring it from who holds the keyboard.
-
-**A colour took one more: `style`.** The table is thirty-five. §2.3 says the
-terminal is a cell grid rather than a byte stream, so a colour cannot be written *in* the bytes —
-there is no escape sequence to reach for, by design — and a program that has no grid of its own
-had no way to name one at all. `style` is that way: two palette indices and the `ATTR_*` bits in
-the op word's argument, applying to what `write` paints next. It is sticky grid state, as it is
-for the kernel's own writers, so the convention is that whoever sets a colour puts the default
-back — and the prompt doing so is also what corrects a program that died mid-colour. It is
-refused while another process holds the alternate screen, for `cursor`'s reason: a program with
-the alternate screen paints cells and names their colours in them. `/bin/sh` is the caller, and
-`ScreenBlit` is why there is not a second one.
-
-**And a repaint took the last one: `echo`.** The table is thirty-six, and `PROC_ABI` is 8. It is
-`cursor`'s argument one step further on. A line editor's repaint was four operations — the cursor
-to the anchor, the bytes, `cursor` again to find out what had scrolled, and the cursor to where the
-caller wanted it — for **one** change to the grid. `echo` is all four: the anchor and a cursor
-offset in the payload, the bytes after them, and a reply that says where the cursor ended, what the
-geometry is, and how many rows the write carried the anchor up. That last number is the whole
-reason `cursor` was ever called twice, and it is a counter the screen was already in a position to
-keep.
-
-**And then a whole prompt, which is the same argument at the scale above.** A prompt is three
-colours and a reset, so it was four `style`s and three `write`s between two `cursor` gets — seven
-round trips, nine when a failed status put a fourth colour in front. So `echo`'s payload is a
-*sequence of styled runs*: a run is a style word and a length, every header ahead of every byte,
-and `SYS_STYLE_KEEP` is a run that names no colour and is therefore exactly a `write`. Two bits in
-the op word carry what the `cursor` gets were for — `FRESH` anchors wherever the cursor is, on a
-row of its own, and `END` leaves the cursor where the write ended rather than `cur` cells past the
-anchor. A prompt is one round trip, and Enter to the next one was twelve and is five.
-
-The operation still **authorises nothing new**, and that is the constraint the shape was chosen
-under rather than a happy accident: a run is a `style` and a `write`, `FRESH` is a `cursor` get and
-a conditional newline, `END` is not calling `cursor` afterwards. Every byte still goes out through
-the process's own stdout, so a redirection behaves; the refusal is still `cursor`'s.
-
-The cost being paid is §4.4's, per operation and not per byte, so a keystroke is what it falls on:
-one key was five round trips and is two. Two things follow from its being one operation rather than
-four. The grid is presented at the end of every tick, so four operations painted a keystroke three
-times and the cursor had to be *hidden* through them or it would be seen walking the line; one
-operation is one tick, and the intermediate states are never presented. And a repaint no longer
-straddles three windows in which another process could move the cursor under it. `/bin/sh` is the
-caller. A program that paints cells has `ScreenBlit`, which carries the cursor in the same payload
-as the cells for exactly this reason.
-
-`cursor` and `style` stay, though `echo` has left them with no caller in `src/cmd/`. The rule that
-every operation has one is a rule against *growing* the table on speculation, not one that retires
-an operation when its caller is refactored — and `echo` is deliberately their fused form for the
-one caller that pays a round trip apiece, not their replacement. A program colouring a word on
-stdout has no anchor to name and does not want a row of its own, which is the one thing `echo`
-cannot express.
-
-All the rest are asynchronous, because the synchronous half is closed and stays closed. That costs a
-park and a step even for `wait` on a child that has already exited, which is the cost model of
-§4.4 arriving where it always does.
+- **Every operation has a caller in `src/cmd/`.** That is a rule against *growing* the table on
+  speculation, not one that retires an operation whose caller is refactored.
+- **The synchronous half is closed at four.** Each is answerable inside the process's own worker
+  with no kernel to ask — `getpid` from the closure, `now` from the step message's clock plus
+  elapsed time, `exit` buffered onto the step's reply, `stage` refused with the "no room" answer
+  the runtime already handles — which is the whole reason one binary runs there at all. A fifth
+  would have nothing to answer with and would fail in a worker alone. So an operation that needs
+  the kernel is asynchronous whatever it costs, including a `wait` on a child that has already
+  exited.
+- **A stream of bytes comes back as a descriptor**, so `read`, `write` and `close` serve it and
+  nothing is duplicated: a fetched body is read like a file, a socket is written like one, and a
+  killed process drops all of them with its handle table.
+- **What the kernel publishes as text needs no operation.** `/proc` is a filesystem, so `mount`
+  is `/proc/mounts` and `cat` and `grep` are the introspection tools. `pwd` is the one thing
+  that argument cannot reach — ProcFs generates a file at `open` and has no idea who is reading
+  — so `chdir` is an operation, because "which process is asking" is not a question a filesystem
+  can be asked.
 
 **A descriptor named in a spawn is moved, not duplicated.** The parent's slot is closed and the
 child owns it. POSIX duplicates and expects the parent to close its copy, and forgetting is the
-classic bug where the reader never sees end of input, because a write end is still open in a
-process that will never write. Moving makes that unrepresentable — and it is not only tidiness:
-a `Channel` has one receiver and panics on a second blocked sender (§3.6), so two processes
-holding one pipe end is a user program reaching a kernel invariant. One end, one owner, by
-construction. A descriptor a syscall of the parent is parked on cannot be moved at all — the
-parent's reader and the child's stdio would be that second receiver — and a spawn refused on any
-slot takes none of them, so the parent's table is as it was. A descriptor also has one user per
-direction at a time within a process: a second concurrent read, or write, is `Err(Perm)`, for the
-pipe ends because `Channel` says so and for the host kinds because a reply sized twice is not
-re-entrant against one object.
+classic bug where the reader never sees end of input. Moving makes it unrepresentable — and a
+`Channel` has one receiver and panics on a second blocked sender (§3.6), so two processes
+holding one pipe end would be a user program reaching a kernel invariant. A descriptor a syscall
+of the parent is parked on cannot be moved at all, and a spawn refused on any slot takes none of
+them. Within a process, a second concurrent use in the same direction is `Err(Perm)`.
 
 **A child is an ordinary scheduler job**, spawned exactly as a pipeline stage is, so `^C`,
-`kill`, `jobs` and `/proc` reach it with nothing added. Its parent's destructor cancels it, which
-is §3.6's structured concurrency put back by hand a second time, one level further down. Both
-bounds on it — eight live children, eight levels deep — are there because every child is an
-instance with a memory cap of its own, and nothing else would stop the first fork bomb.
+`kill`, `jobs` and `/proc` reach it with nothing added. Its parent's destructor cancels it,
+which is §3.6's structured concurrency put back by hand one level further down; its status is
+recorded on the parent's record by a destructor that finds the parent by pid, since pids are
+never reused. Both bounds — `SYS_CHILD_MAX` live children, `SYS_PROC_DEPTH` levels deep — hold
+because every child is an instance with a memory cap of its own, and nothing else would stop the
+first fork bomb.
 
-**What the kernel already publishes as text needs no operation.** `/proc` is a filesystem, so a
-process reads it with `open` and `read` like anything else: `mount` is `/proc/mounts`, and `df`
-needs `storage` only for the three numbers behind a host round trip, because ProcFs generates its
-files synchronously and asking the host is not. Adding a line to `/proc` is cheaper than adding a
-syscall and leaves `cat` and `grep` able to read it.
+**0 is not a pid.** It is `sched_spawn`'s failure return, what `tty_keys_owner()` and
+`tty_screen_owner()` mean by "nobody", `SYS_WAIT_ANY`, `Fg(0)`, and `link.pid = 0` in
+`web/proc.js`. `/bin/sh` takes init's pid, since it is a process inside init's task rather than
+a job of its own.
 
-There is one thing this argument cannot reach, and `pwd` is it. ProcFs generates a file at
-`open` and has no idea who is reading, so `/proc/cwd` can only ever be one answer — and once
-every process has a working directory of its own, the one answer is the shell's. That is why
-`chdir` is an operation and `pwd` calls it: not because the text was expensive, but because
-"which process is asking" is not a question a filesystem can be asked.
+**`Sys::Fg` is authorised the way `kill` is, and then some**: the pid must be a child of the
+caller, and the caller must have the terminal already — it holds the raw keys, or it is itself
+in front, or nobody is, or **what is in front is what it put there**. The last two clauses are
+not slack. A shell must let go of the keyboard *before* it spawns, because a child runs as soon
+as the shell next parks and a full-screen program claims the keys in its first step. And it arms
+a pipeline a stage at a time, so from the second call onwards it holds neither the keys nor a
+place in the set it is filling. The foreground therefore belongs to whoever armed it, and the
+console records that rather than inferring it.
 
-**The synchronous half is closed.** `exit`, `getpid`, `now` and `stage` are answerable inside the
-process's own worker, with no kernel to ask — that is the whole reason one binary runs in either
-place. A fifth synchronous operation would have nothing to answer with there and would fail in a
-worker alone, which is the worst way for an ABI to break. So an operation that needs the kernel
-is asynchronous whatever it costs, and the four above are the complete set for good.
+**A repaint is one operation.** `Sys::Echo` carries an anchor, a cursor offset, a sequence of
+styled runs and the bytes; its reply says where the cursor ended, what the geometry is, and how
+many rows the write carried the anchor up. It authorises nothing `Sys::Style`, `Sys::Cursor` and
+`Sys::Write` do not, and every byte still goes out through the process's own stdout, so a
+redirection behaves. It exists because §4.4's cost falls per *operation*: a keystroke was five
+round trips and is two, and Enter to the next prompt was twelve and is five. Being one operation
+also keeps the intermediate states off the screen, since the grid is presented once per tick.
 
 **The kernel does not call a process; the host does, and never with the kernel on the stack.**
 Only JS can call another instance's exports, and re-entering the kernel from inside one of its
 own imports would run it on a heap it is halfway through changing. So one `_start` or `_resume`
 is a *deferred host action*, structurally identical to a storage reply: the process's proxy task
-in the kernel parks on a wake token, the host steps the instance once the tick has unwound, and
-the token is woken with the outcome. Synchronous syscalls run the other way and need no such
-care — they re-enter the kernel at top level, exactly as `key()` and `wake()` do.
+parks on a wake token, the host steps the instance once the tick has unwound, and the token is
+woken with the outcome. Synchronous syscalls run the other way and re-enter the kernel at top
+level, exactly as `key()` does.
 
-What crosses is bytes, not addresses (Appendix B). The host asks the kernel for room with
+**What crosses is bytes, not addresses** (Appendix B). The host asks the kernel for room with
 `Sys::Stage`, copies the payload in, and only then reports the request; the reply travels back
-through a block the host takes from the process's own `_alloc`.
+through a block the host takes from the process's own `_alloc`. One message each way per step,
+and both halves of that protocol live in `web/proc.js` — `serveProc` is the process's side,
+`makeProc` the host's — because two files describing one wire is how it drifts.
+
+**Whoever takes a worker away must fail the in-flight step**, or the kernel parks for ever on a
+reply that is not coming. An abandoned request is reaped by `wake()` on its token and by nothing
+else, which is why `sched_wake` returns a bool.
 
 A trap is how a process reports a fatal error: it has no host imports to log through, so the
-kernel turns a trap into an exit status and says the process crashed.
+kernel turns a trap into an exit status and says the process crashed. Two fidelity losses come
+with the worker and neither is worth an ABI change: a binary that will not instantiate reads as
+a crash (132) rather than as "will not instantiate" (126), and `Sys::Now` is relative.
 
-**The worker changes none of it.** The same binary runs in either place; only the wiring behind
-its two imports differs, which is what lets `exec` decide from metadata without userland — or
-the program — noticing. That is worth stating plainly, because a worker boundary has no
-synchronous direction at all (§1 rules out `SharedArrayBuffer`, and therefore `Atomics.wait`),
-and `sys` is by construction synchronous. The reason it survives is that every one of its four
-operations can be answered *without the kernel*:
-
-- `GetPid` is the pid the host bound into the worker when it made it — the same closure trick the
-  kernel's worker uses, one thread further out, so a process still holds no function that names
-  another.
-- `Now` is a clock reading the step message carried, plus the worker's own elapsed time. It is
-  monotonic and relative rather than bit-identical to the kernel's tick clock, which nothing in
-  `src/proc/` or `src/cmd/` depends on.
-- `Exit` is buffered and rides back on the step's reply. A process only ever issues it
-  immediately before returning, so nothing observes the delay.
-- `Stage` is refused with 0, the "no room" answer the runtime already handles. It is the
-  *host's* syscall rather than a program's — but a hostile binary can still call it, so it needs
-  an answer rather than an assumption. Any unknown operation is likewise refused locally.
-
-So the asynchronous half is the only thing that crosses: `sys_async` is recorded beside the step
-result, and the kernel worker performs the `Sys::Stage` copy on the process's behalf exactly as
-it would for a process it holds itself. One message down, one up, per step — the protocol between
-the two workers is the *host's*, not an ABI a binary can see, and it is written once in
-`web/proc.js` with both halves in the same file.
-
-Two things do lose fidelity, and neither is worth an ABI change. An instance in a worker of its
-own is created there, so a binary that will not instantiate reads as a crash (132) rather than as
-"will not instantiate" (126) — the module is still compiled in the kernel worker, so a malformed
-one is still refused before anything runs. And `Now`, as above, is relative.
+**A process ends when its root task returns**, whatever the others are doing. The kernel then
+drops the instance and cancels the servers of anything still outstanding.
 
 ### 4.4 Cost model
 
-Compilation is expensive; instantiation is cheap. Keep the `Module` in a cache keyed by path and
-instantiate per `exec`, which is what `web/proc.js` does. `Module` objects are
-structured-cloneable, so we can compile once and `postMessage` the module to every worker.
+Compilation is expensive; instantiation is cheap. The host keeps the `Module` in a cache keyed
+by path and instantiates per `exec`. `new WebAssembly.Module(bytes)` is synchronous, which is
+allowed in a worker at any size and keeps `exec` one round trip rather than two; the bytes come
+from the VFS, so a binary can live in OPFS or `/home` and not only beside `kernel.wasm`.
+`Module` objects are structured-cloneable, so a binary is compiled once however many workers run
+it, which is why the cache stays in the kernel worker. Starting a worker is the other cost, and
+the pool (§4.2) is the answer.
 
-The compile is *not* streaming, as this section assumed it would be: a binary reaches the host
-as bytes the kernel read through the VFS, so it can come from OPFS or a copy in `/home` and not
-only from a URL beside `kernel.wasm`. `new WebAssembly.Module(bytes)` is synchronous, which is
-allowed in a worker at any size and keeps `exec` one round trip rather than two.
+**A syscall is the cost that does not go away**: two `postMessage` hops and two copies,
+**measured at 34–45 µs** in three engines. A syscall-bound program pays it per `SYS_CHUNK` (512
+bytes) — a quarter of a megabyte through three processes is 6–13 ms — which is why a bigger
+chunk or a batched step protocol was decided against. What that leaves on the interactive path
+is the *line* rather than the key: a keystroke is two round trips and Enter to the next prompt
+is five, paid once a line, which is why it is affordable.
 
-The `postMessage` of a module is what M9 uses, and it is why the cache stays in the kernel worker
-rather than moving out with the instance: a binary is compiled once however many workers run it.
-Starting a worker is the other cost, and the pool is the answer — a free list of workers with no
-process in them, a pipeline's worth of them, topped up at boot. Where the constructor throws
-there is nothing to hand a spawn, so it is refused and §4's wait begins. A worker that is made
-and *then* never loads its script is a different failure and reads as one: the process it was
-given crashed, which is what the kernel is told and what init counts.
+**The real cost is duplication.** With no dynamic linking, every binary embeds its own copy of
+the allocator, the string types and the coroutine runtime; the boot archive is ~491 KB and
+`sh.wasm` is 81 KB of it. Keep the process-side runtime minimal and push anything substantial
+into syscalls, so it lives once in the kernel rather than N times in userland. `bundle.bin`
+carries a size budget and the individual binaries do not, so that number is where the
+duplication stays visible.
 
-A **syscall** is the cost that does not go away: two `postMessage` hops and two copies, where a
-call inside one worker would have been a call and one copy. A syscall-bound program pays it per
-`SYS_CHUNK`.
-
-*Measured* since, at 0.2.44 and again at 0.2.47, in three engines: **34–45 µs** a round trip, not
-the 0.1 ms this section estimated, and unmoved by putting every program in a worker.
-doc/Release_Notes.md opens with the numbers, the method, and the decision not to cut the number of
-round trips in bulk I/O.
-
-What that leaves on the interactive path is the *line* rather than the key. A keystroke is two
-round trips — a key, then a repaint, which `echo` (§4.3) made one operation — but `anchor()` costs
-seven or eight and the working directory one more, so Enter to the next prompt is an order of
-magnitude more than a keystroke. It is paid once a line rather than once a key, which is why it is
-affordable.
-
-The real cost is **duplication**: with no dynamic linking, every binary embeds its own copy
-of the allocator, the string types, and the coroutine runtime. Keep the process-side runtime
-deliberately minimal and push anything substantial into syscalls, so it lives once in the
-kernel rather than N times in userland.
-
-Cross-instance data movement is covered in Appendix B.
+Cross-instance data movement is Appendix B.
 
 ---
 
 ## 5. Storage
 
-Browsers do offer real persistence, and one API is a genuinely good fit. See Appendix A for
-the full comparison and the durability caveats.
+Appendix A has the full comparison of browser storage APIs and the durability caveats.
 
 ### 5.1 The mount layering
 
@@ -919,75 +647,52 @@ unbuilt:
   an Fs over Range requests      (read-only remote trees)
 ```
 
-Several of those differ from what this section first said:
+`/bin` and `/share` are two views of one archive: the worker loads `bundle.bin` beside
+`kernel.wasm` at boot, `tools/pack.py` builds it, and `bundlefs_at` re-roots it onto a subtree,
+so the programs and the files that ship beside them stay one download and become two mounts.
+There is no `/usr`. `/mnt/import` is a directory rather than a mount: the picker hands over
+bytes, and bytes are not a filesystem, so `import` writes them into the root `MemFs`.
 
-- **`BundleFs` reads one archive, not the Cache API.** The Cache API stores `Request`/`Response`
-  pairs, which is worth having once `fetch` exists to produce them; that is M6. Until then the
-  worker loads a single `bundle.bin` beside `kernel.wasm` at boot and hands the bytes over, and
-  the tree is unpacked in memory. The packer is `tools/pack.py`. M6 built the `fetch` and left
-  the archive alone: a tree that never changes after the build has nothing to gain from a
-  cache with an eviction policy.
-- **`/mnt/import` is a directory, not a mount.** The picker hands over bytes, and bytes are not
-  a filesystem; `import` writes them into the root `MemFs` and everything above works as it
-  would for any other file. A read-through `Fs` over `File` objects would be the richer design
-  and buys nothing §5.4 asks for.
-- **`/bin` and `/share` are two views of the one archive.** M5's `/bin` was `BinFs`, a
-  filesystem over the program registry, because programs were in-kernel coroutines and `/bin`
-  would otherwise have been an empty directory `ls` could not account for. Now that every
-  program is a binary the directory holds the binaries themselves, and `BinFs` is gone —
-  which is the promise M5 made when it wrote that the mount would change and nothing above it
-  would. `bundlefs_at` re-roots a bundle onto one of its subtrees, so the programs and the
-  files that ship beside them stay one download and become two mounts. There is no `/usr`: one
-  archive with two entry points does not need a third directory level to explain it.
-- **`/proc` is `ProcFs`, the same trick over the scheduler** (M7): `cwd`, `meminfo`, `uptime`,
-  `version`, `mounts`, `jobs`, and one file per live pid. It is also the reason the process ABI
-  is as small as it is (§4.3): a process reads its answers here rather than asking for an
-  operation of its own. `cat` and `grep` are then the
-  introspection tools and there is no second interface to keep in step. The tree is flat —
-  `/proc/42` is a file, not a directory — because a process here has one line of state, and a
-  generated directory level would hold exactly one file. Content is produced at `open` and read
-  out of that snapshot, so a two-block read cannot describe two different moments.
+`/proc` is `ProcFs` over the scheduler: `cwd`, `meminfo`, `mounts`, `uptime`, `version`, and one
+file per live pid. It is also why the process ABI is as small as it is (§4.3) — a process reads
+its answers here rather than asking for an operation — and it makes `cat` and `grep` the
+introspection tools, with no second interface to keep in step. The tree is flat: a process here
+has one line of state, and a generated directory level would hold exactly one file. Content is
+produced at `open` and read out of that snapshot, so a two-block read cannot describe two
+different moments. `/proc/cwd` is the *kernel's* working directory; every process's own is a
+line in its own `/proc/<pid>`. There is no `/proc/jobs`, because the job table is a process's
+memory and no syscall shows one process another's.
 
-  `/proc/cwd` is the **kernel's** working directory — what init runs `/bin/sh` from — and every
-  process's own is a line in its own `/proc/<pid>`. The shell's is one of those now rather than
-  the first. `/proc/jobs` is gone with the same change: the job table is a process's memory, and
-  no syscall shows one process another's.
+**Every process has a working directory of its own**, inherited from whoever spawned it and
+moved only by its own `chdir`. The shell's is the shell process's; `cd` moves that, and a typed
+command inherits it at spawn — which is what a redirection on that line is relative to, since
+the shell opens those itself before any stage runs. A `cd` in one process moves nobody else's
+feet, and that is the whole of why `cd` is a builtin. The kernel keeps one for itself, which is
+where init resolves `/bin/sh` from.
 
-**Every process has a working directory of its own**, inherited from whoever spawned it and moved
-only by its own `chdir`. There is no longer a special one: the shell's is the shell process's,
-`cd` moves that, and a typed command inherits it at spawn — which is also what a redirection on
-that line is relative to, since the shell opens those itself before any stage runs. A `cd` in one
-process moves nobody else's feet, and that is the whole of why `cd` is a builtin: a `/bin/cd`
-would move its own and exit, leaving the shell where it was.
-
-The kernel keeps one for itself, which is where init resolves `/bin/sh` from and what `/proc/cwd`
-reports. A process is therefore isolated in address space, memory, descriptors *and* the directory
-it names things from. What it is still not isolated in is the namespace itself: there is no
-per-process root, and `open` resolves with the kernel's full authority once the path is absolute.
+What a process is *not* isolated in is the namespace: there is no per-process root, and `open`
+resolves with the kernel's full authority once the path is absolute.
 
 ### 5.2 OPFS is the primary store
 
-The Origin Private File System is a storage endpoint of the File System API, private to the
-origin, invisible in the user's regular filesystem, and supported by Safari, Chrome, Edge and
-Firefox. It gives real directory handles, real file handles, seekable reads and writes,
-truncate, rename and remove — which maps onto our `Fs` interface almost one-to-one.
+The Origin Private File System is private to the origin, invisible in the user's regular
+filesystem, and supported by Safari, Chrome, Edge and Firefox. It gives real directory handles,
+real file handles, seekable reads and writes, truncate, rename and remove — which maps onto §3.6's
+`Fs` almost one-to-one.
 
-The detail that matters most for our architecture: the high-performance **synchronous**
-`read()`/`write()` methods obtained via `createSyncAccessHandle()` are exposed **only inside a
-Web Worker** — not the main thread, not an iframe, not even a SharedWorker. Our kernel already
-lives in a worker, so we get the fast path for free.
-
-This genuinely simplifies the design. **Opening** a file is async (one wake token), but once
-we hold a sync access handle, `read`/`write`/`getSize`/`truncate`/`flush` return immediately.
-Those are plain value-returning imports — the second sanctioned exception to §2.2, because no
-promise is involved at any point.
+The detail that matters most: the high-performance **synchronous** `read()`/`write()` methods
+obtained via `createSyncAccessHandle()` are exposed **only inside a Web Worker** — not the main
+thread, not an iframe, not even a SharedWorker. The kernel already lives in a worker, so the
+fast path comes free. **Opening** a file is async (one wake token), but once a sync access handle
+is held, `read`/`write`/`getSize`/`truncate`/`flush` return immediately: those are plain
+value-returning imports, the second sanctioned exception to §2.2.
 
 Two constraints to build around:
 
-- A sync access handle takes an **exclusive lock** on the file, so the VFS needs an open-file
-  table. It refuses a *second open of any kind*, not merely a second writer: OPFS's lock does
-  not care what mode the second handle asks for, and a rule that held only on some backends
-  would be worse than the restriction.
+- A sync access handle takes an **exclusive lock**, so the VFS needs an open-file table. It
+  refuses a *second open of any kind*, not merely a second writer: OPFS's lock does not care
+  what mode the second handle asks for, and a rule that held only on some backends would be
+  worse than the restriction.
 - OPFS is unavailable in Safari private browsing. Capability-detect and fall back to `MemFs`.
 
 ### 5.3 Capability struct, not probing
@@ -1002,86 +707,97 @@ struct StorageBackend {
 ```
 
 `mount` consults this rather than probing at use time. It arrives as the reply to one `Info`
-operation rather than being pushed into the kernel by a separate export, which keeps the
-boundary to the two imports of §3.4 and means `df` can ask again for a fresh `usage` instead of
-reporting a boot-time snapshot.
+operation rather than being pushed in by a separate export, which keeps the boundary to the two
+imports of §3.4 and lets `df` ask again for a fresh `usage` instead of reporting a boot-time
+snapshot.
 
 `persisted` is the one field the worker cannot obtain: `navigator.storage.persist()` exists only
 on the main thread (§A.2). The page calls it during boot and posts the answer down, and the
-worker's boot waits for it — reporting the wrong durability is worse than a tick of delay. It is
-a *bounded* wait since M7, because the call is not always a tick: Firefox took over five seconds
-to answer it, which is a blank screen rather than a delay. The page sends a provisional
+worker's boot waits for it — reporting the wrong durability is worse than a tick of delay. The
+wait is *bounded*, because the call is not always a tick: the page sends a provisional
 best-effort answer if the browser has not decided within a grace period, and the real answer
-after it; the second one corrects the store, so `df` is right from then on. The request is made
-once per page however many terminals are mounted, since persistence belongs to the origin.
+after it, which corrects the store. The request is made once per page however many terminals are
+mounted, since persistence belongs to the origin.
 
-`df` reports the backend, the mode (persistent vs best-effort), the quota and the usage, so
-storage semantics are inspectable from inside the OS instead of being invisible browser
-behaviour.
+`df` reports the backend, the mode, the quota and the usage, so storage semantics are
+inspectable from inside the OS instead of being invisible browser behaviour.
 
 ### 5.4 The real local filesystem, and the escape hatch
 
 `showDirectoryPicker()` yields a handle to an actual folder on disk, read-write, after an
-explicit user gesture and permission grant. It is the closest thing to mounting the host
-filesystem, and it is how someone would edit their real project directory from our shell.
-
-Its reach is limited (Appendix A), so treat it strictly as progressive enhancement, offered only
-where `window.showDirectoryPicker` is defined. Directory handles are structured-cloneable, so we
-can stash one in IndexedDB and re-offer the mount on the next visit — though permission must be
-re-requested each session.
+explicit user gesture and permission grant. Its reach is limited (§A.3), so it is strictly
+progressive enhancement, offered only where `window.showDirectoryPicker` is defined. Directory
+handles are structured-cloneable, so one can be stashed in IndexedDB and the mount re-offered on
+the next visit, though permission must be re-requested each session.
 
 **This is unbuilt.** `mount` is an ordinary binary that reformats `/proc/mounts`, and mounting is
-not yet something a user does: `vfs_mount` is called from boot and from nowhere else. Making it
-one needs the `Fs` above, a syscall or a `/proc` write to reach it, and an answer to what a
-second process should see — which is the same namespace question §4.3 leaves open.
+not something a user does: `vfs_mount` is called from boot and nowhere else. Making it one needs
+the `Fs` above, a syscall or a `/proc` write to reach it, and an answer to what a second process
+should see — the namespace question §5.1 leaves open.
 
-The universally available escape hatch is the boring one: `<input type="file">` for import
-and a Blob download for export. Wire it up early as `/mnt/import` and an `export` command. It
-works everywhere and covers "get my data out."
-
-Both landed in M6, and both live on the **page** rather than in the worker: a file picker and
-a download need the DOM, as does `navigator.clipboard`. `web/svc.js` relays those three across
-`postMessage` and answers by id, which is invisible from the kernel — a service operation is a
-token either way. The picker opens inside the transient activation of the keystroke that ran
-the command, which is why `import` works without a button of its own.
-
-**Reading the clipboard does not fit that pattern, and cannot.** `navigator.clipboard.readText()`
-is only permitted from inside a user-gesture handler, and a command's request reaches the page
-after the keystroke's handler has returned — so the call is never in one. Safari refuses,
-Firefox does not offer it to page content, and Chrome prompts. The way out is that a **paste is
-itself the gesture**: the `paste` event hands the text to the page with no permission at all, in
-every browser. So a refused read becomes a wait for one, and `pbpaste` says so rather than
-failing. That is why `Ctrl+V` is on the reserved list in `web/keys.js` — the kernel must not eat
-the keystroke that produces the event.
+The universally available escape hatch is the boring one, and it is built: `<input type="file">`
+for import and a Blob download for export, as `/mnt/import` and the `import`/`export` commands.
+Both live on the **page** rather than in the worker, because a file picker and a download need
+the DOM. The picker opens inside the transient activation of the keystroke that ran the command,
+which is why `import` works without a button of its own.
 
 ---
 
-## 6. Milestones
+## 6. Host services
 
-M0–M9 are done, and their objectives and acceptance criteria are in
-**[Release_Notes.md](Release_Notes.md)**, above the ten notes that say why each milestone landed
-the way it did. They were never in this document because they changed on ordinary work commits
-and the design does not. This section keeps its number, since the numbering here is cited from
-source comments.
+Everything the browser offers that is not storage and not the terminal reaches the kernel
+through the one `host_svc` import (§3.4), as an operation on the shared request record with the
+object it acts on passed alongside as an `externref`. Naming an import per operation is not the
+style: a new service is an enum value on each side.
+
+- **`fetch`** — the body comes back as a descriptor, so `read` and `close` serve it and nothing
+  is duplicated.
+- **WebSocket** — likewise a descriptor, written like a file.
+- **The clipboard** — read and write.
+- **File transfer** — the picker, opening one of its files, and a save.
+- **The wall clock** — milliseconds since the epoch and the browser's offset from UTC.
+  `Sys::Now` is monotonic and cannot name a day, so `date` needs this.
+- **Process operations** — compiling a binary, instantiating it in a worker, stepping it and
+  killing it (§4.3). They are asynchronous operations on the host, which is this convention
+  exactly, so they are operations here rather than an interface of their own; `aux` in the
+  request record is the pid they name.
+
+Every one of them is a promise on the host side, so every one takes a wake token and §2.2 is
+untouched. The wall clock is the near miss — `Date.now()` is as synchronous as `host_now()` —
+but a service already had an import, and one more operation on it costs nothing while a second
+value-returning import would cost the invariant.
+
+The clipboard, the picker and the download need the DOM, so `web/svc.js` relays those across
+`postMessage` and answers by id. That is invisible from the kernel: a service operation is a
+token either way.
+
+**Reading the clipboard does not fit the pattern, and cannot.** `navigator.clipboard.readText()`
+is only permitted from inside a user-gesture handler, and a command's request reaches the page
+after the keystroke's handler has returned, so the call is never in one. Safari refuses, Firefox
+does not offer it to page content, and Chrome prompts. The way out is that **a paste is itself
+the gesture**: the `paste` event hands the text to the page with no permission at all, in every
+browser. So a refused read becomes a wait for one, and `pbpaste` says so rather than failing.
+That is why `Ctrl+V` is on the reserved list in `web/keys.js` — the kernel must not eat the
+keystroke that produces the event (§3.5).
 
 ---
 
 ## 7. Repository layout
 
-As created in M0; `src/user` arrived with M3, `src/fs` with M5, `src/svc`
-with M6, `src/ui` with M7, and `src/proc` and `src/cmd` with M8. `braam_fs` and `braam_svc` are
-siblings above the kernel and below userland, depending on neither the other nor upwards.
-`braam_ui` is in neither hierarchy: it is linked by `braam_proc` and *not by the kernel at all*,
-because the programs that paint are binaries. `src/proc` is likewise a *different binary's*
-runtime — what it shares with the kernel is four translation units and a handful of headers.
+`braam_fs` and `braam_svc` are siblings above the kernel and below userland, depending on
+neither the other nor upwards. `braam_ui` is in neither hierarchy: it is linked by `braam_proc`
+and *not by the kernel at all*, because the programs that paint are binaries. `src/proc` is a
+*different binary's* runtime — what it shares with the kernel is four translation units and a
+handful of headers.
 
 ```
 doc/Concept.md          this document
 doc/Release_Notes.md    reasoning behind the code, and M0–M9's acceptance criteria
 doc/System_Calls.md     the kernel↔process mechanism, end to end (§4.3)
-Makefile                wrapper: all, run, serve, release, clean
+doc/Programming_Manual.md  the SDK's guide
+Makefile                wrapper: all, run, serve, install, release, clean
 CMakeLists.txt          the build
-cmake/                  the wasm32-unknown-unknown toolchain file
+cmake/                  the wasm32-unknown-unknown toolchain file, BraamProgram.cmake
 src/kernel/             allocator, core types, Task, scheduler, Channel, screen
 src/kernel/coroutine.h  the freestanding <coroutine> shim (Appendix C)
 src/kernel/hostcall.h   the asynchronous host request, shared by both interfaces
@@ -1090,7 +806,7 @@ src/kernel/sysabi.h     the kernel↔process wire, included by both sides (§4.3
 src/proc/               a process binary's whole runtime: _start, syscalls, stdio
 src/cmd/                one file per program; every program is a binary of its own
 src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
-src/svc/                fetch, WebSocket, clipboard, file transfer, clock, processes
+src/svc/                fetch, WebSocket, clipboard, file transfer, clock, processes (§6)
 src/ui/                 the layout layer over a Grid: Pane, TextBuf, TextView (§3.5)
 src/user/               exec and the syscall dispatcher, the console and its pump, the
                         pipes behind a stage's stdio, ProcFs, boot and init
@@ -1098,6 +814,7 @@ src/user/tty.h          the terminal claims: KeyInput, FullScreen
 src/sh/                 the shell: grammar, LineEditor, job runtime, builtins
 src/cmd/sh.cpp          its entry point — /bin/sh is a binary like any other
 bundle/                 the tree tools/pack.py packs into /bin and /share
+examples/hello/         the SDK's worked example, and an ordinary build target
 test/                   in-wasm unit tests, the Node driver, and the fakes: storage,
                         services, and a process worker with no thread in it
 web/                    braam.js (the embedding API), worker.js, host shim, renderer
@@ -1109,31 +826,33 @@ tools/                  build scripts, bundle packer, metadata stamper, version 
 
 ---
 
-## 8. Things to get right early
+## 8. Things to get right
 
-### 8.1 Awaitables must be cancellation-aware from day one
-Retrofitting cancellation into coroutine code is painful. Bake `CancelToken` into every
-awaitable's `await_suspend` starting in M1, not later.
+### 8.1 Every awaitable is cancellation-aware
+Retrofitting cancellation into coroutine code is painful. `CancelToken` participates in every
+`await_suspend`, and every awaiter deregisters in its destructor (`sched_unwait` from
+`~Awaiter`), which is what makes destroying a suspended frame safe. A parking awaitable with no
+destructor is a use-after-free.
 
 ### 8.2 Coroutine frame allocation is the hot path
-Frames are heap-allocated per call. A naive `malloc` will dominate the profile. Size-class
-pools fix it, and the allocator should be built with this as its primary workload.
+Frames are heap-allocated per call, so the allocator is built with this as its primary workload.
+A frame past 512 bytes costs a whole 64 KiB span, the allocator's top size class, so long-lived
+state belongs in a heap block the frame points at rather than in the frame.
 
 ### 8.3 Never let an import return data synchronously
-Beyond the two documented exceptions (§2.2). One exception is pragmatic; three are a second
-ABI.
+Beyond the two documented exceptions (§2.2). One exception is pragmatic; three are a second ABI.
 
 ### 8.4 `memory.grow` detaches the `ArrayBuffer`
-Any cached `Uint8Array` view goes dead after a growth. Re-derive views after every possible
-growth, or route all access through a `view()` accessor that checks
-`buffer.byteLength === 0`. This bug will bite at least once regardless; make it fail loudly.
+Any cached `Uint8Array` view goes dead after a growth. Route JS-side access through a `view()`
+accessor that re-derives, and make a mismatch fail loudly — the `Screen` magic word is there for
+this. A host request may likewise outlive the coroutine that issued it, so anything whose
+address crosses to JS is a heap record the kernel keeps alive past a cancelled await, never a
+frame buffer.
 
 ### 8.5 Safari's 7-day eviction is a real hazard
-With cross-site tracking prevention on, an origin that sees no user interaction for seven
-days of browser use has all script-created data deleted. For a system whose pitch is "your
-files persist," this matters. Mitigations: request persistence, encourage Add to Home Screen
-(installed web apps are exempt from the ITP timer), and make `export` easy so nobody loses
-irreplaceable work.
+With cross-site tracking prevention on, an origin that sees no user interaction for seven days
+of browser use has all script-created data deleted. Mitigations: request persistence, encourage
+Add to Home Screen (installed web apps are exempt from the ITP timer), and make `export` easy.
 
 ---
 
@@ -1145,159 +864,98 @@ irreplaceable work.
 |---|---|---|---|
 | **OPFS** | Real files and directories, origin-private, invisible to the user | Async API anywhere; **sync** handles worker-only | **Primary store** |
 | **IndexedDB** | Async key → blob, transactional | Anywhere | Fallback; metadata; stashed directory handles |
-| **Cache API** | Request → Response pairs | Anywhere | The fetched bundle blob |
+| **Cache API** | Request → Response pairs | Anywhere | Unused: the bundle never changes after the build |
 | **localStorage** | 5 MB, sync, strings only | Main thread only | Tiny config, nothing else |
-| **File System Access** | The *actual* user disk, with a picker | Chromium desktop only | Optional `/mnt/host` |
+| **File System Access** | The *actual* user disk, with a picker | Chromium desktop only | Optional, unbuilt (§5.4) |
 
 ### A.2 Durability
 
-Storage is **best-effort by default**, meaning it can be deleted without asking. Three facts:
+Storage is **best-effort by default**, meaning it can be deleted without asking.
 
-- An origin can opt into persistent mode via `navigator.storage.persist()`, after which data
-  is evicted only if the user chooses to delete it. **`persist()` is not available in Web
-  Workers** — call it from the main thread during boot and pass the result down to the kernel
-  in `StorageBackend`.
-- Quotas are generous but finite. In Firefox, best-effort mode gives an origin the smaller of
-  10% of disk or a 10 GiB per-site-group limit; origins granted persistent storage may use up
-  to 50% of disk, capped at 8 TiB and exempt from the group limit. Safari's overall quota for
-  a browser app is up to 80% of total disk space. Surface `navigator.storage.estimate()` as
-  `df` — it is a nice touch and it makes the limits visible.
+- An origin can opt into persistent mode via `navigator.storage.persist()`, after which data is
+  evicted only if the user chooses to delete it. **`persist()` is not available in Web
+  Workers** — the main thread calls it during boot and passes the result down (§5.3).
+- Quotas are generous but finite. Firefox gives best-effort origins the smaller of 10% of disk
+  or a 10 GiB per-site-group limit, and persistent ones up to 50% of disk capped at 8 TiB;
+  Safari's overall quota for a browser app is up to 80% of total disk.
+  `navigator.storage.estimate()` is surfaced as `df`.
 - **Eviction is all-or-nothing per origin.** If it fires, OPFS *and* IndexedDB *and* Cache go
-  together. There is therefore no point using one as a backup of another.
+  together, so there is no point using one as a backup of another.
 
 ### A.3 File System Access reach
 
 Firefox and Safari ship only OPFS, and no mobile browser exposes the pickers. Safari supports
-none of `showOpenFilePicker`, `showSaveFilePicker`, or `showDirectoryPicker` on macOS, iPadOS,
-or iOS. Hence: progressive enhancement only, never a dependency.
+none of `showOpenFilePicker`, `showSaveFilePicker` or `showDirectoryPicker` on macOS, iPadOS or
+iOS. Hence progressive enhancement only, never a dependency.
 
 ---
 
 ## Appendix B — Cross-instance data movement
 
-Instances cannot call each other, so every transfer is a copy through the host.
+Instances cannot call each other, so every transfer is a copy through the host. The kernel
+cannot be handed a buffer it did not allocate, so the host asks for one: `Sys::Stage` is a
+synchronous syscall the *host* issues on the process's behalf, returning the address of a
+staging block the process's kernel-side record owns. The reverse direction needs no such call,
+because `_alloc` is already in the ABI.
 
-**The straightforward version is JS:**
+A process is a worker away, so the copy is in two halves with a `postMessage` between them: the
+process's worker `slice`s the payload out into a transferable `ArrayBuffer`, and the kernel's
+worker copies that into the staging block. `slice` rather than `subarray` is load-bearing on
+both sides — a view is detached by the next `memory.grow` (§8.4), and one that has been
+transferred cannot be re-derived. The kernel half is two lines inside the per-pid `sys_async`
+closure in `web/proc.js`.
 
-```js
-const src = new Uint8Array(proc.memory.buffer, ptr, len);
-kernelU8.set(src, dstPtr);
-```
-
-That is memcpy speed plus one call boundary — perfectly fine for syscall-sized payloads, and
-where we should start. It is where M8 did start, and it is still there: two lines inside the
-per-pid `sys_async` closure in `web/proc.js`.
-
-The only wrinkle it needed was `dstPtr`. The kernel cannot be handed a buffer it did not
-allocate, so the host asks for one: `Sys::Stage` is a synchronous syscall the *host* issues on
-the process's behalf, returning the address of a staging block the process's kernel-side record
-owns. The reverse direction needs no such call, because `_alloc` is already in the ABI.
-
-**M9 added a third route, for the case where the two memories are not in the same agent.** A
-process is a worker away, so the copy is in two halves with a `postMessage` between them:
-the process's worker `slice`s the payload out into a transferable `ArrayBuffer`, and the kernel's
-worker copies that into the staging block `Sys::Stage` gave it. The kernel half of that is the
-same two lines as above; only the source changed. `slice` rather than `subarray` is load-bearing
-on both sides — a view is detached by the next `memory.grow` (§8.4), and one that has been
-transferred cannot be re-derived.
-
-**If we want the kernel itself to do the copy, multi-memory is the tool.** A module may
-declare several memories, and `memory.copy` can move bytes between two of them. It is at
-phase 5 and was live in browsers other than Safari as of early 2025, with a Safari
-implementation ticket assigned — check `wasm-feature-detect` rather than trusting that.
-
-The wrinkle: imports are fixed at instantiation, so the kernel cannot dynamically import a
-new process's memory. The trick is a tiny per-process **bridge module** that imports both the
-kernel memory and that process's memory and exports `copy_in`/`copy_out`. It is about 30
-bytes of wasm, instantiated alongside each process.
-
-And note §8.4 again here: `memory.grow` detaches the `ArrayBuffer`, killing every cached view
-on both sides of the copy.
+**If the kernel itself is ever to do the copy, multi-memory is the tool.** A module may declare
+several memories, and `memory.copy` moves bytes between two of them. Imports are fixed at
+instantiation, so the kernel cannot dynamically import a new process's memory; the trick is a
+tiny per-process **bridge module** that imports both memories and exports `copy_in`/`copy_out`,
+about 30 bytes of wasm instantiated alongside each process. Check `wasm-feature-detect` rather
+than trusting the feature's status.
 
 ---
 
-## Appendix C — Verified toolchain notes
+## Appendix C — Toolchain notes
 
 Verified against a stock clang for `wasm32-unknown-unknown`, which has no sysroot of its own.
-First written against wasi-sdk 33 (clang 22.1.0), whose findings held unchanged when the build
-moved to the plain distribution clang Homebrew and Debian ship.
 
 ### C.1 libc++'s `<coroutine>` cannot be used freestanding
 
 It is often said that `<coroutine>` is header-only and compiler-intrinsic, so it works
-freestanding as soon as `operator new` exists. That is true of the *language feature* but not
-of the header. Compiling `#include <coroutine>` with
-`--target=wasm32-unknown-unknown -nostdlib` fails, because libc++'s `<coroutine>` includes
-`__functional/hash.h` → `<cstring>` → `<cmath>`, which need libc declarations (`size_t`,
-`memcpy`, `FP_NAN`, …) that the bare `wasm32-unknown-unknown` target has no sysroot for.
+freestanding as soon as `operator new` exists. That is true of the *language feature* but not of
+the header: libc++'s `<coroutine>` includes `__functional/hash.h` → `<cstring>` → `<cmath>`,
+which need libc declarations (`size_t`, `memcpy`, `FP_NAN`, …) the bare `wasm32-unknown-unknown`
+target has no sysroot for. A distribution that carries a wasm sysroot at all carries it per
+target, and none has an `unknown-unknown` variant.
 
-A distribution that carries a wasm sysroot at all carries it per target, and none of them has
-an `unknown-unknown` variant: the generic `include/c++/v1` is empty where it exists.
+### C.2 The shim
 
-### C.2 What does work
+[src/kernel/coroutine.h](../src/kernel/coroutine.h) declares `std::coroutine_traits`,
+`std::coroutine_handle<>`, `std::coroutine_handle<P>`, `std::suspend_always` and
+`std::suspend_never` over `__builtin_coro_resume`, `__builtin_coro_destroy`,
+`__builtin_coro_done`, `__builtin_coro_promise` and `__builtin_coro_noop`. It is 124 lines with
+its comments, and a deliberate part of the foundation rather than a workaround.
 
-A hand-written shim over the `__builtin_coro_*` intrinsics — declaring
-`std::coroutine_traits`, `std::coroutine_handle<>`, `std::coroutine_handle<P>`,
-`std::suspend_always` and `std::suspend_never` — compiles cleanly with (the file that grew
-out of it, [src/kernel/coroutine.h](../src/kernel/coroutine.h), is 124 lines with its comments):
+`std::coroutine_traits` must be *defined*, not merely declared: a forward declaration compiles
+until the first coroutine, which then fails to instantiate it.
 
-```
---target=wasm32-unknown-unknown -std=c++20 -Os \
--nostdlib -nostdinc++ -fno-exceptions -fno-rtti -fno-threadsafe-statics
-```
+### C.3 The flags in §3.1
 
-Verified with a coroutine that performs `co_await` and `co_return`. This is consistent with
-the project's premise of owning its own foundation: the shim is a deliberate part of M0, not
-a workaround. It lives in `src/kernel/coroutine.h`.
-
-The intrinsics the shim needs: `__builtin_coro_resume`, `__builtin_coro_destroy`,
-`__builtin_coro_done`, `__builtin_coro_promise`, and `__builtin_coro_noop` for
-`noop_coroutine()`.
-
-Note that `std::coroutine_traits` must be *defined*, not merely declared: a forward declaration
-compiles until the first coroutine, which then fails to instantiate it.
-
-### C.3 Amended in M0
-
-Building the nucleus corrected three flags. The command line as used is:
-
-```
-clang++ \
-    --no-default-config \
-    --target=wasm32-unknown-unknown \
-    -std=gnu++20 -Os \
-    -nostdlib -nostdinc++ \
-    -mreference-types -mbulk-memory -msign-ext -mmutable-globals -mnontrapping-fptoint \
-    -fno-exceptions -fno-rtti -fno-threadsafe-statics \
-    -ffunction-sections -fdata-sections \
-    -Wl,--no-entry -Wl,--gc-sections \
-    -Wl,--stack-first -Wl,-z,stack-size=131072
-```
-
-- **`--export-dynamic` is gone.** It is not a reliable way to export: it dropped a plain
-  `extern "C"` function while exporting `operator new`. Exports are named individually with
-  `__attribute__((export_name(...), used))`.
-- **`--allow-undefined` is gone.** Imports carry `__attribute__((import_module("host"),
-  import_name(...)))`, so nothing is left to resolve — and without the flag, an accidental libc
+- **`--export-dynamic` is absent**, and adding it back is a regression: it is not a reliable way
+  to export, having dropped a plain `extern "C"` function while exporting `operator new`.
+  Exports are named individually with `BRAAM_EXPORT` (`export_name`), imports with
+  `BRAAM_IMPORT` (`import_module`/`import_name`) — never by linker flag. Either changes the ABI,
+  so the expected surface in [test/run.mjs](../test/run.mjs) changes in the same commit.
+- **`--allow-undefined` is absent**, so nothing is left to resolve and an accidental libc
   dependency is a link error instead of a runtime trap. `memcpy`/`memset` do not leak in:
-  bulk-memory lets LLVM lower them inline.
-- **The wasm features are named, not defaulted.** `-mreference-types` for `__externref_t`,
-  `-mbulk-memory` for the above, and `-msign-ext -mmutable-globals -mnontrapping-fptoint`. Which
-  of these the default CPU turns on has changed between clang versions, so the build says which
-  it wants and compiles the same on an old clang and a new one.
-- **`--no-default-config` and `--stack-first` are new.** The first suppresses any
-  `bin/clang++.cfg` a distribution ships, which is how a sysroot gets injected. The second puts the shadow stack below the data segment,
-  so overflow traps rather than corrupting globals (§8.4).
-- `gnu++20` rather than `c++20`, because `TRY()` is a statement expression.
-
-Full reasoning in [Release_Notes.md](Release_Notes.md).
-
----
-
-## Appendix D — Provenance
-
-This document consolidates three earlier design notes — on the nucleus, on browser storage,
-and on wasm isolation — which have been removed now that their content lives here in full. It
-resolves the one disagreement between them (in-kernel coroutine programs versus separate
-instances) in favour of the process model in §4, with the isolation deferred to M8 and M9 and
-the ABI fixed up front.
+  bulk-memory lets LLVM lower them inline. Neither Homebrew nor Debian ships compiler-rt for
+  this target, so a needed builtin — 128-bit division, an outlined `memcpy` — is a link error
+  too.
+- **The wasm features are named, not defaulted**, because which of them the default CPU turns on
+  has changed between clang versions: `-mreference-types` for `__externref_t`, `-mbulk-memory`
+  for the above, and `-msign-ext -mmutable-globals -mnontrapping-fptoint`. The list is verified
+  sufficient by building over `-mcpu=mvp`.
+- **`--no-default-config`** suppresses any `bin/clang++.cfg` a distribution ships, which is how
+  a sysroot gets injected. **`--stack-first`** puts the shadow stack below the data segment, so
+  an overflow traps rather than corrupting globals.
+- **`-std=gnu++20`** rather than `c++20`, because `TRY()` is a statement expression.
+- **`MinSizeRel`**: at `-O0` a freestanding build calls libcalls nothing provides.
