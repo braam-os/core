@@ -61,26 +61,37 @@ host, and the host's scheduling discipline is the first thing to understand.
 ```
 ┌───────────────────── Web Worker: the kernel's ─────────────────────┐
 │                                                                    │
-│  kernel.wasm                         web/proc.js                   │
-│  ┌───────────────────┐               ┌──────────────────────────┐  │
-│  │ scheduler         │◄── sys ───────│ per-pid import closure   │  │
-│  │ exec_sys          │               │   sys(op,a0,a1,a2)       │  │
-│  │ exec_sys_async    │◄── sys_async ─│   sys_async(op,tok,p,n)  │  │
-│  │                   │               │                          │  │
-│  │ proc_spawn ───────┼─── host_svc ─►│ compile · hire · bind    │  │
-│  │ proc_step ────────┼─── host_svc ─►│ post → await reply       │  │
-│  │ proc_kill ────────┼─── host_svc ─►│ pool · terminate         │  │
-│  │                   │◄── wake(tok) ─│                          │  │
-│  └───────────────────┘               └──────────┬───────────────┘  │
-└──────────────────────────────────────────────── │ ────────────────┘
-                                   ┌──────────────┘
-                                   │ postMessage: bind, step
-┌──────────────────────────────────▼─────────────────────────────────┐
-│ a Web Worker holding one process — its instance, its own memory,   │
-│ its own externrefs and descriptors, one thread further out, where  │
-│ terminate() does not need its cooperation. There is no second      │
-│ place: a spawn with no worker to be had is refused with Again and  │
-│ the kernel backs off and asks again (Concept.md §4).               │
+│  kernel.wasm                            web/proc.js                │
+│  ┌──────────────────────┐               ┌───────────────────────┐  │
+│  │ proc_spawn ──────────┼── host_svc ──►│ makeProc: compile,    │  │
+│  │ proc_step ───────────┼── host_svc ──►│   hire, bind, post    │  │
+│  │ proc_kill ───────────┼── host_svc ──►│   a step, terminate   │  │
+│  │                      │◄── wake(tok) ─│                       │  │
+│  │ sys(pid,op,…)        │◄── Stage,Exit─│ and unpack a reply,   │  │
+│  │ sys_async(pid,op,…)  │◄── the calls ─│   which is where the  │  │
+│  │                      │               │   syscalls arrive     │  │
+│  └──────────────────────┘               └───────────────────────┘  │
+│                                                                    │
+└───────────────────────────────┬────────────────────────────────────┘
+                                │ postMessage
+                                │   down: bind, step
+                                │   up:   the result, the exit
+                                │         status, the calls made
+┌───────────────────────────────┴────────────────────────────────────┐
+│                                                                    │
+│  the binary, e.g. /bin/echo             web/proc.js                │
+│  ┌──────────────────────┐               ┌───────────────────────┐  │
+│  │ exports              │               │ serveProc: one        │  │
+│  │  _start(ptr,len)     │◄── a step ────│   Instance, and the   │  │
+│  │  _resume(tok,ptr,len)│◄── a step ────│   two calls it can    │  │
+│  │  _alloc(n) _free(p,n)│◄── the copy ──│   make                │  │
+│  │                      │               │                       │  │
+│  │ imports              │               │ workerOps(pid):       │  │
+│  │  env.memory          │               │   exit, getpid, now   │  │
+│  │  sys(op,a0,a1,a2)    │──────────────►│   answered on the     │  │
+│  │  sys_async(op,t,p,n) │──────────────►│   spot, the rest ride │  │
+│  │                      │               │   the reply back up   │  │
+│  └──────────────────────┘               └───────────────────────┘  │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -121,10 +132,11 @@ the consequence a reader trips over: a syscall's
 returns; a scheduler job of the kernel's performs the work; a later step delivers the result.
 
 **The pid is written into the closure, not passed.** A process's two imports are built per
-instantiation with its pid baked in — `localOps(pid)` at `web/proc.js:176`, `workerOps(pid)` at
-`:114`. The kernel's exports take a pid the *host* supplies; the process's imports have no
-argument for one. "A process cannot issue a syscall on behalf of another PID" is therefore not a
-check that runs, it is a shape the ABI has, and `test/run.mjs:168` asserts the shape.
+instantiation with its pid baked in — `workerOps(pid)` at `web/proc.js:133`, closed over by the
+`kernel: {…}` import object at `:72`. The kernel's exports take a pid the *host* supplies; the
+process's imports have no argument for one. "A process cannot issue a syscall on behalf of
+another PID" is therefore not a check that runs, it is a shape the ABI has, and
+`test/run.mjs:206` asserts the shape.
 
 **What crosses is bytes, not addresses.** Two instances have two memories, so every transfer is
 a copy through the host (Appendix B). The kernel cannot be handed a buffer it did not allocate,
@@ -284,7 +296,8 @@ copy a payload, and a program never calls it — but a hostile binary can, so it
 `heap_alloc`.
 
 **The set is closed at four, permanently.** All four are answerable inside the process's own
-worker with no kernel to ask, and that is the entire reason one binary runs in either place:
+worker with no kernel to ask, which is the only reason a synchronous half exists at all — the
+boundary a syscall crosses has no synchronous direction:
 
 - `GetPid` is the constant the host bound into the closure when it made the worker.
 - `Now` is the clock reading the step message carried plus the worker's own elapsed time —
@@ -364,76 +377,82 @@ is what makes several outstanding calls representable at all.
 ### 7.1 `echo hi`, end to end
 
 The stepper is an ordinary scheduler job — `exec_process`, the task the shell's pipeline stage
-runs. It never performs a syscall itself. The trace below is drawn with the instance in the
-kernel's own worker, so that every line is one call; §7.3 is the same step with the worker hop
-added, and the binary cannot tell the two apart.
+runs. It never performs a syscall itself. Three participants, and the trace has a column each:
+the stepper inside `kernel.wasm`, `makeProc` beside it in the kernel's worker, and the
+process's own worker. That last column holds `serveProc` and the instance together, because
+between those two a call is a call and nothing is deferred; §7.3 opens it up.
 
 ```
- stepper (kernel)          host (web/proc.js)              echo.wasm
- ────────────────          ──────────────────              ─────────
+ stepper (kernel)                   makeProc (kernel worker)            the process's worker
+ ────────────────                   ────────────────────────            ────────────────────
  exec_resolve("echo")
    read /bin/echo, parse the braam section → 4 pages, cap 256
        │
- proc_spawn ──── host_svc(ProcSpawn, tok, req) ──►│
-       │                                          │ compile (cached by path)
-       │                                          │ new Memory({4, 256})
-       │                                          │ new Instance(mod, {
-       │                                          │   env: {memory},
-       │                                          │   kernel: localOps(pid) })
-       │◄─────────────── wake(tok) ───────────────│
+ proc_spawn ──── host_svc(ProcSpawn) ────►│
+       │                                  │ compile (cached by path)
+       │                                  │ take() an idle worker, or hire one
+       │                                  │ postMessage bind ────────►│
+       │◄─────────── wake(tok) ───────────│                           │ new Memory({4, 256})
+       │                                  │                           │ new Instance: env.memory,
+       │                                  │                           │   sys/sys_async → this pid
        │
- proc_step(token=0, argv) ── host_svc(ProcStep) ─►│
-       │                                          │ queue; return
-       │                                     (tick() unwinds)
-       │                                          │ drain():
-       │                                          │  _alloc(18) ─────────────►│
-       │                                          │  copy argv in            │
-       │                                          │  _start(ptr, 18) ───────►│
-       │                                          │                          │ proc_main
-       │                                          │                          │ write_all(1, "hi")
-       │                                          │◄─ sys_async(Write|1<<8,  │
-       │                                          │      tok=2, ptr, 2) ─────│
-       │◄── sys(pid, Stage, 2) ───────────────────│                          │
-       │    proc_stage → &Call.stage              │                          │
-       │                                          │ memcpy 2 bytes across    │
-       │◄── sys_async(pid, Write|1<<8, 2, 2) ─────│                          │
-       │    Call{op, len=2, token=2} pushed       │                          │
-       │                                          │◄──── returns 1 ──────────│
-       │◄─────────────── wake(tok) ───────────────│    (suspended)
+       │ the spawn is answered without waiting for that message: an
+       │ instance that will not build reads as a process that died
+       │ at its first step
        │
-       │  ProcStep::Suspended, and p->calls has one entry with no server:
-       │  sched_spawn(serve(p, c))  ──────────────────────────────► serve()
+ proc_step(token=0, argv) ── host_svc ───►│
+       │                                  │ postMessage step ────────►│ ops.begin(now)
+       │                                  │ {now, token, argv}        │ _alloc(18), copy argv in
+       │                                  │   the buffer is moved,    │ _start(ptr,18) → proc_main
+       │                                  │   not copied              │   write_all(1, "hi")
+       │                                  │                           │   sys_async(Write|1<<8,
+       │                                  │                           │     tok=2, ptr, 2) → calls
+       │                                  │                           │ returns 1: suspended
+       │                                  │◄── postMessage step ──────│
+       │                                  │ {result:1, calls:[{op, token, len, buf}]}
+       │◄─── sys(pid, Stage, 2) ──────────│
+       │ proc_stage → &Call.stage         │ mem.view().set(bytes, dst)
+       │◄ sys_async(pid, Write|1<<8, 2, 2)│
+       │ Call{op, len=2, token=2} pushed  │
+       │◄─────────── wake(tok) ───────────│
+       │
+       │ ProcStep::Suspended, and p->calls has one entry with no server:
+       │ sched_spawn(serve(p, c)) ───────────────────────────► serve()
+       │                                                       │
+       │ co_await p->done.recv()         proc_syscall: co_await
+       │      ⋮                          p.io.out.write("hi")  │
+       │◄──── Reply{token=2, status 2, no data} ──────────────┘
+       │
+ proc_step(token=2, reply) ─ host_svc ───►│
+       │                                  │ postMessage step ────────►│ _alloc(4), copy the reply
+       │                                  │ {now, token=2, status 2}  │ _resume(2, ptr, 4)
+       │                                  │                           │   await_resume → 2 written
        │                                                              │
-       │  co_await p->done.recv()                        proc_syscall: co_await
-       │       ⋮                                         p.io.out.write("hi")
-       │       ⋮                                                      │
-       │◄────────── Reply{token=2, status 2, no data} ────────────────┘
+       │ …and the whole round trip again for "\n": echo writes        │
+       │ its words and its newline separately…                        │
+       │                                                              │
+       │                                  │                           │ proc_main returns 0
+       │                                  │                           │ sys(Exit, 0) buffered
+       │                                  │                           │ returns 0: exited
+       │                                  │◄── postMessage step ──────│
+       │                                  │ {result:0, exit:0, calls:[]}
+       │◄─── sys(pid, Exit, 0) ───────────│
+       │ p->exit = 0                      │
+       │◄─────────── wake(tok) ───────────│
        │
- proc_step(token=2, reply) ─ host_svc(ProcStep) ─►│
-       │                                          │ queue; drain():
-       │                                          │  _alloc(4) ──────────────►│
-       │                                          │  _resume(2, ptr, 4) ────►│
-       │                                          │                          │ await_resume
-       │                                          │                          │ → 2 written
-       │                                          │  …and the same round trip again for "\n",
-       │                                          │     because echo writes its words and its
-       │                                          │     newline separately
-       │                                          │                          │ proc_main returns 0
-       │                                          │◄─ sys(Exit, 0) ──────────│  (status_of)
-       │◄── sys(pid, Exit, 0) ────────────────────│                          │
-       │    p->exit = 0                           │                          │
-       │                                          │◄──── returns 0 ──────────│
-       │◄─────────────── wake(tok) ───────────────│    (exited)
-       │
-       │  ProcStep::Exited → co_return p->exit  (0)
-       │  ~End: proc_kill(pid), drop the instance, free the Proc record
+       │ ProcStep::Exited → co_return p->exit  (0)
+       │ ~End: proc_kill(pid) → the worker is pooled, the Proc record freed
 ```
 
-Four things in that trace are worth naming. The `Sys::Stage` call happens *before* `sys_async`,
-because the kernel must own the destination. `_start` returning 1 is the only thing the kernel
-learns without a syscall — that is the whole of `status_of`'s return convention. `Sys::Exit` is
-issued by the *runtime*, not by the program: `echo` returned 0 from `proc_main` and `status_of`
-reported it (`src/proc/rt.cpp:62-76`).
+Five things in that trace are worth naming. The `bind` message is not answered, so the spawn is
+answered before the instance exists — a worker that will not load or a module that will not
+instantiate surfaces at the first step, as a process that died. The `Sys::Stage` call happens
+*before* `sys_async`, because the kernel must own the destination. `_start` returning 1 is the
+only thing the kernel learns without a syscall — that is the whole of `status_of`'s return
+convention. `Sys::Exit` is issued by the *runtime*, not by the program: `echo` returned 0 from
+`proc_main` and `status_of` reported it (`src/proc/rt.cpp:62-76`) — and it is *buffered* in the
+worker rather than sent, because a synchronous call has no way out of one, so it rides the
+step's reply and the kernel is told microseconds before it learns the step ended.
 
 And the two-byte write is not a simplification — that is what `echo hi` really does, one
 `write_all` per word and another for the newline, each a full park and step. Nothing coalesces
@@ -460,12 +479,14 @@ has no way to ask for it from here.
 
 A worker boundary has no synchronous direction — §1 rules out `SharedArrayBuffer` and therefore
 `Atomics.wait` — and `sys` is by construction synchronous. It survives because none of its four
-operations has to reach the kernel at all. That is the result M9 turned on, and it is why the
-same `spin.wasm` runs in either place with the same import list.
+operations has to reach the kernel at all. That is the result M9 turned on, and deleting tier 2
+is what made it the only case there is: `spin.wasm` has no other place to run, so those four are
+answered in its own worker or not at all.
 
-### 7.3 One step across a worker
+### 7.3 The step message, both ways
 
-Two messages, one each way, whatever the process did inside the step:
+§7.1's third column, opened up. Two messages, one each way, whatever the process did inside the
+step — one `_resume`, or a hundred syscalls and a spawn:
 
 ```
  kernel worker                                    process worker
@@ -495,10 +516,13 @@ Two messages, one each way, whatever the process did inside the step:
    pending.r.ok(result); pending.done()   → wake(tok)
 ```
 
-That `for` loop is character-for-character the in-kernel-worker `sysAsync` closure with the source
-of the bytes changed, which is the point: the kernel side of the protocol is one handler of
-straight-line code, and both halves live in `web/proc.js` so that two files cannot describe one
-wire.
+That `for` loop is the whole kernel side of the protocol: `finish` in `web/proc.js`, straight-line
+code, and the only place `Sys::Stage` is ever called. Both halves of the wire live in that one
+file — `serveProc` and `workerOps` are the other end of these same two messages — so that two
+files cannot describe one wire.
+
+The exit status goes first and the step's own answer last, which is what leaves `p->exit` already
+recorded by the time the stepper wakes to `ProcStep::Exited` and reads it (§5).
 
 `slice` rather than `subarray` is load-bearing on both sides. A view is detached by the next
 `memory.grow` (§8.4), and one that has been transferred cannot be re-derived.
