@@ -273,6 +273,16 @@ take values above the Unicode range. **No control characters exist anywhere in t
 §2.3 applied to input. Line editing — history, cursor movement, kill-word, completion — is a
 userland `LineEditor` coroutine, not a termios state machine in the kernel.
 
+**The focus is not on the canvas.** A software keyboard is raised by a focused *editable*
+element, and a canvas is focusable but not editable — so the page holds one, a hidden `<textarea>`
+that `web/braam.js` creates and never shows, and that is where every key event arrives. A canvas
+that took the focus would be a terminal no tablet could type into. There are therefore **two
+sources and one destination**: a `KeyboardEvent` through `normalise()`, and — for a keyboard that
+reports no key, which is what a soft keyboard, dictation and every IME do — the text an `input` or
+composition event produced, turned into key codes the way a paste is. One rule decides between
+them: **the text route runs exactly when the key route did not prevent the default.** Both end as
+the same `{code, mods}`, and nothing below the page can tell which one a keystroke came from.
+
 **One receiver on that channel, and it is the console pump** (`src/user/console.h`), which init
 spawns and which never ends: something must hold the keyboard while nothing is running, and a
 process has no `keys()` at all. A program therefore does not take the keyboard — it **claims a
@@ -307,7 +317,17 @@ on a Mac — copies when there is a selection and is `^C` when there is not; cop
 selection, so the next one interrupts. The clipboard write happens inside the keydown handler,
 because that keystroke is the transient activation permitting it (§A.2). Any other keystroke,
 and any resize, drops the selection. Select all is `Cmd+A`, or `Ctrl+Shift+A` where there is no
-`Cmd`, and deliberately not `Ctrl+A`, which is the line editor's beginning-of-line.
+`Cmd`, and deliberately not `Ctrl+A`, which is the line editor's beginning-of-line. The focus
+deciding which terminal on a shared page owns the copy chord and the paste event is the hidden
+input's rather than the canvas's; the canvas carries a `braam-focus` class so a page can still
+draw a ring around it.
+
+**The key bar is page-side in exactly the sense the selection is.** A software keyboard has no
+`Ctrl` and no `Esc`, and usually no `Tab` and no arrows, so a page may hand `mount()` a container
+and get a row of buttons for them, `Ctrl` latching onto the next key sent. What comes out is an
+ordinary `{code, mods}`: there is no bar, no latch and no touch event anywhere in the ABI, and the
+kernel cannot tell a tapped `Esc` from a typed one. The page supplies the keys the hardware does
+not have — not a second kind of input.
 
 **A paste is a run of keystrokes, and nothing downstream can tell it from fast typing.** There
 is no byte stream to write into (§2.3), so `web/keys.js` turns the pasted text into key codes —
@@ -317,6 +337,13 @@ its own. What a run does need is **back-pressure**, and that is the whole reason
 something: the ring holds 64 keystrokes, so the host feeds a paste at the rate the console
 drains it rather than losing the tail. That return value reports a fact the host cannot
 otherwise observe; it is not an answer arriving from the kernel, so §2.2 is untouched.
+
+**Soft-keyboard, dictation and IME text take that same road**, and for the same two reasons: the
+ring's back-pressure, since a dictated sentence arrives all at once, and ordering — a `key()` is
+dispatched ahead of a run still being fed, deliberately, so that `^C` never waits behind a paste,
+which means a backspace posted as a key could overtake the word it follows. So everything the text
+route produces, backspace and `Enter` included, is fed as a run. The one exception is the
+character after a latched `Ctrl`, which wants to jump that queue precisely because it is `^C`.
 
 `Cmd+V`, or `Ctrl+V` where that is the chord, is the browser's own gesture and is not prevented,
 precisely so the `paste` event is produced. That event is the document's rather than the

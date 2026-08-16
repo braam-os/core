@@ -19,6 +19,10 @@ const NAMES = [
 
 const CODES = new Map(NAMES.map((name, i) => [name, NAMED + i]));
 
+// A named key by name. Text arriving as an input event has no KeyboardEvent to
+// normalise, and the key bar has no event at all.
+export const named = (name) => CODES.get(name);
+
 // Browser shortcuts the page has no business eating. Ctrl+L is not among them:
 // clearing the screen is what it means in a terminal, and the kernel binds it.
 // Ctrl+V is, because the paste event it produces is the only way a page may

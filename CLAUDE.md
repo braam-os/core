@@ -319,6 +319,10 @@ change to argue in Concept.md first.
 - **The boot archive is ~491 KB.** §4.4's duplication: every binary carries the allocator, the
   string types and the coroutine runtime, and `sh.wasm` is 81 KB of it. `bundle.bin` carries a size
   budget and the binaries do not, so that number is where the duplication stays visible.
+- **A soft keyboard has no control keys.** `^C`/`^D`/`^L`, `Esc`, `Tab` and the arrows reach a
+  tablet only through the page's key bar (`mount({keys})`); widening it is a page change, not a
+  system one. The focus lives on a hidden `<textarea>`, not the canvas — a canvas is focusable but
+  not editable, and only an editable element raises a keyboard.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything not a child of the caller.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.

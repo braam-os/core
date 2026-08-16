@@ -7,6 +7,155 @@ of the two needs amending.
 
 ---
 
+## A canvas is focusable, not editable
+
+On a tablet the prompt appeared, a finger could select text, and nothing could be typed: the
+software keyboard never came up. The canvas *was* focusable — `tabindex="0"`, and `mount()` set it
+defensively as well — and that is the whole of the bug. "Focusable" and "editable" are different
+predicates and only the second raises a keyboard. Every key in the system entered through one
+`keydown` listener on an element that could never receive one from a touch device. Selection
+worked because it rides pointer events, which do fire for touch, which is what made the failure
+look like a keyboard problem rather than a focus problem.
+
+So the focus moved to a hidden `<textarea>` that `mount()` creates, and the canvas gives its focus
+away (`canvas.addEventListener("focus", focusSink)`) rather than taking it.
+
+**A textarea, not an `<input>`.** On both iPadOS and Android an input's return key is "Go" or
+"Done" and blurs or submits instead of inserting a line break — so `insertLineBreak` never arrives
+and Enter is unreachable from the soft keyboard. That decides it on its own. `contenteditable` was
+the other candidate and loses on the housekeeping: the browser injects `<br>`/`<div>` wrappers to
+keep clearing, and `inputmode`/`enterkeyhint`/`autocapitalize` are not uniformly honoured on it.
+
+**Every declaration on the sink is load-bearing**, and each of them looks like something to tidy
+up later:
+
+- `opacity: 0` and not `display: none`, `visibility: hidden`, `hidden`, `readonly` or `disabled` —
+  every one of those makes it unfocusable or kills the keyboard.
+- `font-size: 16px` on an invisible element, because iOS Safari zooms the page when focus lands on
+  a field under 16px. That is the correct fix; `maximum-scale=1` in the viewport meta is the other
+  one and it disables pinch-zoom for everyone.
+- Positioned at the viewport origin rather than off-screen. `top: -9999px` is the usual trick and
+  is wrong here: iOS scrolls the focused field into view and would take the terminal with it. A 1×1
+  transparent box already in view gives scroll-into-view nothing to do.
+- `pointer-events: none`, so the 1px corner cannot eat a tap meant for the canvas.
+- `position: fixed` on `document.body` rather than a wrapper around the canvas. Wrapping reparents
+  an element the page laid out: in `embed.html` the canvas is the `1fr` row of a two-row grid sized
+  by `height: 100%`, and a `<div>` between them leaves that `100%` resolving against nothing — the
+  terminal collapses. Fixed positioning is out of flow, and `dispose()` is one `remove()`. It is
+  the shape `filePicker()` already had.
+
+### Two sources, one destination, and the rule between them
+
+A soft keyboard frequently reports no key at all: GBoard sends `keyCode 229` with
+`key: "Unidentified"` for ordinary letters. iPadOS is better and sends real `keydown`s for typing —
+but dictation, predictive text and autocorrect arrive there only as `input` events. So a second
+route was needed on both platforms, for different reasons, and the risk it brings is a keystroke
+delivered twice.
+
+The invariant that prevents it: **the text route runs exactly when the key route did not prevent
+the default.** `preventDefault()` on a keydown suppresses the insertion and therefore the
+`beforeinput` and `input` that would have followed, and `consumes()` returns true for every
+printable key. Its two early-outs are the whole risk surface and both are covered — `key === null`
+is the *intended* handoff (and now also makes a Mac dead key compose, which was silently dropped
+before), and the `metaKey`/`RESERVED` cases cannot produce an insertion the handler does not
+filter. The `keyCode === 229` guard at the top of `onKeyDown` is the converse: those keydowns post
+nothing and prevent nothing, so the text route gets them.
+
+The text route reads `sink.value` rather than `event.data`, because the firing order of `input` and
+`compositionend` differs between engines — Chrome fires `input(insertCompositionText)` first,
+Safari has fired it after. Reading and clearing the value makes the order irrelevant: whichever
+handler arrives first takes the text and empties the field, and the other finds nothing. Deletion
+is the exception and is taken on `beforeinput`, because a delete on an already-empty field changes
+nothing, and a UA that changes nothing fires no `input`.
+
+### Why the text route feeds a paste run
+
+Reusing `{kind:"paste"}` means no new worker message kind and no worker change at all, and it
+inherits the pacing against `key()`'s return value that a dictated sentence needs. The third
+reason is the one that is easy to miss: `web/worker.js` dispatches a `{kind:"key"}` straight into
+`kernel.key()`, *ahead* of a `pasting` run still being fed. That is deliberate and documented
+there — `^C` must not wait behind a paste — but it means a backspace posted as a key while the
+word before it was still draining would arrive first. So text, `Enter`, backspace and delete all
+go as a run, and the single deliberate exception is the character after a latched `Ctrl`, which
+uses `sendKey` *because* it jumps the queue: that one is `^C`.
+
+Nothing here crosses the wasm boundary. A `text(ptr, len)` export would be the same inversion that
+"Paste, as typing" already rejected for a `paste()` export — a byte stream into the keyboard, with
+§2.3 turned inside out — and the exact-surface assertion in `test/run.mjs` went unedited, which is
+the evidence the change stayed on the page.
+
+### The key bar, and who owns its DOM
+
+Fixing the keyboard still leaves a tablet unable to send `^C`: neither iPadOS nor GBoard offers
+`Ctrl` or `Esc`, and most layouts have no `Tab` and no arrows. Nothing in the input pipeline can
+synthesise a key the keyboard does not have, so the page supplies them.
+
+**The page places the container and `mount()` fills it** (`mount({canvas, keys})`). The
+alternative — `mount()` creating and inserting the bar — breaks `embed.html`'s two-row grid, and
+forces this file to inject styling into a page whose theme it does not know; `braam.js` sets no CSS
+on anything the embedder owns, and that would have been the first exception. With a page-placed
+container the layout is the page's and the existing `ResizeObserver` does the rest for free: the
+bar is a real flex item, so when it appears the canvas shrinks, the observer fires and the grid
+re-lays out. `dispose()` gets an unambiguous rule too — remove the buttons `mount()` made, leave
+the container it did not, which is `ownPicker` again.
+
+Showing it is a CSS media query in the page, `any-pointer: coarse` rather than `pointer: coarse`:
+an iPad with a Magic Keyboard reports a fine primary pointer and still has a touchscreen its owner
+may type on. The worst case is a bar a keyboard user ignores. `navigator.maxTouchPoints` is the
+same information but static, and reads true under desktop device emulation. Because the container
+is `display: none` on desktop it has zero height, so the desktop terminal is unchanged.
+
+`Ctrl` latches onto the next key and clears; a second tap toggles it off and a blur clears it.
+**No lock-on-double-tap** — a stuck `Ctrl` is a terminal that appears broken, and there is nowhere
+on a seven-button bar to explain a second state. Routing the latch through the text route as well
+as through `onKeyDown` is load-bearing: on Android the `c` of `^C` arrives as input text, not as a
+keystroke.
+
+The one genuinely delicate part is that **tapping a button must not dismiss the keyboard**.
+Preventing `mousedown`'s default is what holds the focus on the sink; it is the toolbar-button
+idiom every rich-text editor uses, and a tap synthesises compatibility mouse events before its
+click. `preventDefault()` on `pointerdown` is *specified* to suppress those while still firing
+`click`, but an engine that got that wrong would leave the bar silently dead on exactly the
+platform it exists for. Acting on `click` also gives mouse, touch and keyboard activation one path
+with no double-fire, and `touch-action: manipulation` removes the latency that would otherwise
+cost.
+
+### The keyboard covers the page rather than resizing it
+
+None of this went into `braam.js`. Resizing or scrolling an embedder's document is the layout
+meddling the file refuses everywhere else, and it does not need to: the `ResizeObserver` already
+reflows the grid the moment the canvas box changes, so a page that shrinks correctly gets a
+correct terminal for free. What `index.html` does is `interactive-widget=resizes-content` for
+Android — the default is `resizes-visual`, which slides the page instead — `100dvh` for the URL
+bar, and a `visualViewport` listener for iOS, which shrinks neither the layout nor the dynamic
+viewport for its keyboard and appears to ignore `interactive-widget` entirely. `embed.html` takes
+the meta and the `dvh` and not the listener, since page-fitting logic muddies what that page is
+there to show.
+
+### Three things left uncertain on purpose
+
+Each has a contingency that should not be paid for speculatively, and each is a question only a
+real device answers:
+
+- **Android backspace on an empty field.** Some GBoard versions send a real `keydown`/`keyCode 8`
+  even while sending 229 for letters; others send only `beforeinput(deleteContentBackward)`. Both
+  are handled. If some UA suppresses even the `beforeinput`, the fix is the sentinel CodeMirror
+  uses — seed the sink with two no-break spaces, keep the caret between them, and diff on drain —
+  which costs autocorrect context and makes a screen reader read the sentinel.
+- **GBoard composing whole words.** `spellcheck="false"` and `autocorrect="off"` make it much less
+  inclined to, but if it does, the echo lags to word boundaries. It works; it lags. The fix would
+  be an incremental emitter diffing `sink.value` against what has already been sent.
+- **Re-raising a keyboard the user dismissed.** The sink still holds the focus, so a tap focuses an
+  already-focused element, which on iOS does not bring the keyboard back. A `blur()` before the
+  `focus()` is the candidate and may not work either, at the cost of a flicker on every tap.
+
+### Verification
+
+There is no browser harness in this tree, so the three CTest cases prove only what they always
+prove — and here that is the point: `smoke` asserting the exact import and export surface is the
+check that this stayed on the page side. The behaviour was checked by hand, in a browser and on a
+tablet, against the list in the section above.
+
 ## Concept.md says what the system is, not how it got here
 
 The spec had accumulated its own history. Half of it was written in the past tense about the

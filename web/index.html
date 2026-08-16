@@ -2,13 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>braam</title>
 <style>
     html { color-scheme: dark; }
     body {
         margin: 0;
         height: 100vh;
+        height: 100dvh;
         box-sizing: border-box;
         padding: 1.25em 1.5em;
         display: flex;
@@ -24,7 +25,33 @@
         min-height: 0;
         cursor: text;
         touch-action: none; /* a drag over the grid selects; it does not scroll */
+        -webkit-touch-callout: none; /* no magnifier on a long press */
     }
+    /* The keys a touch keyboard does not have. Shown on anything touchable —
+       a hybrid keeps a bar it can ignore. */
+    #keys { display: none; }
+    @media (any-pointer: coarse) {
+        #keys {
+            display: flex;
+            flex: 0 0 auto;
+            gap: 0.4rem;
+            padding: 0.4rem 0 0;
+        }
+    }
+    .braam-key {
+        flex: 1 1 0;
+        padding: 0.6rem 0;
+        font: inherit;
+        color: #aaaaaa;
+        background: #1a1c26;
+        border: 1px solid #242632;
+        border-radius: 4px;
+        touch-action: manipulation;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+    }
+    .braam-key-on { color: #111111; background: #6f7488; }
     #status {
         flex: 0 0 auto;
         margin: 0;
@@ -38,7 +65,8 @@
 </style>
 </head>
 <body>
-<canvas id="screen" tabindex="0"></canvas>
+<canvas id="screen"></canvas>
+<div id="keys"></div>
 <pre id="status"></pre>
 <script type="module">
 import { mount } from "./braam.js";
@@ -52,12 +80,25 @@ function note(text, cls) {
     status.appendChild(line);
 }
 
+// iOS does not shrink the layout viewport for the software keyboard and
+// ignores interactive-widget, so the page sizes itself from the visual
+// viewport. The terminal needs nothing: a shorter body is a shorter canvas,
+// which braam.js already re-measures.
+const vv = window.visualViewport;
+if (vv) {
+    const fit = () => { document.body.style.height = `${vv.height}px`; };
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
+    fit();
+}
+
 // Everything this page does is in braam.js now; what is left here is a canvas,
 // a place to put diagnostics, and the one browser check that has to happen
 // before anything is mounted. See embed.html for two of them on one page.
 try {
     const term = mount({
         canvas: document.getElementById("screen"),
+        keys: document.getElementById("keys"),
         onLog: (text) => console.log(text),
         onError: (text) => {
             console.error(text);

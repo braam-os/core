@@ -152,6 +152,9 @@ ordinary filesystem, so you can bring the file in with the browser's file picker
 Finished, as a first version: everything above works and the tests pass. The kernel is 146 KB and
 the archive holding the programs is 491 KB.
 
+A tablet works: tap to type, drag to select. The row of buttons under the terminal supplies the
+keys a touch keyboard does not have, since `Esc`, `Tab`, `Ctrl` and the arrows are not on one.
+
 Some things are missing on purpose. A program cannot be suspended and resumed, so there is no `bg`
 and no `^Z`. Lines are not re-wrapped when the window is resized. A process cannot be confined to
 its own part of the filesystem. There is no window manager: one program has the screen at a time.
