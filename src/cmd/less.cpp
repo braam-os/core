@@ -65,9 +65,7 @@ Task<i32> proc_main(Args args)
         co_return 1;
     }
 
-    Input files(args.tail(), SYS_STDIN);
-    if (i32 bad = co_await files.open_all("less"))
-        co_return bad;
+    Input files(args.tail(), SYS_STDIN, "less");
     if (args.size() == 2 && !p->name.assign(args[1]))
         co_return 1;
 

@@ -38,7 +38,9 @@ Task<Result<Stat>> vfs_stat(Str path);
 Task<Result<Vec<Entry>>> vfs_list(Str path);
 
 // A file descriptor, or an error. The offset is the caller's business; nothing
-// here is seekable, because nothing here is stateful.
+// here is seekable, because nothing here is stateful — which is what lets
+// several descriptors share one backend handle. Readers do; a writer is refused
+// while anyone holds the file, and refused the file anyone else holds (§5.2).
 Task<Result<i32>> vfs_open(Str path, u32 flags);
 
 Task<Result<void>> vfs_mkdir(Str path);

@@ -849,6 +849,12 @@ operations — but saving those is not the reason to prefer it. The reason is wh
 the process's handle table dies with the process, `~Handle` releases the externref slot, and the
 socket closes with no code written for it.
 
+**A `File` descriptor is a reference on a shared VFS handle.** Two `Open`s of one path — from one
+process or from two — give two descriptors with two offsets over one backend handle, and the last
+`Close` is what reaches the filesystem. An `Open` is `-Error::Perm` if a writer holds the path, or
+if it asks for `SYS_O_WRITE` or `SYS_O_TRUNC` while anyone holds it: OPFS takes an exclusive lock,
+and sharing is what keeps that one rule on every mount (Concept.md §5.2).
+
 A `PickFile` remembers its set **by descriptor rather than by pointer**, so closing the set first
 is `Err(Invalid)` at the next read rather than a dangling reference. A set closed *during* a read
 is a different matter, and is held for the length of it.
@@ -1023,9 +1029,7 @@ A filter is the shape almost every program has:
 ```cpp
 Task<i32> proc_main(Args args)
 {
-    Input in(args.tail(), SYS_STDIN);     // named files, or stdin
-    if (i32 bad = co_await in.open_all("wc"))
-        co_return bad;                     // a missing file, reported before any output
+    Input in(args.tail(), SYS_STDIN, "wc"); // named files, or stdin
 
     for (;;) {
         Result<String> r = co_await in.read();
@@ -1046,8 +1050,9 @@ Task<i32> proc_main(Args args)
 ```
 
 Four conventions there, repeated across `src/cmd/`: `Input` decides files-or-stdin in its
-constructor; `open_all` returns the exit status directly; `Error::Closed` is a normal end and
-`Error::Cancelled` is exit 130; and output is formatted into a stack `Buf<N>` and written once.
+constructor and opens each named file only when the read reaches it, reporting one that will not
+open on stderr itself; `Error::Closed` is a normal end and `Error::Cancelled` is exit 130; and
+output is formatted into a stack `Buf<N>` and written once.
 
 `src/proc/io.h` has a wrapper for every syscall, each a `Task<Result<T>>` that does one
 `co_await sys_call(...)` and unpacks the reply. Nothing in a program should be calling `sys_call`

@@ -25,9 +25,7 @@ Task<i32> proc_main(Args args)
         co_return 2;
     }
 
-    Input files(Args{ args.v.subspan(first) }, SYS_STDIN);
-    if (i32 bad = co_await files.open_all("tail"))
-        co_return bad;
+    Input files(Args{ args.v.subspan(first) }, SYS_STDIN, "tail");
 
     Vec<String> ring;
     usize head = 0; // oldest, once the ring is full

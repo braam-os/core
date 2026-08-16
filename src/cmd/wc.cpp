@@ -6,9 +6,7 @@
 // — and a chunk now breaks where a syscall does rather than where a pipe did.
 Task<i32> proc_main(Args args)
 {
-    Input in(args.tail(), SYS_STDIN);
-    if (i32 bad = co_await in.open_all("wc"))
-        co_return bad;
+    Input in(args.tail(), SYS_STDIN, "wc");
 
     u32 lines = 0, words = 0, bytes = 0;
     bool in_word = false;

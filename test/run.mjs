@@ -618,6 +618,22 @@ if (mode === "--kernel") {
     if (notes.join(",") !== "one,two")
         fail(`cat notes printed ${JSON.stringify(notes)}, expected one,two`);
 
+    // One file named twice. §5.2 used to refuse the second open outright; Input
+    // now opens the second only after closing the first.
+    s = submit("clear", 1173.1);
+    s = submit("cat notes notes", 1173.2);
+    const twice = rows(s).filter((line) => line && !line.includes("$"));
+    if (twice.join(",") !== "one,two,one,two")
+        fail(`cat notes notes printed ${JSON.stringify(twice)}, expected one,two,one,two`);
+
+    // Two descriptors on one file at the same moment, which laziness alone does
+    // not fix: the shell opens notes for the stage's stdin and Sys::Spawn moves
+    // that handle into grep, which then opens notes again for itself.
+    s = submit("clear", 1173.3);
+    s = submit("grep one notes < notes", 1173.4);
+    if (!rows(s).includes("one"))
+        fail(`grep with a redirection on its own file printed ${JSON.stringify(rows(s))}`);
+
     // A redirection that cannot be opened stops the command before it runs.
     s = submit("echo hi > /bin/wc", 1174);
     if (!rows(s).some((line) => line.startsWith("braam: /bin/wc: ")))

@@ -150,9 +150,7 @@ A filter is the shape most programs have:
 ```cpp
 Task<i32> proc_main(Args args)
 {
-    Input in(args.tail(), SYS_STDIN);      // the named files, or stdin
-    if (i32 bad = co_await in.open_all("count"))
-        co_return bad;                     // a missing file, before any output
+    Input in(args.tail(), SYS_STDIN, "count"); // the named files, or stdin
 
     usize lines = 0;
     LineReader lr(in);
@@ -176,8 +174,10 @@ Task<i32> proc_main(Args args)
 
 Four conventions there, and every program in `src/cmd/` follows them:
 
-- `Input` decides files-or-stdin in its constructor, and `open_all` returns the exit status
-  directly, so a missing file is reported before anything is printed.
+- `Input` decides files-or-stdin in its constructor, and opens each named file only when the
+  read reaches it, closing it before the next. A file that will not open prints
+  `count: <path>: <why>` on stderr itself and comes back as an ordinary error, so it is
+  reported where the reading stopped rather than before any output.
 - **`Error::Closed` is a normal end of input**, not a failure.
 - **`Error::Cancelled` is `^C`**, and the exit status for it is 130.
 - Output is formatted into a stack `Buf<N>` and written once. A write per field is a syscall

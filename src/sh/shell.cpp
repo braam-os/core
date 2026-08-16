@@ -110,9 +110,6 @@ Task<i32> interactive()
 Task<i32> script()
 {
     Input in(Args{}, SYS_STDIN);
-    if (i32 bad = co_await in.open_all("sh"))
-        co_return bad;
-
     LineReader lines(in);
     String line;
     i32 status = 0;

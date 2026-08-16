@@ -4,9 +4,7 @@
 // boundaries; a browser that refuses without a user gesture reports Perm.
 Task<i32> proc_main(Args args)
 {
-    Input files(args.tail(), SYS_STDIN);
-    if (i32 bad = co_await files.open_all("pbcopy"))
-        co_return bad;
+    Input files(args.tail(), SYS_STDIN, "pbcopy");
 
     String text;
     for (;;) {

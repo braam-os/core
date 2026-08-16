@@ -32,7 +32,8 @@ struct Entry {
 };
 
 // open() flags. Read and write are separate bits because the open-file table
-// enforces Concept.md §5.2's exclusive lock on writers.
+// shares a handle between readers and refuses to share with a writer
+// (Concept.md §5.2).
 enum : u32 {
     O_READ   = 1,
     O_WRITE  = 2,

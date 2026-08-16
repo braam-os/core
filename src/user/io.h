@@ -25,7 +25,8 @@ Source pipe_source(Pipe &p);
 Source null_source();
 
 // An open file behind a Stream or a Source. The offset lives here because the
-// VFS is not seekable: nothing below it holds per-descriptor state.
+// VFS is not seekable: nothing below it holds per-descriptor state. That is a
+// precondition, not just an observation — descriptors share a backend handle.
 //
 // Both ends are synchronous — that is the whole point of Concept.md §5.2's
 // sync access handles — so neither ever parks, and `park` stays null.

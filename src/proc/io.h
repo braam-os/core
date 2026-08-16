@@ -240,27 +240,30 @@ Task<Result<void>> save(Str name, Str bytes);
 Task<void> errln(Str who, Str what, Error why);
 
 // The files named on a command line, read end to end as one stream — `wc a b`.
-// Unlike the applet version they are opened lazily, since a read here is a
-// syscall either way and nothing has to be ready before the first one.
+// One is open at a time: each is opened when the read reaches it and closed
+// before the next. `who` names this program in the diagnostic a failed open
+// prints, and is unused when no path was named.
 struct Input {
-    Input(Args paths, u32 fallback) : paths_(paths), fd_(fallback) {}
+    Input(Args paths, u32 fallback, Str who = {})
+        : paths_(paths), who_(who), fd_(fallback), own_(paths.size() > 0)
+    {
+    }
 
     Input(const Input &)            = delete;
     Input &operator=(const Input &) = delete;
 
-    // Opens every path up front so a missing file is reported before any
-    // output, which is what the applet did. Returns 0, or the exit status.
-    Task<i32> open_all(Str who);
-
-    // The next chunk of the concatenation, or Err(Closed) at the end of it.
+    // The next chunk of the concatenation, or Err(Closed) at the end of it. A
+    // file that will not open is reported here, on stderr, and comes back as
+    // its own error — so a caller's Cancelled-is-130 mapping still holds.
     Task<Result<String>> read();
 
 private:
     Args paths_;
-    Vec<i32> fds_;
+    Str who_;
     usize at_ = 0;
-    u32 fd_; // stdin, when no path was named
-    bool own_ = false;
+    i32 cur_  = -1; // the file at_ names, once opened
+    u32 fd_;        // stdin, when no path was named
+    bool own_;
 };
 
 // Splits an Input into lines. The applet's twin in src/user/io.h, kept the same

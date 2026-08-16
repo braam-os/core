@@ -7,6 +7,85 @@ of the two needs amending.
 
 ---
 
+## One handle per file, not one descriptor
+
+`cat bar bar` said `cat: bar: permission denied`, and so did `wc /bin/sh /bin/sh`, `grep x f f`
+and `grep one notes < notes`. The refusal came from the VFS open-file table, which scanned for the
+absolute path and refused *any* second open, system-wide, on every backend — including `/bin` and
+`/proc`, which have no lock to protect.
+
+That rule was deliberate, and the reasoning behind it (see "One open handle per file", below) was
+right about the thing that mattered: OPFS's `createSyncAccessHandle()` takes an exclusive lock, and
+a rule that held only on some backends would be worse than the restriction. What was missed is
+that there is a third option. The table now holds **one backend handle per file and hands out
+references to it**. Nothing is ever asked to open a file twice, so the rule is identical on OPFS,
+MemFs, BundleFs and ProcFs *without* being a restriction — the property the strict rule was
+protecting, obtained by removing the strictness rather than by spreading it.
+
+Sharing is safe only because of something that was already true: the offset lives in `FileIo`,
+above the VFS, and `vfs_read`/`vfs_write` take an absolute one. "Nothing below it holds
+per-descriptor state" was an observation; it is now a correctness precondition.
+
+**Readers share, a writer keeps the file to itself.** That restores what §5.2 originally meant.
+Two writers would need a shared offset the VFS deliberately does not have — `O_APPEND` is resolved
+once, at open, into `Handle::file.off`, so `a >> f` and `b >> f` at the same time would overwrite
+rather than append, and POSIX's atomicity is not available to us. Keeping `cat f > f` refused is a
+feature the shell gets for free. `may_share()` is the one function to change if that is ever
+revisited; it is also why `OpenShared::mutating` never needs recomputing, since a record that has
+it can never gain a second descriptor.
+
+`O_TRUNC` counts as writing even without `O_WRITE`. A share skips the backend open, and the
+backend open is where a truncation happens, so an `O_READ|O_TRUNC` open that shared would silently
+not truncate. `O_CREATE` needs no such care: if a record exists, so does the file.
+
+The old invariant already leaked. `vfs_open` scanned before `co_await fs->open(...)` and installed
+after, so two tasks could both pass the scan and both install; it only looked airtight because
+OPFS refused the second host open. The re-scan after the await is what establishes "one record per
+file" for the first time, and it needs no new scheduler primitive because nothing between the
+re-scan and the bind suspends — whichever coroutine resumes first installs its record atomically
+with respect to the other, and the loser always sees it. On OPFS the loser's own open is exactly
+the one that failed, so the failure becomes a share.
+
+Two consequences worth writing down. `/proc` snapshots at open, so two concurrent readers of one
+`/proc` file now see one snapshot; a per-backend opt-out was rejected because it reintroduces the
+backend-dependent rule §5.2 refused. And two concurrent `O_WRITE|O_TRUNC` opens on MemFs leave the
+loser's truncation already done before the re-scan refuses it — true before this change as well,
+where the loser also truncated *and* succeeded, so it is strictly less bad.
+
+### The other half: `Input` opens lazily
+
+The VFS change alone fixes `cat bar bar`, but `Input` was also opening every named file up front,
+which is what made one command hold two descriptors on one path. It now opens each file when the
+read reaches it and closes it before the next, so at most one named file is open at a time. The
+header already claimed this ("they are opened lazily") while the implementation did the opposite.
+
+The price is real: `cat good missing` now prints `good`'s bytes *before* reporting that `missing`
+does not exist, where the up-front open reported it first. `head -n 2 good missing` never mentions
+`missing` at all, because it stops before reaching it. Both are the honest consequence of laziness
+rather than something to special-case.
+
+`open_all` was deleted rather than renamed — it no longer opened anything, and the only state it
+still set belongs in the constructor, which now takes `who` as a third argument. That is an
+SDK-visible change to `include/braam/proc/io.h`. The diagnostic moved into `read()`, which is the
+only place that knows the file's name; every caller already mapped a non-`Closed` error onto an
+exit status without printing, so none of the nine needed its loop touched.
+
+The two changes are complementary, and it is worth being precise about which covers what. Laziness
+fixes one process naming one file twice. Sharing is what fixes `grep one notes < notes` — where
+`Sys::Spawn` moves the redirection's handle into the child, which then opens the same path itself —
+along with `cat bar | grep x bar` and two processes on one file. The end-to-end test carries both.
+
+Regression coverage is the uncomfortable part. `test/fakefs.mjs` does not model OPFS's exclusive
+lock and was deliberately left permissive, so a shared-handle path that regressed into issuing two
+host opens would sail through the whole smoke test while a real browser threw
+`NoModificationAllowedError`. `test_vfs`'s `CountingFs` counts what reaches the filesystem — two
+descriptors must be one `open()` and one `close()` — and is the only thing standing between that
+regression and a shipped build. The await window itself is not reachable from `tests.wasm`:
+`run_now` panics on a suspension and every filesystem the suite mounts answers synchronously.
+
+Supersedes "One open handle per file" below, and the eight files in "What a syscall costs,
+measured" no longer need to be different.
+
 ## A canvas is focusable, not editable
 
 On a tablet the prompt appeared, a finger could select text, and nothing could be typed: the

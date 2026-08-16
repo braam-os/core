@@ -51,9 +51,7 @@ Task<i32> proc_main(Args args)
     }
 
     Str pattern = args[i];
-    Input files(Args{ args.v.subspan(i + 1) }, SYS_STDIN);
-    if (i32 bad = co_await files.open_all("grep"))
-        co_return bad;
+    Input files(Args{ args.v.subspan(i + 1) }, SYS_STDIN, "grep");
 
     LineReader in(files);
     String line;

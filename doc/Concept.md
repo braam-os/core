@@ -716,10 +716,14 @@ value-returning imports, the second sanctioned exception to §2.2.
 
 Two constraints to build around:
 
-- A sync access handle takes an **exclusive lock**, so the VFS needs an open-file table. It
-  refuses a *second open of any kind*, not merely a second writer: OPFS's lock does not care
-  what mode the second handle asks for, and a rule that held only on some backends would be
-  worse than the restriction.
+- A sync access handle takes an **exclusive lock**, so the VFS needs an open-file table. The
+  table holds **one backend handle per file and shares it**: a second open takes a reference on
+  the handle that is already there rather than asking OPFS for one it would refuse. Offsets live
+  above the VFS, so descriptors sharing a handle cannot disturb each other's position. What the
+  table still refuses is a second opener while a *writer* holds the file, and a writer while
+  anyone holds it — `O_TRUNC` counts as writing, since a share skips the backend open that would
+  have performed it. Sharing is what makes that one rule on every backend: none of them is ever
+  asked to open a file twice, so the rule cannot depend on which mount a path landed in.
 - OPFS is unavailable in Safari private browsing. Capability-detect and fall back to `MemFs`.
 
 ### 5.3 Capability struct, not probing

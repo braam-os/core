@@ -4,9 +4,7 @@
 // that way. Named files are read end to end as one stream.
 Task<i32> proc_main(Args args)
 {
-    Input files(args.tail(), SYS_STDIN);
-    if (i32 bad = co_await files.open_all("cat"))
-        co_return bad;
+    Input files(args.tail(), SYS_STDIN, "cat");
 
     for (;;) {
         Result<String> r = co_await files.read();

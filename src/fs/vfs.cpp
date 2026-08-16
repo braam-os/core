@@ -8,13 +8,37 @@
 
 namespace {
 
-struct OpenFile {
+// What may not share. O_TRUNC is here because sharing skips the backend open,
+// which is where a truncation happens.
+constexpr u32 O_MUTATE = O_WRITE | O_TRUNC;
+
+// One backend handle, however many descriptors are on it. On the heap, so the
+// pointer survives the descriptor table growing.
+struct OpenShared {
     Fs *fs = nullptr;
     u32 h  = 0;
-    String path; // absolute, for the single-writer check and for diagnostics
-    u32 flags = 0;
-    bool used = false;
+    String path;       // absolute, half of the key
+    u32 refs      = 0; // descriptors pointing here
+    bool mutating = false;
 };
+
+// One descriptor. The flags are its own; the handle is shared.
+struct OpenFile {
+    OpenShared *s = nullptr;
+    u32 flags     = 0;
+    bool used     = false;
+};
+
+// Drops one descriptor, closing the file when it was the last.
+void slot_release(OpenFile &f)
+{
+    OpenShared *s = f.s;
+    f             = OpenFile{};
+    if (s && --s->refs == 0) {
+        s->fs->close(s->h);
+        heap_delete(s);
+    }
+}
 
 struct Vfs {
     Vec<Mount> mounts;
@@ -25,7 +49,7 @@ struct Vfs {
     {
         for (OpenFile &f : files)
             if (f.used)
-                f.fs->close(f.h);
+                slot_release(f);
         for (Mount &m : mounts)
             heap_delete(m.fs);
     }
@@ -51,6 +75,52 @@ OpenFile *file_of(i32 fd)
     if (fd < 0 || usize(fd) >= v.files.size() || !v.files[usize(fd)].used)
         return nullptr;
     return &v.files[usize(fd)];
+}
+
+// The record for an already-open file, or null. Keyed on the pair: a mount laid
+// over an open path is a different file.
+OpenShared *shared_of(Fs *fs, Str abs)
+{
+    Vfs &v = vfs();
+    for (OpenFile &f : v.files)
+        if (f.used && f.s->fs == fs && f.s->path == abs)
+            return f.s;
+    return nullptr;
+}
+
+// A descriptor on `s`, taking a reference only if it succeeds.
+i32 slot_alloc(OpenShared *s, u32 flags)
+{
+    Vfs &v = vfs();
+    OpenFile f;
+    f.s     = s;
+    f.flags = flags;
+    f.used  = true;
+
+    for (usize i = 0; i < v.files.size(); i++) {
+        if (!v.files[i].used) {
+            v.files[i] = f;
+            s->refs++;
+            return i32(i);
+        }
+    }
+    if (!v.files.push(f))
+        return -1;
+    s->refs++;
+    return i32(v.files.size() - 1);
+}
+
+// Concept.md §5.2: readers share, a writer has the file to itself. The whole
+// policy is this predicate, which is also why `mutating` never needs
+// recomputing — a record that has it never gains a second descriptor.
+Result<i32> share(OpenShared *s, u32 flags)
+{
+    if ((flags & O_MUTATE) || s->mutating)
+        return Err(Error::Perm);
+    i32 fd = slot_alloc(s, flags);
+    if (fd < 0)
+        return Err(Error::NoMemory);
+    return fd;
 }
 
 // Case-free byte order, which is all the shell needs.
@@ -218,41 +288,45 @@ Task<Result<i32>> vfs_open(Str path, u32 flags)
     if ((flags & O_WRITE) && !m->fs->writable())
         co_return Err(Error::Perm);
 
-    // Concept.md §5.2: an OPFS sync access handle takes an exclusive lock on
-    // the file, and a second one fails whatever mode it asks for. The table
-    // enforces that for every backend, so the rule does not depend on which
-    // one a path happens to land in.
-    Vfs &v = vfs();
-    for (const OpenFile &f : v.files)
-        if (f.used && f.path == abs.str())
-            co_return Err(Error::Perm);
+    // Concept.md §5.2: descriptors share one handle rather than asking for a
+    // second, which an OPFS sync access handle refuses. No backend is opened
+    // twice, so the rule does not depend on which one a path lands in.
+    if (OpenShared *s = shared_of(m->fs, abs.str()))
+        co_return share(s, flags);
 
     Task<Result<u32>> t = m->fs->open(sub, flags);
     if (!t)
         co_return Err(Error::NoMemory);
-    u32 h = CO_TRY(co_await t);
+    Result<u32> r = co_await t;
 
-    OpenFile f;
-    f.fs    = m->fs;
-    f.h     = h;
-    f.flags = flags;
-    f.used  = true;
-    if (!f.path.assign(abs.str())) {
-        m->fs->close(h);
+    // That await was a window: another task may have opened the file while it
+    // ran, and on OPFS that is exactly why `r` failed. Nothing below suspends,
+    // so the loser always sees the winner's record here.
+    if (OpenShared *s = shared_of(m->fs, abs.str())) {
+        if (r.is_ok())
+            m->fs->close(r.value());
+        co_return share(s, flags);
+    }
+    if (r.is_err())
+        co_return Err(r.error());
+
+    OpenShared *s = heap_new<OpenShared>();
+    if (!s || !s->path.assign(abs.str())) {
+        heap_delete(s);
+        m->fs->close(r.value());
         co_return Err(Error::NoMemory);
     }
+    s->fs       = m->fs;
+    s->h        = r.value();
+    s->mutating = (flags & O_MUTATE) != 0;
 
-    for (usize i = 0; i < v.files.size(); i++) {
-        if (!v.files[i].used) {
-            v.files[i] = move(f);
-            co_return i32(i);
-        }
-    }
-    if (!v.files.push(move(f))) {
-        m->fs->close(h);
+    i32 fd = slot_alloc(s, flags);
+    if (fd < 0) {
+        heap_delete(s);
+        m->fs->close(r.value());
         co_return Err(Error::NoMemory);
     }
-    co_return i32(v.files.size() - 1);
+    co_return fd;
 }
 
 Task<Result<void>> vfs_mkdir(Str path)
@@ -300,7 +374,7 @@ Result<usize> vfs_read(i32 fd, u64 off, u8 *buf, usize n)
         return Err(Error::Invalid);
     if (!(f->flags & O_READ))
         return Err(Error::Perm);
-    return f->fs->read(f->h, off, buf, n);
+    return f->s->fs->read(f->s->h, off, buf, n);
 }
 
 Result<usize> vfs_write(i32 fd, u64 off, const u8 *buf, usize n)
@@ -310,7 +384,7 @@ Result<usize> vfs_write(i32 fd, u64 off, const u8 *buf, usize n)
         return Err(Error::Invalid);
     if (!(f->flags & O_WRITE))
         return Err(Error::Perm);
-    return f->fs->write(f->h, off, buf, n);
+    return f->s->fs->write(f->s->h, off, buf, n);
 }
 
 Result<u64> vfs_size(i32 fd)
@@ -318,7 +392,7 @@ Result<u64> vfs_size(i32 fd)
     OpenFile *f = file_of(fd);
     if (!f)
         return Err(Error::Invalid);
-    return f->fs->size(f->h);
+    return f->s->fs->size(f->s->h);
 }
 
 Result<void> vfs_truncate(i32 fd, u64 n)
@@ -328,7 +402,7 @@ Result<void> vfs_truncate(i32 fd, u64 n)
         return Err(Error::Invalid);
     if (!(f->flags & O_WRITE))
         return Err(Error::Perm);
-    return f->fs->truncate(f->h, n);
+    return f->s->fs->truncate(f->s->h, n);
 }
 
 void vfs_close(i32 fd)
@@ -336,8 +410,7 @@ void vfs_close(i32 fd)
     OpenFile *f = file_of(fd);
     if (!f)
         return;
-    f->fs->close(f->h);
-    *f = OpenFile{};
+    slot_release(*f);
 }
 
 void vfs_reset()

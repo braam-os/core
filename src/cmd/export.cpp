@@ -10,9 +10,7 @@ Task<i32> proc_main(Args args)
         co_return 2;
     }
 
-    Input files(Args{ args.v.subspan(1, 1) }, SYS_STDIN);
-    if (i32 bad = co_await files.open_all("export"))
-        co_return bad;
+    Input files(Args{ args.v.subspan(1, 1) }, SYS_STDIN, "export");
 
     String data;
     for (;;) {

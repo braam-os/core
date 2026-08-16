@@ -551,31 +551,6 @@ Task<void> errln(Str who, Str what, Error why)
     co_await write_all(SYS_STDERR, line.str());
 }
 
-Task<i32> Input::open_all(Str who)
-{
-    if (paths_.size() == 0)
-        co_return 0;
-    own_ = true;
-
-    for (usize i = 0; i < paths_.size(); i++) {
-        Task<Result<i32>> t = open_read(paths_[i]);
-        if (!t)
-            co_return 1;
-        Result<i32> r = co_await t;
-        if (r.is_err()) {
-            if (Task<void> e = errln(who, paths_[i], r.error()))
-                co_await e;
-            co_return r.error() == Error::Cancelled ? 130 : 1;
-        }
-        if (!fds_.push(r.value())) {
-            if (Task<void> c = close_fd(u32(r.value())))
-                co_await c;
-            co_return 1;
-        }
-    }
-    co_return 0;
-}
-
 // End of one file is not end of input: it is the start of the next.
 Task<Result<String>> Input::read()
 {
@@ -586,18 +561,39 @@ Task<Result<String>> Input::read()
         co_return co_await t;
     }
 
-    while (at_ < fds_.size()) {
-        Task<Result<String>> t = read_chunk(u32(fds_[at_]));
+    for (;;) {
+        if (cur_ < 0) {
+            if (at_ >= paths_.size())
+                co_return Err(Error::Closed);
+
+            Task<Result<i32>> o = open_read(paths_[at_]);
+            if (!o)
+                co_return Err(Error::NoMemory);
+            Result<i32> r = co_await o;
+            if (r.is_err()) {
+                // Reported here: the caller has no name for the file, and maps
+                // anything but Closed onto an exit status without printing.
+                if (Task<void> e = errln(who_, paths_[at_], r.error()))
+                    co_await e;
+                at_ = paths_.size(); // spent; a further read is not to retry it
+                co_return Err(r.error());
+            }
+            cur_ = r.value();
+        }
+
+        Task<Result<String>> t = read_chunk(u32(cur_));
         if (!t)
             co_return Err(Error::NoMemory);
         Result<String> r = co_await t;
         if (r.is_ok() || r.error() != Error::Closed)
             co_return move(r);
-        if (Task<void> c = close_fd(u32(fds_[at_])))
+
+        // Closed before the next is opened, which is what keeps one open.
+        if (Task<void> c = close_fd(u32(cur_)))
             co_await c;
+        cur_ = -1;
         at_++;
     }
-    co_return Err(Error::Closed);
 }
 
 Task<Result<bool>> LineReader::next(String &out)
