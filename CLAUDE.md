@@ -56,7 +56,8 @@ plus `git rev-list HEAD --count` and `git log -1 --format=%h`. `tools/version.py
 implementation and runs at *build* time — a commit does not re-run cmake — rewriting
 `build/gen/kernel/revision.h` only when the revision moves. Outside a repository the revision is
 `0`; CI checks out with `fetch-depth: 0`. `make release` and `tools/release.py` import it rather
-than restating it, and pack deterministically (sorted entries, one fixed timestamp).
+than restating it, and pack with sorted entries and one shared stamp — the pack time, or
+`SOURCE_DATE_EPOCH` (read as UTC) when it is set, which is what makes a pack reproducible.
 
 The SDK is `make install` plus that second archive: headers (`include/braam/{kernel,fs,proc,ui}/`,
 whole directories), `libbraam_proc.a` and `libbraam_ui.a` and no other library (the rest carry

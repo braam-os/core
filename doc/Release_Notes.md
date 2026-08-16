@@ -7,6 +7,38 @@ of the two needs amending.
 
 ---
 
+## A release archive dated today
+
+Every entry in `braam-<version>.zip` was stamped `01-01-1980 00:00`. That was deliberate — see
+"0.1.0 — Packaging", below — and the reasoning stands: a zip timestamp is the only difference
+between two packs of one tree, so fixing it is what let `md5` answer "is what is deployed what I
+built?" without unpacking anything.
+
+It is the wrong default anyway. The determinism is worth something to one person once in a while;
+the date is read by everyone, every time, in the `unzip -l` that precedes a deployment, and in the
+mtime of every file the deployer unpacks. 1980 is not merely uninformative there — it is *wrong*
+in a way that reads as a broken build, and the file it lands on looks older than everything around
+it for as long as it survives. A property worth checking on demand lost to a property being
+misread continuously.
+
+So the stamp is the time the pack ran, and `SOURCE_DATE_EPOCH` puts the old behaviour back exactly:
+set it and two packs of one tree are identical again. That is the reproducible-builds convention
+rather than a flag of ours, so whoever wants the guarantee already knows the name, and CI can pin
+it without knowing anything about this script. Sorted entries and the fixed mode never moved, so
+what changed is one field.
+
+The two clocks are read differently on purpose. `SOURCE_DATE_EPOCH` is rendered in UTC, because a
+stamp that moves with the packer's time zone is not pinned; the pack time is rendered local,
+because a zip's date field is local time by definition and has no zone to carry — rendering
+*that* in UTC would show a deployer in Los Angeles a build seven hours in their future.
+
+The commit date was the third candidate and is the tempting one: deterministic, meaningful, and
+already at hand since `version.py` shells out to git. It says when the *source* was written, which
+is not what the reader of an archive is asking; a release cut a month after the last commit would
+be dated a month early, and a tree with no repository — an unpacked release, which is a supported
+way to build — has no such date at all, putting 1980 back for the case that has the least context
+to interpret it.
+
 ## One handle per file, not one descriptor
 
 `cat bar bar` said `cat: bar: permission denied`, and so did `wc /bin/sh /bin/sh`, `grep x f f`

@@ -6,11 +6,13 @@
 
 The archive is <stem>-<version>.zip, holding one directory of that name, so it
 unpacks beside whatever else a web root already has. Entries are sorted and
-timestamped alike, so one tree gives one archive, byte for byte.
+share one stamp: the pack time, or SOURCE_DATE_EPOCH when it is set.
 """
 
 import argparse
+import os
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -20,10 +22,25 @@ from version import version_of
 # What a built site cannot be missing.
 REQUIRED = ("index.html", "kernel.wasm", "bundle.bin")
 
-# Fixed, because a zip timestamp is the difference between two identical
-# builds. 1980-01-01 is the earliest a zip can express.
-STAMP = (1980, 1, 1, 0, 0, 0)
 MODE = 0o100644 << 16
+
+# The earliest a zip can express.
+EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def stamp():
+    """One timestamp for every entry: SOURCE_DATE_EPOCH, else the pack time."""
+    epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if epoch is None:
+        # A zip's date field is local time by definition.
+        t = time.localtime()
+    else:
+        try:
+            # UTC, so a pinned stamp does not move with the packer's zone.
+            t = time.gmtime(int(epoch))
+        except ValueError:
+            sys.exit(f"release.py: SOURCE_DATE_EPOCH is not an integer: {epoch}")
+    return max(t[:6], EPOCH)
 
 
 def collect(root: Path, extras):
@@ -54,9 +71,10 @@ def main(argv):
     out = args.outdir / f"{prefix}.zip"
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    when = stamp()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for name, path in files:
-            info = zipfile.ZipInfo(f"{prefix}/{name}", STAMP)
+            info = zipfile.ZipInfo(f"{prefix}/{name}", when)
             info.external_attr = MODE
             info.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(info, path.read_bytes())
