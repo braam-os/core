@@ -1202,14 +1202,17 @@ if (mode === "--kernel") {
     // is what makes PgDn mean anything.
     s = submit("clear", 3077);
     s = submit("cat /share/doc/README | less", 3078);
+    // Named once: the two checks below are the same row before and after a
+    // scroll, and pinning the text twice let one of them go stale.
+    const readme_top = "Braam is a small operating system in a browser tab.";
     if (!rows(s).some((line) => line.startsWith(" stdin ")))
         fail(`less drew no status line: ${JSON.stringify(rows(s))}`);
-    if (row(s, 0) !== "This tree is /share, and it is read-only.")
+    if (row(s, 0) !== readme_top)
         fail(`less painted ${JSON.stringify(rows(s))}`);
     press(KEY.PAGE_DOWN);
     run(3079);
     s = descriptor(addr);
-    if (row(s, 0) === "This tree is /share, and it is read-only.")
+    if (row(s, 0) === readme_top)
         fail("PgDn did not scroll the pager");
     press("q".codePointAt(0));
     run(3080);

@@ -1,20 +1,33 @@
-This tree is /share, and it is read-only.
+Braam is a small operating system in a browser tab.
 
-It comes from one archive that the worker loads beside kernel.wasm at boot and
-hands to the kernel whole; the packer is tools/pack.py and the reader is
-src/fs/bundlefs.cpp. Nothing here is fetched file by file, so adding a file
-means repacking rather than uploading.
+There is no server behind it. The kernel, the shell and every program are
+compiled to WebAssembly and run on this page.
 
-/bin is the other half of that same archive, mounted separately: the programs
-and the files that ship beside them are one download and two directories.
+Your files live in the browser's own storage and survive a reload. Only /tmp
+is emptied when the system starts.
 
-The mounts:
+Every command in /bin is a real program in a worker of its own, so pipes,
+redirection, background jobs and ^C all work:
 
-    /       memfs    the root, and /tmp with it — gone on reload
-    /bin    bundle   the programs, read-only
-    /share  bundle   this tree, read-only
-    /proc   procfs   the scheduler, the heap and the job table, as text
-    /home   opfs     the Origin Private File System, and the only durable one
+    ls /bin | grep ed
+    echo hello > notes
+    cat notes
 
-`df` reports which of those /home really is, how much room there is, and
-whether the browser promised to keep it or merely intends to.
+edit is a full-screen editor: type to insert, ^S saves, ^Q quits.
+less pages through a long file, and q quits it.
+
+Nothing is sent anywhere unless you ask for it. Two commands do:
+
+    curl https://example.com          fetch a URL, like the real thing
+    chat wss://some.server/room nick  talk to whoever else is in the room
+
+Files move in and out through the browser, since the page cannot reach your
+disk on its own:
+
+    import                 pick files; they land in /mnt/import
+    export notes           download notes out of the browser
+
+help lists every command. uname -a says what this is and what it is running
+on, and df shows how much room the browser gave it.
+
+/proc is the system describing itself as plain text — try cat /proc/host.
