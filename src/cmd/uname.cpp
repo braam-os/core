@@ -11,9 +11,9 @@
 
 namespace {
 
-// The value of one `key value` line, or empty when the file has no such key.
+// The value of one `name value` line, or empty when the file has no such name.
 // A blank line separates the fields the boot banner showed from the rest; it
-// has no key, so it is skipped like any other line that does not match.
+// has no name, so it is skipped like any other line that does not match.
 Str field(Str text, Str want)
 {
     Str rest = text, line;

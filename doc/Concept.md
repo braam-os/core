@@ -808,7 +808,7 @@ style: a new service is an enum value on each side.
 - **The wall clock** — milliseconds since the epoch and the browser's offset from UTC.
   `Sys::Now` is monotonic and cannot name a day, so `date` needs this.
 - **The host's description of itself** — browser, OS, architecture, cores, memory, locale and the
-  raw user-agent string, as `key value` lines with a blank line separating what the boot banner
+  raw user-agent string, as `name value` lines with a blank line separating what the boot banner
   shows from the rest. Asked once at boot and kept (`src/user/boot.cpp`), because `/proc/host`
   is generated synchronously and a browser does not change under a running tab. There is no CPU
   model and no clock rate in it: no browser API discloses either, and no user-agent string is

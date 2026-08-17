@@ -54,8 +54,12 @@ a `platformVersion` that is not a Windows version: Windows 11 says `15.0.0`. Tha
 published rather than inferred, so it is applied; UA-CH answers `0` for 7, 8 and 8.1 without
 distinguishing them, and those get no number at all rather than a wrong one.
 
-**The formatting is the host's.** `describeHost()` in `web/svc.js` returns finished `key value`
-lines. Which fields exist varies by browser, so composing them in the kernel would have meant
+**The formatting is the host's.** `describeHost()` in `web/svc.js` returns finished `name value`
+lines, the value at column 9. The colon the boot banner shows is added as it writes, by
+`write_labelled` in `boot.cpp`: it is presentation, and putting it in the stored text would make
+`/proc/host` a worse table — `uname` reads a field out of that file with `next_field`, and the
+name would carry punctuation. It is also why `timezone`, the one name that fills the column, gets
+its separating space from the writer rather than from the padding. Which fields exist varies by browser, so composing them in the kernel would have meant
 teaching it about `userAgentData`; this way `kernel.wasm` grew by the price of one service
 wrapper. `HostInfo` sits with the other services rather than after the process operations, which
 renumbered `PROC_SPAWN`/`STEP`/`KILL` — safe because only `web/svc.js` writes those numbers down,

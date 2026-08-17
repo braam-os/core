@@ -23,7 +23,7 @@ enum class SvcOp : u32 {
     PickRead,  // ref, flags = index, result = offset -> buf, as much as fits
     Save,      // arg = the file name, buf = the bytes
     ClipWait,  // -> buf, once the user pastes
-    HostInfo,  // -> buf = what the browser says about itself, `key value` lines,
+    HostInfo,  // -> buf = what the browser says about itself, `name value` lines,
                //   a blank line splitting what the banner shows from the rest
 
     // Isolated processes (Concept.md §4.3), in src/svc/proc.h. They are here

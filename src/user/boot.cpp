@@ -193,6 +193,37 @@ Str banner_half(Str s)
     return s;
 }
 
+// Where the value starts on a banner row, which is where the table the host
+// and procfs.cpp write puts it too.
+constexpr usize LABEL_COL = 9;
+
+// One `name value` row of the description, written as `name: value`. The colon
+// is presentation and lives only here: /proc/host stays a plain table, which is
+// what lets `uname` read a field out of it with next_field.
+void write_labelled(Str line)
+{
+    usize name = 0;
+    while (name < line.size() && line[name] != ' ')
+        name++;
+    usize value = name;
+    while (value < line.size() && line[value] == ' ')
+        value++;
+
+    Buf<160> out;
+    out.put(line.substr(0, name)).put(':');
+
+    // At least one space, so a name that fills the column still separates.
+    usize col = name + 1;
+    do {
+        out.put(' ');
+        col++;
+    } while (col < LABEL_COL);
+    out.put(line.substr(value));
+
+    screen_write(out.str());
+    screen_newline();
+}
+
 // What the system is running on, under the version line main.cpp already wrote.
 // It is here rather than there because that export cannot await and runs before
 // the host's first resize(), so neither the host nor the real geometry is known
@@ -212,19 +243,25 @@ Task<void> show_host(const StorageBackend &b)
         }
     }
 
-    if (Str top = banner_half(host_facts()); !top.empty())
-        screen_write(top);
+    Str rest = banner_half(host_facts());
+    while (!rest.empty()) {
+        usize nl = rest.find('\n');
+        Str line = nl == Str::npos ? rest : rest.substr(0, nl);
+        rest     = nl == Str::npos ? Str() : rest.substr(nl + 1);
+        if (!line.empty())
+            write_labelled(line);
+    }
 
     {
         Buf<96> line;
-        line.put("screen   ").put(screen().cols).put('x').put(screen().rows);
+        line.put("screen:  ").put(screen().cols).put('x').put(screen().rows);
         say(line.str());
     }
 
     // A snapshot, deliberately: `df` is the live view, and asking it again is
     // what the boot figure is not for.
     Buf<96> line;
-    line.put("store    OPFS, ");
+    line.put("store:   OPFS, ");
     if (b.quota)
         line.put(u64((b.usage > b.quota ? 0 : b.quota - b.usage) / 1000000))
             .put(" MB free of ")

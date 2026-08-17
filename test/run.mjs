@@ -788,6 +788,10 @@ if (mode === "--kernel") {
     s = submit("clear", 1182);
     s = submit("cat /proc/host", 1183);
     const host = rows(s);
+    // A plain table, colons and all left to the boot banner: `uname` reads a
+    // field out of this with next_field, so a name must not carry punctuation.
+    if (host.some((line) => /^[a-z]+:/.test(line)))
+        fail(`/proc/host punctuates its names: ${JSON.stringify(host)}`);
     for (const want of ["system   braam", "machine  wasm32", "browser  Fake 1", "agent    fake"])
         if (!host.includes(want))
             fail(`/proc/host is missing ${JSON.stringify(want)}: ${JSON.stringify(host)}`);

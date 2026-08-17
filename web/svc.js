@@ -68,7 +68,7 @@ function platformVersion(platform, version) {
     return major > 0 ? "10" : "";
 }
 
-// What the browser will state about itself, as `key value` lines. A blank line
+// What the browser will state about itself, as `name value` lines. A blank line
 // splits the two halves: above it is what the boot banner shows, below it is
 // for /proc/host alone — the agent string wraps a row on its own and only says
 // anything when the interpreted fields above are missing.
@@ -83,6 +83,9 @@ async function describeHost() {
     const n = navigator;
     const top = [];
     const rest = [];
+    // A table: `name value`, the value at column 9. /proc/host serves these as
+    // they are and `uname` reads them back; the colon the boot banner shows is
+    // added there, being presentation rather than part of the field.
     const say = (into, key, value) => {
         if (value)
             into.push(key.padEnd(9) + value);
