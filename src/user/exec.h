@@ -51,9 +51,22 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str());
 // 132 is the kernel's word for. Init is what needs the difference (boot.cpp).
 Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd = Str(), bool *died = nullptr);
 
-// The working directory of a live process, for /proc to publish. False when the
-// pid is not one, which is every scheduler job that is not a program.
-bool exec_proc_cwd(u32 pid, Str &out);
+// What only the process record knows about a task, for /proc to publish. The
+// scheduler has the rest; this is the half a worker comes with.
+struct ProcState {
+    bool worker   = false; // an instance in a worker of its own, so a process
+    u32 ppid      = 0;     // 0 is nobody: init's parent, and the kernel's tasks
+    u32 calls     = 0;     // asynchronous syscalls the instance is parked on
+    u32 fds       = 0;     // descriptors open; stdio is not one, it is a Stdio
+    u32 max_pages = 0;     // the cap the kernel set at spawn, not what is in use
+    bool dead     = false;
+    Str cwd;
+};
+
+// False when no process record mentions the pid, which is a task the kernel runs
+// for itself. A syscall server is one of those and still has a parent: it is a
+// job of the process it serves, so /proc can say whose it is.
+bool exec_proc_state(u32 pid, ProcState &out);
 
 // The kernel's half of the two process imports, exported by main.cpp. `pid` is
 // the one the host bound into that process's closure at instantiation, never

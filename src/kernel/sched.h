@@ -33,6 +33,7 @@ struct Waiter {
     u32 payload_len     = 0;
     bool timed          = false; // in the timer queue
     bool listed         = false; // in the wake table, under token
+    bool parked         = false; // the token is a channel's, not a host call's
     bool cancelled      = false; // woken by a cancellation rather than an event
     bool failed         = false; // could not be registered
 };
@@ -45,10 +46,17 @@ struct Payload {
 
 // One line of /proc: what the scheduler knows about a task.
 struct ProcInfo {
+    // Where a suspended task is registered, which is as much as the scheduler
+    // can say about what it is waiting for: the timer queue, the wake table (so
+    // a host call), or neither — parked on a channel, a pipe or the keyboard.
+    enum class Wait : u8 { None, Timer, Host, Park };
+
     u32 pid;
     Str name;
     bool waiting;   // suspended on an awaitable
     bool cancelled; // signalled, but not yet unwound
+    Wait wait;
+    f64 started; // sched_now() when it was spawned
 };
 
 // `name` is stored as a view, so it must outlive the task: a literal, or a

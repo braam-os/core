@@ -28,6 +28,7 @@ disk on its own:
     export notes           download notes out of the browser
 
 help lists every command. uname -a says what this is and what it is running
-on, and df shows how much room the browser gave it.
+on, and df shows how much room the browser gave it. ps lists what is running,
+and which of those hold a worker of their own.
 
 /proc is the system describing itself as plain text — try cat /proc/host.

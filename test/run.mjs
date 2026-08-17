@@ -461,7 +461,8 @@ if (mode === "--kernel") {
     s = submit("help", 1050);
     for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "edit",
                         "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
-                        "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "pwd", "rm", "sleep",
+                        "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd", "rm",
+                        "sleep",
                         "tail", "timeout", "touch", "true", "uname", "version", "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
@@ -838,6 +839,49 @@ if (mode === "--kernel") {
         fail(`uname -z printed ${JSON.stringify(rows(s))}, expected a usage line`);
     if (!rows(s).includes(prompt(2)))
         fail(`uname -z left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
+
+    // /proc/tasks is every task in one open, so no two rows describe different
+    // moments, and `ps` reformats it the way `df` reformats /proc/mounts. Both
+    // are wider than this grid, so it goes wide the way it does for help.
+    submit("clear", 1185);
+    addr = instance.exports.resize(100, 48);
+    if (addr === 0)
+        fail("the resize before ps failed");
+
+    // The pump is task 1 and holds no worker: a task without one is a coroutine
+    // in the kernel, which is the whole of what the browser could never say.
+    s = submit("cat /proc/tasks", 1185.1);
+    const tasks = rows(s).filter((line) => line && !line.includes("$"));
+    if (!tasks.some((line) => /^1 tty \w+ \S+ \S+ - 0 0 0 0 \d+ -$/.test(line)))
+        fail(`/proc/tasks has no pump with no worker: ${JSON.stringify(tasks)}`);
+    if (!tasks.some((line) => /^2 init \w+ \S+ \S+ bound 0 \d+ \d+ \d+ \d+ \/home$/.test(line)))
+        fail(`/proc/tasks has no init holding a worker: ${JSON.stringify(tasks)}`);
+    for (const line of tasks)
+        if (line.split(" ").length !== 12)
+            fail(`/proc/tasks is not twelve fields: ${JSON.stringify(line)}`);
+
+    // ps itself is one of the tasks it lists — it is a process like any other,
+    // and the shell armed it as the foreground before waiting for it. A syscall
+    // server is a task too, and names the process it serves rather than floating.
+    s = submit("ps", 1185.2);
+    const ps = rows(s);
+    if (!ps.includes("  PID PPID NAME         STAT WORKER WAIT   CALLS FDS   MEM ELAPSED  CWD"))
+        fail(`ps did not head the table: ${JSON.stringify(ps)}`);
+    if (!ps.some((line) => /^ +1 +- tty +[RS] +- +\S+ +- +- +- +\d+:\d\d +-$/.test(line)))
+        fail(`ps did not show the pump as workerless: ${JSON.stringify(ps)}`);
+    if (!ps.some((line) => /^ +2 +- init +[RS] +bound +\S+ +\d+ +\d+ +16M +\d+:\d\d +\/home$/.test(line)))
+        fail(`ps did not show init with its cap: ${JSON.stringify(ps)}`);
+    if (!ps.some((line) => /^ +\d+ +2 ps +S\+ +bound /.test(line)))
+        fail(`ps did not list itself in the foreground: ${JSON.stringify(ps)}`);
+    if (!ps.some((line) => /^ +\d+ +\d+ \/bin\/ps +[RS] +- /.test(line)))
+        fail(`ps did not attribute its own syscall server: ${JSON.stringify(ps)}`);
+    s = submit("ps -x", 1185.3);
+    if (!rows(s).includes("usage: ps") || !rows(s).includes(prompt(2)))
+        fail(`ps -x printed ${JSON.stringify(rows(s))}, expected a usage line`);
+
+    addr = instance.exports.resize(60, 16);
+    if (addr === 0)
+        fail("the resize after ps failed");
 
     // M4, second criterion: ^C interrupts a running pipeline and the prompt
     // comes back. tick's return value is what proves the sleep really went.
@@ -1959,9 +2003,9 @@ if (mode === "--kernel") {
     // pump is spawned first, so init is 2.
     s = submit("clear", 11076);
     s = submit("cat /proc/2", 11076.1);
-    if (!rows(s).some((line) => line.startsWith("name  init")))
+    if (!rows(s).some((line) => line.startsWith("name   init")))
         fail(`/proc/2 is not init: ${JSON.stringify(rows(s))}`);
-    if (!rows(s).some((line) => line.startsWith("cwd   /home")))
+    if (!rows(s).some((line) => line.startsWith("cwd    /home")))
         fail(`/proc/2 has no cwd, so no process is there: ${JSON.stringify(rows(s))}`);
 
     // Killed with state on it: a job in its table, and a foreground armed. A

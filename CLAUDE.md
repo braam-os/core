@@ -9,7 +9,7 @@ filesystem, terminal, and programs, written in freestanding C++20 and compiled t
 deployable as a static site with no server and no special HTTP headers.
 
 It is a working system; the bar for any change is that nothing below regresses. `kernel.wasm` is
-~136 KB against a 256 KiB budget, the boot archive's staging tree ~491 KB, the wasm ABI is six
+~141 KB against a 256 KiB budget, the boot archive's staging tree ~505 KB, the wasm ABI is six
 imports and nine
 exports, and the three CTest cases pass.
 
@@ -328,7 +328,7 @@ change to argue in Concept.md first.
   and Enter to the next prompt costs five (`echo`, newline, `cwd_get`, prompt `echo`, `key_read`).
   Both are floors: the cwd is deliberately not cached, since a wrong prompt is believed, and going
   lower means fusing the keyboard into the paint — a worse ABI than it would save.
-- **The boot archive is ~491 KB unpacked** and 204 KB as `rootfs.zip`. §4.4's duplication: every
+- **The boot archive is ~505 KB unpacked** and 215 KB as `rootfs.zip`. §4.4's duplication: every
   binary carries the allocator, the string types and the coroutine runtime, and `sh.wasm` is 81 KB
   of it. The staging *tree* carries the size budget and the binaries do not, so that number is
   where the duplication stays visible — the archive is deflated and would hide it.

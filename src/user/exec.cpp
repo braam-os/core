@@ -248,9 +248,10 @@ struct Proc {
     // left to report to, and the record is only still here because a server has
     // not unwound yet.
     Vec<Child> children;
-    u32 wait_any = 0; // the token a Wait(SYS_WAIT_ANY) is parked on
-    u32 depth    = 0; // how many spawns deep this one is
-    bool dead    = false;
+    u32 wait_any  = 0; // the token a Wait(SYS_WAIT_ANY) is parked on
+    u32 depth     = 0; // how many spawns deep this one is
+    u32 max_pages = 0; // the memory cap this instance was given, for /proc
+    bool dead     = false;
 
     i32 exit = 1;
     Vec<Handle *> fds;
@@ -1993,7 +1994,8 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
         co_await io.err.write("braam: out of memory\n");
         co_return 1;
     }
-    p->depth = exe.depth;
+    p->depth     = exe.depth;
+    p->max_pages = exe.meta.max_pages;
     if (!p->cwd.assign(cwd.empty() ? vfs_cwd() : cwd)) {
         proc_remove(p);
         proc_release(p);
@@ -2108,12 +2110,45 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
     }
 }
 
-bool exec_proc_cwd(u32 pid, Str &out)
+bool exec_proc_state(u32 pid, ProcState &out)
 {
     Proc *p = proc_find(pid);
-    if (!p)
+    if (!p) {
+        // Not a process, but perhaps a syscall server of one: those are ordinary
+        // jobs, and naming their owner is what keeps /proc legible. Only while
+        // the call is outstanding — once it is answered the record is erased and
+        // what is left is a coroutine finishing, which is what /proc then says.
+        if (g_procs)
+            for (Proc *q : *g_procs)
+                for (const Call *c : q->calls)
+                    if (c->server == pid) {
+                        out.ppid = q->pid;
+                        return true;
+                    }
         return false;
-    out = p->cwd.str();
+    }
+
+    out.worker    = true;
+    out.calls     = u32(p->calls.size());
+    out.max_pages = p->max_pages;
+    out.dead      = p->dead;
+    out.cwd       = p->cwd.str();
+
+    // A closed descriptor leaves its slot behind as a null, so the slots are
+    // not the count.
+    out.fds = 0;
+    for (Handle *h : p->fds)
+        if (h)
+            out.fds++;
+
+    // Upwards by search: a record holds its children and not its parent, and
+    // this is the same scan the exit status takes to find whom to report to.
+    out.ppid = 0;
+    if (g_procs)
+        for (Proc *q : *g_procs)
+            for (const Child &ch : q->children)
+                if (ch.pid == pid)
+                    out.ppid = q->pid;
     return true;
 }
 

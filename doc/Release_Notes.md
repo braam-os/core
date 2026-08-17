@@ -7,6 +7,83 @@ of the two needs amending.
 
 ---
 
+## ps, and what a browser will say about a worker
+
+The question that started this was whether the browser lets us look inside a worker, so that `ps`
+could report what each one is doing. It does not, and the answer is worth writing down because it
+looks like an oversight and is not one:
+
+- There is no enumeration. No `navigator.workers`, no registry, no parent-side list. The only
+  handle to a worker is the `Worker` object that created it, which is why `web/proc.js` keeps
+  `procs` and `idle` itself.
+- The handle is opaque: `postMessage`, `terminate`, `onmessage`, `onerror`. No id, no state, no
+  start time, no exit code. `onerror` is the only involuntary signal, which is why `broke()` has
+  to synthesise `STEP.TRAPPED`.
+- There is no per-worker CPU time anywhere in the platform.
+- The one memory API, `performance.measureUserAgentSpecificMemory()`, requires
+  `crossOriginIsolated` — the COOP/COEP headers this system deliberately does without (§C.3), so
+  that it hosts anywhere. Even where it is available it reports an agent-cluster breakdown, not a
+  worker. `performance.memory` is non-standard and main-thread only.
+
+DevTools sees workers through the CDP, which is not reachable from a page. So *nothing* a browser
+offers would have helped, and none of it was needed: **the kernel already keeps a better table
+than the platform could have given us.** A worker is exactly a process, so "does this task hold a
+worker" is `proc_find(pid)` succeeding, and `ps` costs no host round trip, no new import and no
+ABI change at all.
+
+### /proc/tasks, because a row per read describes a row per moment
+
+`ps` reads one file. The alternative — list `/proc` and read `/proc/<pid>` per row — costs two
+`postMessage` hops per syscall *and* breaks the rule the same §5.1 paragraph states: content is
+produced at `open` so that a read cannot describe two moments. Twelve rows read one at a time are
+twelve snapshots. `/proc/tasks` is generated in a single pass, so the table is coherent.
+
+Its fields are positional like `/proc/mounts`, with the cwd last so nothing after it needs
+finding: a path may hold a space, and the shell does quote. A name may too, so a space in one
+becomes an underscore — a name is a display field, and the alternative was a quoting rule in a
+file two programs parse.
+
+`/proc/<pid>` grew the same facts as named lines and its value column widened from six to seven
+to fit `worker`. That is a visible change to a file people `cat`, and the cheaper alternative was
+a cryptic four-letter name for the one fact `ps` puts at the centre of its table.
+
+### The columns, and the two that are honest about what they cannot say
+
+`PID PPID NAME STAT WORKER WAIT CALLS FDS MEM ELAPSED CWD`. STAT is BSD's: a state letter — `R`
+ready, `S` waiting, `C` cancelled — then `+` for the foreground and `k`/`s` for the console
+claims. So STAT says whether a task is suspended and WAIT says on what, with no redundancy.
+
+**MEM is the cap, not the usage**, because the cap is a fact the kernel owns (`ProcMeta.max_pages`,
+which `spawn_process` computed and used to discard) and the usage is one nobody can have. **There
+is no CPU column**: nothing meters one, and a runaway program is killed rather than measured.
+
+### WAIT needed a bit in the Waiter, because a token cannot say what it is for
+
+WAIT was to come free from the queue an awaiter registers in — the timer queue or the wake table.
+It does not. `Channel` parks with `sched_wait_token` and so does a host call, and the stdio path
+parks a token of its own through `park_receiver`. Every blocked task read `host`, including a
+stage blocked on a pipe, which is the one distinction the column exists to draw: is this pipeline
+waiting for data, or is the host wedged?
+
+So the awaiter says so. `Waiter::parked` is set by `Channel`'s two awaiters and by `Stream::Write`
+and `Source::Read`, where a non-null `park_` *is* the fact that this is a channel. Four bytes per
+suspended frame against a column that would otherwise have lied. A `sleep 5000 | wc` now reads
+`timer` for the sleeper's server and `park` for the one blocked on the pipe.
+
+### A syscall server is a task, and names the process it serves
+
+Every outstanding syscall is its own scheduler job (§4.3), so they appear in `ps` — a process
+named `wc` beside its server named `/bin/wc`. Left alone they look like orphans, so
+`exec_proc_state` searches the `Call` records for one whose `server` is this pid and reports its
+owner as PPID. It holds only while the call is outstanding: once answered, the record is erased
+and what is left is a coroutine finishing, which is what `/proc` then says about it. Recording
+the owner on the job instead would have contradicted §3.3 — a job is a task, a name and a
+`CancelToken`, and that is all the scheduler keeps.
+
+`ps` is wide, so the suite widens the grid for it the way it already does for `help`.
+
+---
+
 ## df is a table
 
 `df` printed a four-line key/value block — `backend`, `mode`, `quota`, `used` — and then one

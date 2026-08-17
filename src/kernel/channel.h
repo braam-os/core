@@ -104,7 +104,8 @@ struct Channel {
                 w_.cancelled = true;
                 return false;
             }
-            w_.token = sched_token();
+            w_.token  = sched_token();
+            w_.parked = true; // a channel's token: /proc says park, not host
             if (!sched_wait_token(&w_)) {
                 w_.failed = true;
                 return false;
@@ -175,7 +176,8 @@ struct Channel {
             // queue first, and this is what says so out loud.
             if (c_.send_token_)
                 panic("channel: a second sender blocked on one channel");
-            w_.token = sched_token();
+            w_.token  = sched_token();
+            w_.parked = true; // a channel's token: /proc says park, not host
             if (!sched_wait_token(&w_)) {
                 w_.failed = true;
                 return false;

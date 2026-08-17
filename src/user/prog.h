@@ -68,8 +68,9 @@ struct Stream {
             if (r_.is_ok() || r_.error() != Error::Again || !park_)
                 return false;
 
-            w_.h     = h;
-            w_.token = sched_token();
+            w_.h      = h;
+            w_.token  = sched_token();
+            w_.parked = true; // parked on a channel: /proc says park, not host
             if (!sched_wait_token(&w_)) {
                 w_.token = 0;
                 r_       = Err(Error::NoMemory);
@@ -143,8 +144,9 @@ struct Source {
             if (r_.is_ok() || r_.error() != Error::Again || !park_)
                 return false;
 
-            w_.h     = h;
-            w_.token = sched_token();
+            w_.h      = h;
+            w_.token  = sched_token();
+            w_.parked = true; // parked on a channel: /proc says park, not host
             if (!sched_wait_token(&w_)) {
                 w_.token = 0;
                 r_       = Err(Error::NoMemory);

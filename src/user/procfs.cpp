@@ -1,6 +1,7 @@
 #include "procfs.h"
 
 #include "boot.h"
+#include "console.h"
 #include "exec.h"
 #include "fs/vfs.h"
 #include "kernel/alloc.h"
@@ -10,6 +11,7 @@
 #include "kernel/text.h"
 #include "kernel/traits.h"
 #include "kernel/version.h"
+#include "tty.h"
 
 namespace {
 
@@ -18,7 +20,93 @@ namespace {
 // describes a different moment from its first.
 constexpr usize PROC_MAX = 64;
 
-constexpr Str FILES[] = { "cwd", "host", "meminfo", "mounts", "uptime", "version" };
+constexpr Str FILES[] = { "cwd", "host", "meminfo", "mounts", "tasks", "uptime", "version" };
+
+// A wasm page: the unit the kernel caps a process's memory in.
+constexpr u64 PAGE = 65536;
+
+// What /proc/tasks and /proc/<pid> share, so the two cannot disagree.
+Str state_of(const ProcInfo &p)
+{
+    return p.cancelled ? Str("cancelled") : p.waiting ? Str("waiting") : Str("ready");
+}
+
+Str wait_of(const ProcInfo &p)
+{
+    switch (p.wait) {
+    case ProcInfo::Wait::Timer:
+        return "timer";
+    case ProcInfo::Wait::Host:
+        return "host";
+    case ProcInfo::Wait::Park:
+        return "park";
+    case ProcInfo::Wait::None:
+        break;
+    }
+    return "-";
+}
+
+// A worker is exactly a process: nothing, an instance, or one the stepper has
+// finished with.
+Str worker_of(const ProcState &st)
+{
+    return !st.worker ? Str("-") : st.dead ? Str("dying") : Str("bound");
+}
+
+// The foreground and the two console claims, which `ps` prints as STAT.
+void flags_of(Buf<8> &b, u32 pid)
+{
+    if (console_fg_has(pid))
+        b.put('+');
+    if (tty_keys_owner() == pid)
+        b.put('k');
+    if (tty_screen_owner() == pid)
+        b.put('s');
+    if (b.str().empty())
+        b.put('-');
+}
+
+// Elapsed since the spawn. A task spawned before the first tick started at zero,
+// so init's age is the uptime.
+u64 age_of(const ProcInfo &p)
+{
+    f64 age = sched_now() - p.started;
+    return age > 0 ? u64(age) : 0;
+}
+
+// A word field, and the shell quotes: a space would end it, so it becomes one.
+bool put_word(String &out, Str s)
+{
+    if (s.empty())
+        return out.push('-');
+    for (usize i = 0; i < s.size(); i++)
+        if (!out.push(s[i] == ' ' ? '_' : s[i]))
+            return false;
+    return true;
+}
+
+// One task as positional fields, the way /proc/mounts reads. The cwd is last, so
+// nothing after it needs finding; `-` is "no answer here".
+bool put_task(String &out, const ProcInfo &p)
+{
+    ProcState st;
+    exec_proc_state(p.pid, st);
+
+    Buf<8> flags;
+    flags_of(flags, p.pid);
+
+    Buf<32> head;
+    head.put(p.pid).put(' ');
+
+    Buf<128> rest;
+    rest.put(' ').put(state_of(p)).put(' ').put(wait_of(p));
+    rest.put(' ').put(flags.str()).put(' ').put(worker_of(st));
+    rest.put(' ').put(st.ppid).put(' ').put(st.calls).put(' ').put(st.fds);
+    rest.put(' ').put(u64(st.max_pages) * PAGE).put(' ').put(age_of(p)).put(' ');
+
+    return out.append(head.str()) && put_word(out, p.name) && out.append(rest.str()) &&
+           put_word(out, st.cwd) && out.push('\n');
+}
 
 bool generate(Str name, String &out)
 {
@@ -80,7 +168,18 @@ bool generate(Str name, String &out)
         return true;
     }
 
-    // A pid, then: everything the scheduler knows about one task.
+    // Every task at once, which is what `ps` reads: one open, one snapshot, so
+    // the rows cannot describe different moments.
+    if (name == "tasks") {
+        ProcInfo procs[PROC_MAX];
+        usize n = sched_procs(procs, PROC_MAX);
+        for (usize i = 0; i < n; i++)
+            if (!put_task(out, procs[i]))
+                return false;
+        return true;
+    }
+
+    // A pid, then: the same facts as one line of /proc/tasks, named.
     Option<u32> pid = parse_u32(name);
     if (!pid)
         return false;
@@ -90,19 +189,37 @@ bool generate(Str name, String &out)
     for (usize i = 0; i < n; i++) {
         if (procs[i].pid != pid.value())
             continue;
-        b.put("pid   ").put(procs[i].pid);
-        b.put("\nname  ").put(procs[i].name.empty() ? Str("-") : procs[i].name);
-        Str state = procs[i].cancelled ? Str("cancelled")
-                    : procs[i].waiting ? Str("waiting")
-                                       : Str("ready");
-        b.put("\nstate ").put(state);
-        // Only a program has one; a scheduler job that is not a process names
-        // things with the kernel's authority and no directory of its own.
-        Str cwd;
-        if (exec_proc_cwd(procs[i].pid, cwd))
-            b.put("\ncwd   ").put(cwd);
-        b.put('\n');
-        return out.append(b.str());
+
+        ProcState st;
+        exec_proc_state(procs[i].pid, st);
+
+        Buf<8> flags;
+        flags_of(flags, procs[i].pid);
+
+        Buf<256> t;
+        t.put("pid    ").put(procs[i].pid);
+        t.put("\nname   ").put(procs[i].name.empty() ? Str("-") : procs[i].name);
+        t.put("\nstate  ").put(state_of(procs[i]));
+        t.put("\nwait   ").put(wait_of(procs[i]));
+        t.put("\nflags  ").put(flags.str());
+        t.put("\nworker ").put(worker_of(st));
+        t.put("\nage    ").put(age_of(procs[i])).put(" ms");
+        if (st.ppid)
+            t.put("\nppid   ").put(st.ppid);
+
+        // The rest is a process's: a job the kernel runs for itself has no
+        // descriptors, no cap, and names things with the kernel's authority
+        // rather than a directory of its own.
+        if (st.worker) {
+            t.put("\ncalls  ").put(st.calls);
+            t.put("\nfds    ").put(st.fds);
+            t.put("\nmem    ").put(u64(st.max_pages) * PAGE);
+            t.put("\ncwd    ");
+            // Appended rather than buffered: a path has no length limit.
+            return out.append(t.str()) && out.append(st.cwd) && out.push('\n');
+        }
+        t.put('\n');
+        return out.append(t.str());
     }
     return false;
 }

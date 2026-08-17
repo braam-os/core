@@ -78,9 +78,26 @@ void test_procfs()
     Buf<32> path;
     path.put("/proc/").put(pid);
     String text = slurp(path.str());
-    CHECK(text.str().starts_with("pid   "));
-    CHECK(text.str().contains("name  parked"));
-    CHECK(text.str().contains("state waiting"));
+    CHECK(text.str().starts_with("pid    "));
+    CHECK(text.str().contains("name   parked"));
+    CHECK(text.str().contains("state  waiting"));
+    // Parked on a timer, and a task with no worker answers for nothing else: no
+    // parent, no descriptors, no cap and no directory of its own.
+    CHECK(text.str().contains("wait   timer"));
+    CHECK(text.str().contains("worker -"));
+    CHECK(!text.str().contains("\ncwd    "));
+    CHECK(!text.str().contains("\nfds    "));
+
+    // /proc/tasks is the same facts, one line per task, taken in one pass: pid,
+    // name, state, wait, flags, worker, ppid, calls, fds, mem, age, cwd.
+    String held = slurp("/proc/tasks");
+    Str tasks   = held.str();
+    CHECK(tasks.contains(" parked waiting timer - - 0 0 0 0 "));
+    usize fields = 1;
+    for (usize i = 0; i < tasks.size() && tasks[i] != '\n'; i++)
+        if (tasks[i] == ' ')
+            fields++;
+    CHECK_EQ(fields, usize(12));
 
     // It appears in the listing too, and goes when the task does.
     ls = run_now(vfs_list("/proc"));

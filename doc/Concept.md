@@ -355,12 +355,14 @@ the focus, a `pbpaste` waiting for the same gesture (§6) takes the text and not
 - **`Channel<T>`** — an async MPSC queue with bounded capacity: `co_await ch.recv()` and
   `co_await ch.send(v)`. This one type is the pipe, the stdin and the IPC. It has **one
   receiver**, and panics on a second blocked sender rather than losing a wakeup quietly.
-- **A scheduler job** — a `Task<i32>`, a name and a `CancelToken`, which is all the scheduler
-  keeps. `sched_spawn()` pushes one on and hands back its pid; killing means signalling the
-  token, and every `co_await` point checks it and unwinds by returning, so destructors run.
-  `sched_procs()` reads the table back out, which is what `/proc` is made of (§5.1). There is no
-  `Process` type: argv and stdio belong to the pipeline stage (`src/user/prog.h`) and a working
-  directory to the process record `exec` keeps.
+- **A scheduler job** — a `Task<i32>`, a name, a `CancelToken` and the time it was spawned, which
+  is all the scheduler keeps. `sched_spawn()` pushes one on and hands back its pid; killing means
+  signalling the token, and every `co_await` point checks it and unwinds by returning, so
+  destructors run. `sched_procs()` reads the table back out, which is what `/proc` is made of
+  (§5.1) — including what a suspended job is waiting on, which the awaiter records in its
+  `Waiter` because a wake token alone cannot say whether it belongs to a channel or a host call.
+  There is no `Process` type: argv and stdio belong to the pipeline stage (`src/user/prog.h`),
+  and a working directory, a parent and a worker to the process record `exec` keeps.
 
   **Cancellation does not propagate down a tree.** `CancelState::waiting` is a single slot, so a
   job cannot have two children parked at once — which a pipeline needs, since its stages run at
@@ -683,15 +685,24 @@ its bytes. They are therefore **writable**, which is the price of one store: `/b
 immutable because it was a read-only archive mount, and what stands in for that now is that the
 archive can always be unpacked again (§5.2).
 
-`/proc` is `ProcFs` over the scheduler: `cwd`, `meminfo`, `mounts`, `uptime`, `version`, and one
-file per live pid. It is also why the process ABI is as small as it is (§4.3) — a process reads
-its answers here rather than asking for an operation — and it makes `cat` and `grep` the
+`/proc` is `ProcFs` over the scheduler: `cwd`, `meminfo`, `mounts`, `tasks`, `uptime`, `version`,
+and one file per live pid. It is also why the process ABI is as small as it is (§4.3) — a process
+reads its answers here rather than asking for an operation — and it makes `cat` and `grep` the
 introspection tools, with no second interface to keep in step. The tree is flat: a process here
 has one line of state, and a generated directory level would hold exactly one file. Content is
 produced at `open` and read out of that snapshot, so a two-block read cannot describe two
 different moments. `/proc/cwd` is the *kernel's* working directory; every process's own is a
 line in its own `/proc/<pid>`. There is no `/proc/jobs`, because the job table is a process's
 memory and no syscall shows one process another's.
+
+`/proc/tasks` is every task at once, one line of positional fields each, and it exists for that
+same snapshot rule: `ps` reformats it the way `mount` and `df` reformat `/proc/mounts`, and a
+`ps` built from one read per pid would describe as many moments as it had rows. It carries what
+the scheduler knows (state, what the task is suspended on, how long it has been up) beside what
+only the process record does — whether a **worker** is bound, whose child it is, how many
+syscalls and descriptors it holds, and the memory cap it was given. A worker is exactly a
+process, so that column is `proc_find` succeeding and needs nothing of the host: the browser
+discloses nothing whatever about a worker (Release_Notes.md), and nothing here needs it to.
 
 **Every process has a working directory of its own**, inherited from whoever spawned it and
 moved only by its own `chdir`. The shell's is the shell process's; `cd` moves that, and a typed

@@ -14,8 +14,9 @@ struct Timer {
 };
 
 struct Job {
-    u32 pid = 0;
-    Str name; // a view: the caller's literal, or a Program's own name
+    u32 pid     = 0;
+    f64 started = 0; // when it was spawned, for /proc's elapsed time
+    Str name;        // a view: the caller's literal, or a Program's own name
     Task<i32> root;
     CancelState cancel;
 };
@@ -133,6 +134,7 @@ u32 sched_spawn(Task<i32> t, Str name)
     new (j) Job();
 
     j->pid                            = s.next_pid++;
+    j->started                        = s.now;
     j->name                           = name;
     j->root                           = move(t);
     j->root.handle().promise().cancel = &j->cancel;
@@ -181,6 +183,16 @@ usize sched_procs(ProcInfo *out, usize cap)
         out[n].name      = j->name;
         out[n].waiting   = j->cancel.waiting != nullptr;
         out[n].cancelled = j->cancel.cancelled;
+        out[n].started   = j->started;
+
+        // A channel and a host call both wait on a token, so the token alone
+        // cannot say which: `parked` is the awaiter saying so.
+        const Waiter *w = j->cancel.waiting;
+        out[n].wait     = !w          ? ProcInfo::Wait::None
+                          : w->timed  ? ProcInfo::Wait::Timer
+                          : w->parked ? ProcInfo::Wait::Park
+                          : w->listed ? ProcInfo::Wait::Host
+                                      : ProcInfo::Wait::None;
         n++;
     }
     return n;
