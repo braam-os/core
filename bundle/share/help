@@ -37,5 +37,6 @@ touch    <file>... — create empty files
 true     succeed
 uname    [-a|-s|-r|-m] — name the system, and with -a the host it runs on
 version  print the kernel version
+vmstat   [-s] [<secs> [<count>]] — report what the kernel is doing, as rates
 watch    [-n <ms>] <command> [<arg>...] — run a command over and over
 wc       [<file>...] — count lines, words and bytes

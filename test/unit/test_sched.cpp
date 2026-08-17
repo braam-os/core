@@ -131,6 +131,27 @@ void test_sched()
     CHECK(traced() == "7");
     CHECK(!sched_alive(w));
 
+    // What /proc/stat publishes, over exactly the run above: three ticks, one
+    // task, the unknown token counted as a miss, and the wake that landed
+    // counted as an answer from outside rather than as a channel's unpark.
+    SchedStats st = sched_stats();
+    CHECK_EQ(st.ticks, u64(3));
+    CHECK_EQ(st.spawns, u64(1));
+    CHECK_EQ(st.misses, u64(1));
+    CHECK_EQ(st.wakes, u64(1));
+    CHECK_EQ(st.unparks, u64(0));
+    CHECK_EQ(st.timers, u64(0));
+    CHECK(st.resumes >= 2); // once to the await, once out of it
+    // The task was reaped by the last tick, and the gauges say so.
+    CHECK_EQ(st.tasks, usize(0));
+    CHECK_EQ(st.ready + st.on_timer + st.on_host + st.on_park, usize(0));
+
+    // A reset zeroes them, which is what makes them the scheduler's and not
+    // the module's: a counter outside Sched would accumulate across the suite.
+    sched_reset();
+    CHECK_EQ(sched_stats().ticks, u64(0));
+    CHECK_EQ(sched_stats().spawns, u64(0));
+
     // Cancelling a token wait deregisters it, so a late wake finds nobody.
     sched_reset();
     trace_n    = 0;

@@ -99,6 +99,39 @@ void test_procfs()
             fields++;
     CHECK_EQ(fields, usize(13));
 
+    // /proc/stat is every counter the kernel keeps, one `name value` line each.
+    // The parked task above is the whole of what is running, so the four wait
+    // gauges partition it: one task, on a timer, nothing runnable.
+    String counted = slurp("/proc/stat");
+    Str stat       = counted.str();
+    CHECK(stat.starts_with("now      "));
+    CHECK(stat.contains("\nresumes  "));
+    CHECK(stat.contains("\nframes   "));
+    CHECK(stat.contains("\ntasks    1\n"));
+    CHECK(stat.contains("\nready    0\n"));
+    CHECK(stat.contains("\non_timer 1\n"));
+    CHECK(stat.contains("\non_host  0\n"));
+    CHECK(stat.contains("\non_park  0\n"));
+    // Nothing a program cannot run: the in-wasm suite steps no instance.
+    CHECK(stat.contains("\nsteps    0\n"));
+
+    // No line was silently truncated, which is the whole reason the file is
+    // emitted a line at a time: eight padded, a space, at most twenty digits
+    // and a newline is thirty, inside the per-line Buf's thirty-two.
+    usize lines = 0, longest = 0, run = 0;
+    for (usize i = 0; i < stat.size(); i++) {
+        if (stat[i] != '\n') {
+            run++;
+            continue;
+        }
+        lines++;
+        if (run > longest)
+            longest = run;
+        run = 0;
+    }
+    CHECK_EQ(lines, usize(23));
+    CHECK(longest < 31);
+
     // It appears in the listing too, and goes when the task does.
     ls = run_now(vfs_list("/proc"));
     CHECK(ls.is_ok());

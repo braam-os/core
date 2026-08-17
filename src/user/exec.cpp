@@ -262,6 +262,9 @@ struct Proc {
 // and nothing provides __cxa_atexit.
 Vec<Proc *> *g_procs;
 
+// System-wide, outliving every process record, so not a member of one.
+ExecStats g_stats{};
+
 Proc *proc_find(u32 pid)
 {
     if (!g_procs)
@@ -2066,6 +2069,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
     u32 token   = 0; // 0 is _start, which answers nothing
     usize alive = 0; // servers still running
     for (;;) {
+        g_stats.steps++; // as issued: a step that fails still cost the hops
         Task<Result<ProcStep>> step = proc_step(p->pid, token, payload.str(), &p->pages);
         if (!step)
             co_return 1;
@@ -2161,6 +2165,7 @@ i32 exec_sys(u32 pid, u32 op, u32 a0, u32, u32)
     if (!p)
         return -i32(Error::NotFound);
 
+    g_stats.sysfast++;
     switch (Sys(op)) {
     case Sys::Exit:
         p->exit = i32(a0);
@@ -2195,5 +2200,11 @@ i32 exec_sys_async(u32 pid, u32 op, u32 token, u32 len)
     c->len     = len;
     c->token   = token;
     p->staging = nullptr;
+    g_stats.syscalls++;
     return 0;
+}
+
+void exec_stats(ExecStats &out)
+{
+    out = g_stats;
 }

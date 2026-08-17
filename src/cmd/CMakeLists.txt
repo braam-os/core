@@ -3,7 +3,7 @@
 # out of tree is built the way these are.
 set(BRAAM_BIN_LIST cat chat clear curl date df echo edit export false grep head hog
                    import less ls mkdir mount pbcopy pbpaste ps pwd rm sh sleep spin tail
-                   timeout touch true uname version watch wc)
+                   timeout touch true uname version vmstat watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 
 # Every one of them takes a worker of its own, the shell included. There is

@@ -691,8 +691,8 @@ its bytes. They are therefore **writable**, which is the price of one store: `/b
 immutable because it was a read-only archive mount, and what stands in for that now is that the
 archive can always be unpacked again (§5.2).
 
-`/proc` is `ProcFs` over the scheduler: `cwd`, `meminfo`, `mounts`, `tasks`, `uptime`, `version`,
-and one file per live pid. It is also why the process ABI is as small as it is (§4.3) — a process
+`/proc` is `ProcFs` over the scheduler: `cwd`, `meminfo`, `mounts`, `stat`, `tasks`, `uptime`,
+`version`, and one file per live pid. It is also why the process ABI is as small as it is (§4.3) — a process
 reads its answers here rather than asking for an operation — and it makes `cat` and `grep` the
 introspection tools, with no second interface to keep in step. The tree is flat: a process here
 has one line of state, and a generated directory level would hold exactly one file. Content is
@@ -712,6 +712,22 @@ of the host. The memory figure is the one thing here the kernel cannot see for i
 `WebAssembly.Memory` reports its own size and only the worker holds one, so it comes back in
 every step's reply (§4.3) rather than in an operation of its own — a file generated at `open`
 could not have awaited one.
+
+`/proc/stat` is what the kernel has *done* rather than what it is holding: one `name value` line per
+counter, cumulative since boot, and the reader does the subtracting — which is why the kernel needs
+no notion of an interval and `vmstat` can be an ordinary program. It is one file rather than a
+column added to each of several because a rate and the gauge it is divided against have to come from
+the same moment, and the snapshot rule only reaches inside one `open`. That is also why the heap's
+figures appear here as well as in `/proc/meminfo`, the way a task's appear in `/proc/tasks` as well
+as in `/proc/<pid>`: a duplicated fact is cheaper than a row assembled from two moments. The first
+line is `now`, the clock every counter below it was incremented against, so a reader divides by the
+file's own elapsed time and not by how long it meant to wait.
+
+A woken token is counted twice over, split by the same flag `/proc` splits a wait with: an answer
+from outside is not the same event as a channel handing a byte to its peer, and counting them
+together would make a pipeline look like an interrupt storm. There is no CPU column anywhere in it,
+for the reason in §4.2 — what `vmstat` prints in place of BSD's is how often the host granted the
+event loop a turn.
 
 **Every process has a working directory of its own**, inherited from whoever spawned it and
 moved only by its own `chdir`. The shell's is the shell process's; `cd` moves that, and a typed

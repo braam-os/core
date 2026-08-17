@@ -20,7 +20,9 @@ namespace {
 // describes a different moment from its first.
 constexpr usize PROC_MAX = 64;
 
-constexpr Str FILES[] = { "cwd", "host", "meminfo", "mounts", "tasks", "uptime", "version" };
+constexpr Str FILES[] = {
+    "cwd", "host", "meminfo", "mounts", "stat", "tasks", "uptime", "version"
+};
 
 // What /proc/tasks and /proc/<pid> share, so the two cannot disagree.
 Str state_of(const ProcInfo &p)
@@ -107,6 +109,15 @@ bool put_task(String &out, const ProcInfo &p)
            put_word(out, st.cwd) && out.push('\n');
 }
 
+// One `name value` line of /proc/stat, appended per line as /proc/mounts is: a
+// Buf for the whole file would truncate it silently.
+bool put_counter(String &out, Str name, u64 value)
+{
+    Buf<32> one; // 8 padded + a space + 20 digits + a newline
+    one.put_left(name, 8).put(' ').put(value).put('\n');
+    return out.append(one.str());
+}
+
 bool generate(Str name, String &out)
 {
     out.clear();
@@ -118,6 +129,52 @@ bool generate(Str name, String &out)
         b.put("\nspans    ").put(u64(s.spans)).put("\nallocs   ").put(u64(s.allocs));
         b.put("\nfrees    ").put(u64(s.frees)).put('\n');
         return out.append(b.str());
+    }
+
+    // Every counter the kernel keeps, in one open, which is what a rate needs:
+    // cumulative, and differenced by whoever reads it twice. `now` is the clock
+    // they were counted against. The heap's figures repeat /proc/meminfo's the
+    // way /proc/tasks repeats /proc/<pid>.
+    if (name == "stat") {
+        SchedStats s = sched_stats();
+        HeapStats h  = heap_stats();
+        ExecStats e;
+        exec_stats(e);
+
+        struct Counter {
+            Str name;
+            u64 value;
+        };
+        const Counter fields[] = {
+            { "now", u64(sched_now()) },
+            { "ticks", s.ticks },
+            { "resumes", s.resumes },
+            { "timers", s.timers },
+            { "wakes", s.wakes },
+            { "unparks", s.unparks },
+            { "misses", s.misses },
+            { "spawns", s.spawns },
+            { "syscalls", e.syscalls },
+            { "sysfast", e.sysfast },
+            { "steps", e.steps },
+            { "in_use", u64(h.bytes_in_use) },
+            { "reserved", u64(h.bytes_reserved) },
+            { "allocs", u64(h.allocs) },
+            { "frees", u64(h.frees) },
+            { "frames", u64(h.frames) },
+            { "grows", u64(h.grows) },
+            { "fails", u64(h.fails) },
+            // The four below partition `tasks`.
+            { "tasks", u64(s.tasks) },
+            { "ready", u64(s.ready) },
+            { "on_timer", u64(s.on_timer) },
+            { "on_host", u64(s.on_host) },
+            { "on_park", u64(s.on_park) },
+        };
+        for (const Counter &c : fields)
+            if (!put_counter(out, c.name, c.value))
+                return false;
+        return true;
     }
 
     // The kernel's own working directory (Concept.md §5.1), which is what init

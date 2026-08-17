@@ -35,6 +35,15 @@ struct Sched {
     u32 next_token = 1;
     f64 now        = 0;
 
+    // SchedStats' counters. Members rather than globals, so a reset zeroes them.
+    u64 ticks        = 0;
+    u64 resumes      = 0;
+    u64 wakes        = 0;
+    u64 unparks      = 0;
+    u64 misses       = 0;
+    u64 timers_fired = 0; // `timers` above is the queue
+    u64 spawns       = 0;
+
     // Destroying a job destroys its suspended frames, whose awaiters
     // deregister from the queues above; those must still be alive here.
     // Backwards, because a child is spawned after its parent and its frame
@@ -110,6 +119,18 @@ void remove_timer(Waiter *w)
     }
 }
 
+// Where a suspended task is registered. A channel and a host call both wait on
+// a token, so `parked` is the awaiter saying which. Shared by /proc's per-task
+// line and by the gauges, so the two cannot disagree.
+ProcInfo::Wait wait_kind(const Waiter *w)
+{
+    return !w          ? ProcInfo::Wait::None
+           : w->timed  ? ProcInfo::Wait::Timer
+           : w->parked ? ProcInfo::Wait::Park
+           : w->listed ? ProcInfo::Wait::Host
+                       : ProcInfo::Wait::None;
+}
+
 Job *find_job(u32 pid)
 {
     if (tearing_down)
@@ -143,6 +164,7 @@ u32 sched_spawn(Task<i32> t, Str name)
         heap_free(j);
         return 0;
     }
+    s.spawns++;
     push_ready(j->root.handle());
     return j->pid;
 }
@@ -185,23 +207,60 @@ usize sched_procs(ProcInfo *out, usize cap)
         out[n].cancelled = j->cancel.cancelled;
         out[n].started   = j->started;
 
-        // A channel and a host call both wait on a token, so the token alone
-        // cannot say which: `parked` is the awaiter saying so.
-        const Waiter *w = j->cancel.waiting;
-        out[n].wait     = !w          ? ProcInfo::Wait::None
-                          : w->timed  ? ProcInfo::Wait::Timer
-                          : w->parked ? ProcInfo::Wait::Park
-                          : w->listed ? ProcInfo::Wait::Host
-                                      : ProcInfo::Wait::None;
+        out[n].wait = wait_kind(j->cancel.waiting);
         n++;
     }
     return n;
+}
+
+SchedStats sched_stats()
+{
+    Sched &s = sched();
+
+    SchedStats out{};
+    out.ticks   = s.ticks;
+    out.resumes = s.resumes;
+    out.wakes   = s.wakes;
+    out.unparks = s.unparks;
+    out.misses  = s.misses;
+    out.timers  = s.timers_fired;
+    out.spawns  = s.spawns;
+
+    // The gauges are read off jobs[], which holds freed pointers during teardown.
+    if (tearing_down)
+        return out;
+
+    // `ready` is a task suspended on nothing, not the depth of the ready queue:
+    // this runs inside the drain, where that depth is the reader's own backlog.
+    out.tasks = s.jobs.size();
+    for (Job *j : s.jobs) {
+        const Waiter *w = j->cancel.waiting;
+        if (!w) {
+            out.ready++; // what `ps` prints as R
+            continue;
+        }
+        switch (wait_kind(w)) {
+        case ProcInfo::Wait::Timer:
+            out.on_timer++;
+            break;
+        case ProcInfo::Wait::Park:
+            out.on_park++;
+            break;
+        case ProcInfo::Wait::Host:
+            out.on_host++;
+            break;
+        case ProcInfo::Wait::None:
+            break; // suspended but registered nowhere: a failed await, unwinding
+        }
+    }
+    return out;
 }
 
 i32 sched_tick(f64 now_ms)
 {
     Sched &s = sched();
     s.now    = now_ms;
+    s.ticks++;
 
     while (!s.timers.empty() && s.timers.back().deadline <= now_ms) {
         Waiter *w = s.timers.back().w;
@@ -209,12 +268,15 @@ i32 sched_tick(f64 now_ms)
         w->timed = false;
         if (w->cancel && w->cancel->waiting == w)
             w->cancel->waiting = nullptr;
+        s.timers_fired++;
         push_ready(w->h);
     }
 
     // Resuming may queue more work; the drain runs until the queue is empty.
-    while (std::coroutine_handle<> h = pop_ready())
+    while (std::coroutine_handle<> h = pop_ready()) {
+        s.resumes++;
         h.resume();
+    }
 
     usize k = 0;
     for (usize i = 0; i < s.jobs.size(); i++) {
@@ -245,10 +307,20 @@ bool sched_wake(u32 token, u32 ptr, u32 len)
 {
     Sched &s      = sched();
     Waiter **slot = s.waits.find(token);
-    if (!slot)
+    if (!slot) {
+        s.misses++;
         return false; // nothing waits on it: a late or cancelled event
+    }
 
     Waiter *w = *slot;
+
+    // Only one of the four callers is the host: a channel wakes its peer, and an
+    // exiting child wakes a parked parent. Split the way /proc splits a wait.
+    if (w->parked)
+        s.unparks++;
+    else
+        s.wakes++;
+
     s.waits.remove(token);
     w->listed      = false;
     w->payload_ptr = ptr;

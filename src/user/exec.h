@@ -69,6 +69,16 @@ struct ProcState {
 // job of the process it serves, so /proc can say whose it is.
 bool exec_proc_state(u32 pid, ProcState &out);
 
+// What running processes has cost since boot, for /proc/stat. System-wide, and
+// never reset: a process's own share goes with its record.
+struct ExecStats {
+    u64 syscalls; // parked calls, each costing a step to answer
+    u64 sysfast;  // answered inside the import, Sys::Stage among them
+    u64 steps;    // steps issued to a worker, two postMessage hops each
+};
+
+void exec_stats(ExecStats &out);
+
 // The kernel's half of the two process imports, exported by main.cpp. `pid` is
 // the one the host bound into that process's closure at instantiation, never
 // one the process supplied: there is no argument for it on the other side.

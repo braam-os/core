@@ -59,6 +59,27 @@ struct ProcInfo {
     f64 started; // sched_now() when it was spawned
 };
 
+// What the scheduler has done since it was built, and what it holds now, which
+// is what /proc/stat publishes. A reset zeroes the counters with the scheduler.
+struct SchedStats {
+    u64 ticks;   // sched_tick calls: turns of the event loop
+    u64 resumes; // coroutine resumptions, which only tick() performs
+    u64 wakes;   // a woken token, split the way /proc splits a suspended task:
+    u64 unparks; // an answer from outside, or a channel's own traffic
+    u64 misses;  // woken with nothing waiting: a late or cancelled event
+    u64 timers;  // timer expiries
+    u64 spawns;  // tasks created; a syscall server is one, so not a fork rate
+
+    // Gauges. The four below partition `tasks`.
+    usize tasks;
+    usize ready; // suspended on nothing
+    usize on_timer;
+    usize on_host;
+    usize on_park;
+};
+
+SchedStats sched_stats();
+
 // `name` is stored as a view, so it must outlive the task: a literal, or a
 // stage's argv[0] out of the job's word store — never a local.
 u32 sched_spawn(Task<i32> t, Str name = {});

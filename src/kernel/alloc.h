@@ -10,6 +10,9 @@ struct HeapStats {
     usize bytes_in_use;   // sum of the size classes of live blocks
     usize allocs;
     usize frees;
+    usize frames; // allocations through the nothrow new: coroutine frames only
+    usize grows;  // memory.grow calls that actually grew linear memory
+    usize fails;  // requests that came back null
 };
 
 // `base` is the first byte the heap may use; 0 means the linker's __heap_base.

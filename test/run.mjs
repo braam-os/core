@@ -463,7 +463,8 @@ if (mode === "--kernel") {
                         "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
                         "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd", "rm",
                         "sleep",
-                        "tail", "timeout", "touch", "true", "uname", "version", "watch", "wc"])
+                        "tail", "timeout", "touch", "true", "uname", "version", "vmstat",
+                        "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
 
@@ -623,10 +624,10 @@ if (mode === "--kernel") {
         fail("the resize before the pipeline failed");
     press("c".codePointAt(0), CTRL); // the "hi" typed above is still pending
     s = submit("clear", 1130);
-    s = submit("ls /bin | grep ta", 1140);
+    s = submit("ls /bin | grep tai", 1140);
     const listed = rows(s).filter((line) => line && !line.includes("$"));
     if (listed.join() !== "tail")
-        fail(`ls /bin | grep ta printed ${JSON.stringify(listed)}, expected ["tail"]`);
+        fail(`ls /bin | grep tai printed ${JSON.stringify(listed)}, expected ["tail"]`);
     if (row(s, s.cursor_y) !== prompt())
         fail(`a pipeline that matched left ${row(s, s.cursor_y)}, expected ${prompt()}`);
 
@@ -894,6 +895,66 @@ if (mode === "--kernel") {
     s = submit("ps -x", 1185.3);
     if (!rows(s).includes("usage: ps") || !rows(s).includes(prompt(2)))
         fail(`ps -x printed ${JSON.stringify(rows(s))}, expected a usage line`);
+
+    // vmstat is the same counters as rates. This is the only place the rate
+    // arithmetic runs at all: the in-wasm suite cannot step a program.
+    s = submit("clear", 1185.4);
+    s = submit("vmstat", 1185.5);
+    const vm = rows(s).filter((line) => line && !line.includes("$"));
+    console.error("VMSTAT-DEFAULT:\n" + vm.join("\n"));
+    if (!vm[0] || !/^-+procs-+\s+-+memory-+\s+-+alloc-+\s+-+faults-+\s+-*loop-*$/.test(vm[0]))
+        fail(`vmstat did not rule its groups: ${JSON.stringify(vm)}`);
+    if (vm[1] !== "  r  t  h  p      use    fre      al    fr  gr     in   sy   cs      tk")
+        fail(`vmstat did not name its columns: ${JSON.stringify(vm[1])}`);
+    // Thirteen numbers. vmstat is itself one of the tasks it counts — the syscall
+    // server that generated the file is runnable and the stepper is parked on its
+    // reply — so `r` and `p` cannot be nought while it is the one asking.
+    const cells = (vm[2] || "").trim().split(/ +/).map(Number);
+    if (cells.length !== 13 || cells.some((n) => !Number.isFinite(n)))
+        fail(`vmstat's row is not thirteen numbers: ${JSON.stringify(vm[2])}`);
+    if (!(cells[0] >= 1 && cells[3] >= 1))
+        fail(`vmstat counted itself out of its own row: ${JSON.stringify(vm[2])}`);
+    if (!(cells[4] > 0 && cells[5] > 0))
+        fail(`vmstat reported no heap: ${JSON.stringify(vm[2])}`);
+
+    // -s is the same file, one counter per line with what it means. Its totals
+    // are cumulative, so a syscall count since boot cannot be nought.
+    s = submit("clear", 1185.6);
+    s = submit("vmstat -s | grep syscalls", 1185.7);
+    const sum = rows(s).filter((line) => line.includes("syscalls"));
+    console.error("VMSTAT-SUM:\n" + rows(s).join("\n"));
+    if (!sum.some((line) => /^ *[1-9]\d* syscalls parked and answered$/.test(line)))
+        fail(`vmstat -s did not total the syscalls: ${JSON.stringify(rows(s))}`);
+
+    s = submit("vmstat -s 1", 1185.8);
+    if (!rows(s).includes("usage: vmstat [-s] [-w <secs>] [-c <count>] [<secs> [<count>]]"))
+        fail(`vmstat -s with an interval printed ${JSON.stringify(rows(s))}`);
+
+    // BSD's other spelling of the same thing, and -c counts the first row, so
+    // one repetition never sleeps.
+    s = submit("clear", 1185.9);
+    s = submit("vmstat -w 1 -c 1", 1186.1);
+    const once = rows(s).filter((line) => line && !line.includes("$"));
+    if (once.length !== 3)
+        fail(`vmstat -w 1 -c 1 printed ${once.length} lines, expected a header and a row`);
+
+    // Two rows an interval apart. The interval is a second, so the second row
+    // needs a tick past the deadline the sleep put on the timer queue — which is
+    // why this is not one submit.
+    s = submit("clear", 1186.2);
+    type("vmstat 1 2");
+    press(KEY.ENTER);
+    run(1186.3);
+    run(2186.4); // past the second the first row asked to wait
+    s = descriptor(addr);
+    const paced = rows(s).filter((line) => line && !line.includes("$"));
+    console.error("VMSTAT-PACED:\n" + paced.join("\n"));
+    if (paced.length !== 4)
+        fail(`vmstat 1 2 printed ${JSON.stringify(paced)}, expected a header and two rows`);
+    // The interval came from the file's own clock, so the second row's rates are
+    // over ten milliseconds rather than over the whole uptime.
+    if (paced[2] === paced[3])
+        fail(`vmstat's second row repeated the first: ${JSON.stringify(paced)}`);
 
     addr = instance.exports.resize(60, 16);
     if (addr === 0)

@@ -81,6 +81,7 @@ bool grow_to(u32 spans)
     usize pages = (want_end - have_end + PAGE_SIZE - 1) / PAGE_SIZE;
     if (__builtin_wasm_memory_grow(0, pages) == usize(-1))
         return false;
+    h.stats.grows++; // counted here, not on entry: the early-out above grows nothing
     return true;
 }
 
@@ -227,8 +228,10 @@ void *heap_alloc(usize n)
     } else {
         u32 count = u32((n + SPAN_SIZE - 1) >> SPAN_SHIFT);
         u32 s     = span_run_take(count);
-        if (s == NO_SPAN)
+        if (s == NO_SPAN) {
+            h.stats.fails++;
             return nullptr;
+        }
         for (u32 i = 0; i < count; i++)
             h.span_class[s + i] = i == 0 ? SPAN_LARGE : SPAN_LARGE_CONT;
         h.span_run[s] = count;
@@ -236,8 +239,10 @@ void *heap_alloc(usize n)
         accounted     = usize(count) << SPAN_SHIFT;
     }
 
-    if (!p)
+    if (!p) {
+        h.stats.fails++;
         return nullptr;
+    }
     h.stats.allocs++;
     h.stats.bytes_in_use += accounted;
     return p;
@@ -295,8 +300,10 @@ void *operator new(usize n)
 
 // The form a Task's frame uses, because TaskPromise declares
 // get_return_object_on_allocation_failure. Null is a value here, not a fault.
+// Nothing else reaches it, so `frames` is exactly the coroutine-frame count.
 void *operator new(usize n, const std::nothrow_t &) noexcept
 {
+    h.stats.frames++;
     return heap_alloc(n);
 }
 

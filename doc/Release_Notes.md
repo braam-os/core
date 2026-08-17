@@ -7,6 +7,100 @@ of the two needs amending.
 
 ---
 
+## What the kernel is doing, as rates
+
+`ps` says what each task *is*. Nothing said what the system was *doing*. Every counter the kernel
+kept was a running total on `/proc/meminfo` — `allocs` and `frees` — and nobody subtracted them, so
+the figure §8.2 calls the primary workload of the whole system was invisible as a rate. The costs
+§4.4 quantifies were in the same position: two `postMessage` hops per syscall, one syscall per
+512-byte chunk, asserted in prose and impossible to watch. `vmstat 1000` during `cat big | wc -c` is
+the first thing that shows them.
+
+**One file, because a row is one moment.** The counters could have been columns added to
+`/proc/meminfo` and gauges added to `/proc/tasks`, and then a row would have been two `open`s and two
+moments — which is exactly the mistake `/proc/tasks` was introduced to avoid. `/proc/stat` therefore
+repeats the heap's figures rather than referring to them, the same duplication `/proc/tasks` has
+against `/proc/<pid>`, and for the same reason. Both branches call `heap_stats()` once so neither can
+drift.
+
+**`now` is the first line, and it is the whole design.** It is the `sched_now()` the counters below
+it were incremented against, so the reader divides by the file's own elapsed time rather than by how
+long it asked to sleep. A throttled background tab, a late timer and a `^C`-shortened sleep all come
+out right, and the interval argument degrades to a fallback divisor for the case — reachable, since
+the clock is truncated to whole milliseconds — where two reads land inside the same millisecond. It
+also makes the since-boot first row fall out for free: `counter / now` is BSD's `rate()` over
+`getuptime()`, with no special case.
+
+**A woken token is two different events and is counted as two.** `sched_wake` has four callers and
+only one of them is the host: a channel wakes its peer, and an exiting child wakes a parked parent.
+Counting them in one column would have put every byte moved through a pipe in the same figure as an
+answer from outside, so `wc a | grep b` would have read as an interrupt storm. `Waiter::parked` — the
+flag `/proc` already uses to tell a `park` from a `host` wait — splits them into `wakes` and
+`unparks`, which costs one branch. `unparks` is a number nothing else in the system exposes: pipe
+traffic has never been observable.
+
+**`frames` is exact rather than a share of `allocs`.** A `Task`'s promise declares
+`get_return_object_on_allocation_failure`, so its frame is allocated through the nothrow `operator
+new` and nothing else in the tree reaches that overload. One increment there is precisely the
+coroutine-frame count, which is the number §8.2 is about; `allocs` mixes it with every string and
+every heap record. `fails` is on the same principle: every error in the system funnels into
+`Err(NoMemory)` and this is the only place the count becomes visible.
+
+**`ready` is a task suspended on nothing, not the depth of the ready queue.** The tempting
+definition, `ready.size() - head`, is wrong here for a reason that is easy to miss: `/proc/stat` is
+generated inside `open`, inside a syscall server, inside the drain loop, so that figure would measure
+whatever happened to be queued behind the reader in one drain — and would exclude the reader. The
+definition used is the one `/proc/tasks` already prints as state, which makes `ready + on_timer +
+on_host + on_park == tasks` an invariant a test can assert, and makes `r` mean what `ps` prints as
+`R`. The consequence is that `vmstat` is always in its own row — `r` and `p` are never zero while it
+is the one asking, since its syscall server is runnable and its stepper is parked on the reply. BSD
+subtracted itself out (`total.t_rq - 1`); that would be wrong here, because `cat /proc/stat` reads
+the same file and is not the same shape.
+
+**Counters live in `Sched`, gauges are computed there.** A file-static would survive `sched_reset()`
+and accumulate across the fixed-order unit suite; a member of the object the reset destroys is zeroed
+with it, which is what a test starting from a clean scheduler means. The heap's counters are the
+other way round — `heap_init` runs once — so `/proc/stat` mixes two zero points. That is invisible in
+a running system, which has one `Sched` lifetime, and only shows up in the test suite.
+
+**No CPU column, and the group that replaced it says so.** Kernel-busy milliseconds are measurable
+with two `host_now()` calls around the tick drain, and were rejected: in a browser tab the answer is
+zero almost always, and as a percentage of wall time it would read 99–100% idle — a column bought
+with a hot-path cost that says nothing, and a label reading `cpu` would read as retiring a documented
+gap (§4.2). `-loop-` is in its place: how often the host granted the event loop a turn, which does
+vary, and collapses when the tab is backgrounded. `-alloc-` similarly stands where BSD's `-page-`
+was, there being no paging; allocations are this system's page faults.
+
+**Seconds, which makes it the one time argument here that is not milliseconds.** `sleep`, `watch -n`
+and `timeout` all take milliseconds, and consistency with them was the first choice; BSD's units are
+the better one. The columns are rates *per second*, so the interval that divides them wants the same
+unit, and `vmstat 1` has to mean the useful thing rather than an interval that would measure almost
+nothing but vmstat itself. Memory is in raw KB rather than `ps`'s scaled units for a related reason:
+a `vmstat` column is scanned downwards, and a unit that changes between rows defeats the only thing
+that makes scanning it worth doing. BSD's `pgtok` does the same.
+
+**What is deliberately absent.** `-i` would need every wake token tagged with a source, and a token
+is opaque on purpose. `-m` is the interesting one — `domem()` prints kernel malloc by bucket size and
+the allocator has exactly that shape, `SIZE_CLASS[]` plus whole-span blocks — but it needs per-class
+counters in the allocator's hot path, and it is a separate argument to make. `bi`/`bo` were dropped
+because `sy` already exposes that traffic: bulk I/O is one syscall per `SYS_CHUNK`. `-f`, `-t`, `-M`
+and `-N` have nothing to report: no fork, no page-in timing, no core file, no namelist.
+
+**The file is emitted a line at a time, and that is not a style choice.** `Buf` truncates silently
+and `overflowed()` is called nowhere in the tree, so a single buffer for twenty-three lines would
+have been a latent bug that returned the moment someone added a counter — and because `stat` and
+`read` both work off the same snapshot, they would have agreed on the short answer and no reader could
+have told. A per-line `Buf<32>` holds the worst case, eight padded characters and a space and twenty
+digits and a newline, and makes the file's total length unbounded. The counter table is then the one
+place a counter is added, which is also why `vmstat -s` prints an unknown name under itself rather
+than needing an edit.
+
+**`vmstat` measures itself**, about four syscalls per row: noise at a one-second interval, and most
+of the reading at 100 ms. BSD has the same property and does not correct for it either.
+
+One test needed narrowing rather than fixing: `ls /bin | grep ta` asserted the match was exactly
+`tail`, and `vmstat` contains `ta`. It is `grep tai` now.
+
 ## MEM is measured, and it rides back on the step
 
 `ps` reported the memory *cap*, and every row read `16M` — one number, the same for every process,
