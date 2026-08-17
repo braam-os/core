@@ -290,6 +290,18 @@ Task<Result<Geometry>> screen_claim(bool take)
     co_return co_await claim(Sys::ScreenEnter, take);
 }
 
+Task<Result<TtyInfo>> tty_of(u32 fd)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Tty, fd);
+    if (r.is_err())
+        co_return Err(r.error());
+    if (r.value().data.size() < 12)
+        co_return Err(Error::Io);
+    const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
+    co_return TtyInfo{ (sys_get_u32(p) & SYS_TTY_CONSOLE) != 0,
+                       Geometry{ sys_get_u32(p + 4), sys_get_u32(p + 8) } };
+}
+
 Task<Result<KeyPress>> key_read()
 {
     Result<SysReply> r = co_await sys_call(Sys::KeyRead, 0);

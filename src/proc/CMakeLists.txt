@@ -6,6 +6,7 @@
 # test/run.mjs checks, for every binary.
 add_library(braam_proc STATIC
     io.cpp
+    opt.cpp
     rt.cpp
     screen.cpp
     ../fs/path.cpp

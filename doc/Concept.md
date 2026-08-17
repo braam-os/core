@@ -543,8 +543,8 @@ The wire's conventions:
   is a record with its own staging block and its own scheduler job, so a socket read that never
   completes cannot starve the keystroke behind it.
 
-**The table is thirty-six operations and `PROC_ABI` is 8**: four synchronous — `exit`, `getpid`,
-`now`, `stage` — and thirty-two asynchronous.
+**The table is thirty-seven operations and `PROC_ABI` is 9**: four synchronous — `exit`,
+`getpid`, `now`, `stage` — and thirty-three asynchronous.
 [System_Calls.md](System_Calls.md) lists them all with what each carries.
 
 Four rules bound the table:

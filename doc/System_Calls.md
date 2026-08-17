@@ -237,7 +237,7 @@ how much memory to give it. It lives in a wasm custom section named `braam`, fiv
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 8
+    u32 abi;            // PROC_ABI, currently 9
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -683,6 +683,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 69 | `Cursor` | bit 0 = set, else report | `u32 x, y, on` when setting | 0 | `u32 x`, `y`, `on`, `cols`, `rows` |
 | 70 | `Style` | `fg \| bg << 8 \| attrs << 16` | — | 0 | — |
 | 71 | `Echo` | `SYS_ECHO_SHOW \| FRESH \| END` | `u32 x, y, cur, runs`, then `u32 style, len` each, then the bytes | 0 | `u32 x`, `y`, `on`, `cols`, `rows`, `scrolled` |
+| 72 | `Tty` | fd | — | 0 | `u32 flags`, `u32 cols`, `u32 rows` |
 | 80 | `Pipe` | — | — | 0 | `u32 read fd`, `u32 write fd` |
 | 81 | `Spawn` | — | `u32 fd0, fd1, fd2`, then the argv blob | the child's pid | — |
 | 82 | `Wait` | a pid, or `SYS_WAIT_ANY` | — | the child's status, 0–255 | `u32 pid` |
@@ -750,6 +751,23 @@ a row of its own, which is the one thing `Echo` cannot express. Neither operatio
 Concept.md §4.3's "every operation has a caller in `src/cmd/`" bars *growing* the table on a
 guess, and re-adding either later would cost an ABI bump that invalidates every stamped binary.
 
+**`Tty` is the question the terminal being a grid makes unaskable.** There is no escape sequence
+to send and no environment to read, so a program cannot tell its own stdout from a pipe. The
+kernel can: `stdio_console()` installs one sink and a pipe or a file installs another, and
+`tty_is_console` (`src/user/tty.h`) is that difference given a name — with `console_is_input`
+(`src/user/console.h`) answering the same for fd 0. `Spawn` bit-copies the parent's `Stream` when
+a child shares stdout, so the answer follows a chain of spawns with nothing carrying it: `ls`
+under `/bin/sh` under init still says yes. A descriptor from the process's own table is a file, a
+pipe, a socket or a pick set, so it says no; a number naming nothing is `Err(Invalid)`.
+
+It is a get with no state, so none of `Cursor`'s refusals apply — knowing the shape of your own
+output is not a claim on the screen. The geometry rides on the reply for `KeyRead`'s reason, a
+resize needing no event to subscribe to, and is **zero when the answer is no**: a pipe has no
+width, and one invented here would be believed. The reply is a *flags* word rather than a bare
+status so a second fact about a terminal costs no thirty-eighth operation, which is what
+`SYS_STORE_*` bought `Storage`. `/bin/ls` is the caller: with the grid it lays out in columns, and
+into a pipe it prints one name per line, which is what keeps `ls | grep` meaning what it did.
+
 **`Fg` decides where `^C` goes.** The console keeps a set of foreground pids; the pump cancels
 them all on `^C`, and delivers the interrupt as an ordinary key to whoever holds the raw route
 when the set is empty (Concept.md §3.5). Each call *adds* one pid, because the op word carries
@@ -803,6 +821,7 @@ the page with it.
 | `SYS_ECHO_RUNS_MAX` | 8 | runs per `Echo`; a prompt is four |
 | `SYS_ECHO_SHOW`/`FRESH`/`END` | 1, 2, 4 | show the cursor after, anchor on a fresh row, end where the write did |
 | `SYS_STYLE_KEEP` | 0xffffffff | an `Echo` run naming no colour, so the sticky one stands |
+| `SYS_TTY_CONSOLE` | 1 | `Tty`'s flags word: this descriptor is the cell grid |
 | `SYS_WAIT_ANY` | 0 | `Wait`'s "whichever finishes first"; zero is never a pid |
 | `SYS_PID_MAX` | 0xffffff | the largest pid `Wait` and `Kill` can name — the op word's arg is 24 bits |
 | `SYS_CHILD_MAX` | 16 | live children per process |

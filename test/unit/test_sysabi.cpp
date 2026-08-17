@@ -89,6 +89,7 @@ void test_sysabi()
     // The numbers themselves, since a binary compiled today speaks them: the
     // terminal block runs to Cursor and the process family to Fg.
     CHECK_EQ(u32(Sys::Cursor), 69u);
+    CHECK_EQ(u32(Sys::Tty), 72u);
     CHECK_EQ(u32(Sys::Fg), 84u);
 
     // A spawn request's flags word: the two page counts, in one word because

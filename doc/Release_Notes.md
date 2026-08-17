@@ -7,6 +7,92 @@ of the two needs amending.
 
 ---
 
+## ls asks whether it is talking to a terminal
+
+`ls` printed one name per line, always, and understood one flag. Bringing BSD's `ls` across —
+`-C` in columns, `-R`, `-S`, `-r`, `-d`, `-h`, a `-l` that lines up — turned out to need one
+thing the system did not have, and the rest fell out of it.
+
+**There is no `isatty`, and §2.3 is why.** The terminal is a cell grid, not a byte stream, so
+there is no escape sequence a program could send and no environment it could read a width out
+of. `Sys::Cursor` reports the grid's geometry, but it reports it to a program whose stdout is a
+pipe just as readily, so it cannot answer the question that matters. The kernel *can* answer it:
+`stdio_console()` installs one sink and `pipe_sink`/`file_sink` install others, and that function
+pointer is the whole of the difference. It was simply never reported. `Sys::Tty` is the operation
+that reports it — the thirty-seventh, arg = fd, data = a flags word and the geometry.
+
+Three choices inside it are worth the ink:
+
+- **An explicit predicate in `tty.h`, not `ctx == nullptr` in the dispatcher.** The console sink is
+  today the only `Stream` with a null context, so the implicit test would work. It would also
+  silently promote the next sink that happens to need no context into a terminal.
+  `tty_is_console` says what is meant, in the file that owns the fact; `console_is_input` is its
+  twin for fd 0, so `arg = fd` is honest across its whole domain rather than over two thirds of it.
+- **Zero geometry for a pipe, not 80.** A caller cannot distinguish an invented width from a
+  measured one, and would believe it. The fallback belongs in the program, where it is visible:
+  `ls -C` into a pipe formats at eighty because `ls` chose eighty.
+- **A flags word rather than a bool.** It is what `SYS_STORE_*` bought `Storage` — room for a
+  second fact about a terminal without a thirty-eighth operation.
+
+`PROC_ABI` went 8 → 9. The change is purely additive and an old binary would never call the new
+opcode, so nothing would actually break; the bump is the tree's standing rule that the number
+tracks the table, and it buys a sentence at exec (`built for another process ABI`) instead of a
+stale binary meeting `Err(Unsupported)` somewhere further in. In-tree it costs a rebuild, since
+`tools/stamp.py` reads the constant.
+
+**The flag parser is a third header in `src/proc/`, and a translation unit of its own.** `ls` went
+from one flag to eight, and every command in `src/cmd/` was hand-rolling a leading-flag loop that
+did not accept `-lR`. `proc/opt.h` is not part of `io.h`, which is one wrapper per syscall, nor of
+`rt.h`, which is `_start` and `SysCall`. Being its own `.cpp` is load-bearing: `--gc-sections`
+never extracts an unreferenced archive member, so the thirty-three binaries that do not call it
+pay nothing — the rule the builtin table exists for, used the other way round. `ls` is the only
+adopter here; `head` and `tail` would take `Opts{"", "n"}` unchanged, and were left alone.
+
+**Column-major, and a shared column width.** A sorted listing is read *down* a column: filling
+across would put `ls` and `mkdir` in different columns of the same row and make the sort useless
+to the eye. The width is one number for the whole block, as BSD's is rather than GNU's per-column
+fitting — with a `total` in 512-byte blocks under `-l`, `FS_BLOCK` being the system's own unit.
+The last cell of a row is deliberately not padded: trailing blanks would leave the cursor in the
+deferred-wrap column, and the test harness trims them, so that bug would have passed the suite and
+shown up only in a browser.
+
+**Width is codepoints, not bytes.** `screen_write` puts one codepoint in one cell, so
+`Buf::put_left`/`put_right` — which pad by `Str::size()` — cannot be used on a filename at all;
+`ls` counts with `utf8_decode` and pads a `String` itself. They are still right for the `-l` size
+column, which is ASCII digits.
+
+**`-R` is an explicit stack, not a recursive coroutine.** §8.2 prices a coroutine frame at a whole
+size class, and a frame per directory level is the wrong shape for a tree. One heap `Vec<String>`
+holds what is still to list; children are pushed in reverse of the order they printed, so they pop
+in it, which is BSD's depth-first pre-order for free. Memory is bounded by sibling counts along
+the current path rather than by the tree, and there are no cycles to guard against — this VFS has
+no symlinks. The entry vector, that stack, the operand list and the row buffer are one heap block
+for §8.2's reason, the same one `less` has a `Pager` for.
+
+**What could not be brought across at all**: `-t`, `-i`, `-s`, `-o`, `-T` and `-L`. The filesystem
+stores `{kind, size}` and nothing else — no mtime, mode, owner, link count or inode anywhere in
+`Stat`, `Entry` or the `Sys::List` wire format. Any of those is a change reaching both storage
+backends and the ABI, not a change to `ls`. `-a`/`-A` were left out for a different reason:
+nothing in the tree creates a dotfile and nothing hides one, so the flag would introduce the
+concept of a hidden file rather than expose it. `-F` is already there and unconditional — the
+trailing slash on a directory is the only thing distinguishing it from a file in the short form,
+and under columns it earns its place twice over.
+
+**vmstat's rate columns went from five wide to six.** `W_RATE = 5` gave a five-digit rate no
+separator from the column on its left, so `sy` and `cs` ran together into one number. The listing
+work tipped `cs` over 10,000 and exposed it; the row is 74 columns now and still inside eighty.
+
+The layout tests moved off `/bin` and onto a `/home/t` the suite builds itself. A listing of `/bin`
+is a test that fails whenever a program is added, which makes it a test of the wrong thing; what
+is left pointing at `/bin` asks only that `cd` is absent and `timeout` present.
+
+`ls` costs 26,504 bytes against 15,633, and the staged tree 549,403 against 538,499 — 52% of its
+budget. `kernel.wasm` grew 318 bytes for the new arm, to 146,342. Every `ls` now pays one extra
+round trip for `Sys::Tty`, 34–45 µs; against it, a directory listing to the grid is one write per
+*row* rather than one per entry, which on `/bin` is six writes instead of thirty-four.
+
+---
+
 ## exec.cpp was four things in one file
 
 At 2,211 lines it was a 3.4× outlier over the next largest source in the tree and more than half

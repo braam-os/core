@@ -55,3 +55,7 @@ u32 console_interrupts();
 // silently. Only the foreground is ever given it — a background job is spawned
 // with an end of input instead.
 Source console_input();
+
+// Whether a source is that cooked input: tty_is_console()'s twin, and Sys::Tty's
+// answer for fd 0. A background job is given null_source() instead.
+bool console_is_input(const Source &s);

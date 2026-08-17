@@ -26,6 +26,10 @@
 // argument read what is typed, one level below the shell that spawned it.
 Stdio stdio_console();
 
+// Whether a stream is the grid rather than a pipe or a file: the sink
+// stdio_console() installs is the whole of the difference. Sys::Tty's caller.
+bool tty_is_console(const Stream &s);
+
 // Enough to hold a burst of typing between two resumptions of a program that
 // repaints on every key. Beyond it, keys drop — the policy key() already uses
 // on the keyboard ring itself.

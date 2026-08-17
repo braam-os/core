@@ -87,6 +87,11 @@ Source console_input()
     return pipe_source(cooked());
 }
 
+bool console_is_input(const Source &s)
+{
+    return g_cooked_in && s.ctx == g_cooked_in;
+}
+
 Task<i32> console_pump()
 {
     String line; // the cooked line, sent whole on Enter

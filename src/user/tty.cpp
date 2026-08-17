@@ -29,6 +29,11 @@ Stdio stdio_console()
     return Stdio{ console_input(), s, s };
 }
 
+bool tty_is_console(const Stream &s)
+{
+    return s.fn == to_screen;
+}
+
 KeyInput::KeyInput(u32 pid)
 {
     // Refused before anything is allocated: a claim that nested would leave the

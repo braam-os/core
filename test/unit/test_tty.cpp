@@ -1,6 +1,7 @@
 #include "harness.h"
 #include "kernel/alloc.h"
 #include "kernel/screen.h"
+#include "user/console.h"
 #include "user/io.h"
 #include "user/tty.h"
 
@@ -82,4 +83,22 @@ void test_tty()
         CHECK_EQ(screen_cells()[0].ch, 'a');
     }
     screen_reset();
+
+    // What Sys::Tty answers with: a console stream and a pipe's are the same
+    // type, so only the sink tells them apart.
+    {
+        Stdio c = stdio_console();
+        CHECK(tty_is_console(c.out));
+        CHECK(tty_is_console(c.err));
+        CHECK(console_is_input(c.in));
+        CHECK(!console_is_input(null_source()));
+
+        Pipe *q = heap_new<Pipe>();
+        CHECK(q != nullptr);
+        if (q) {
+            CHECK(!tty_is_console(pipe_sink(*q)));
+            CHECK(!console_is_input(pipe_source(*q)));
+            heap_delete(q);
+        }
+    }
 }

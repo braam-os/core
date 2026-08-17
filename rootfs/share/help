@@ -20,7 +20,7 @@ head     [-n <count>] [<file>...] — the first lines, ten by default
 hog      take memory until the cap refuses more
 import   [<dir>] — copy files from the browser into /mnt/import
 less     [<file>] — page through a file, or the input; q quits
-ls       [-l] [<path>...] — list directories
+ls       [-1CRSdhlr] [<path>...] — list directories, in columns on a terminal
 mkdir    <dir>... — create directories
 mount    list the mounted filesystems
 pbcopy   [<file>...] — put the input on the clipboard

@@ -15,7 +15,8 @@ namespace {
 
 // A row inside eighty columns. Memory is KB rather than `ps`'s scaled units.
 constexpr usize W_PROC = 3, W_MEM = 7, W_AL = 6, W_FR = 6, W_GR = 4;
-constexpr usize W_RATE = 5, W_TICK = 6;
+// A rate of six digits still separates itself from the column on its left.
+constexpr usize W_RATE = 6, W_TICK = 6;
 constexpr usize GAP = 2;
 
 // Seconds, as BSD's are — the one time argument here that is not milliseconds.

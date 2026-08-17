@@ -147,6 +147,27 @@ function rows(s) {
     return Array.from({ length: s.rows }, (_, y) => row(s, y));
 }
 
+// The names in a listing: ls pads to a shared column width when stdout is the
+// grid, so a name is a field of a row rather than a row of its own.
+function words(s) {
+    return rows(s).flatMap((line) => line.split(/ +/).filter(Boolean));
+}
+
+// What one command printed: the rows between the line it was typed on and the
+// prompt that followed, blank lines kept — which is what `ls -R` separates its
+// blocks with. Meant for a screen that was cleared first.
+function output(s) {
+    const all = rows(s);
+    const first = all.findIndex((line) => line.includes("$ ")) + 1;
+    let last = all.length;
+    for (let i = first; i < all.length; i++)
+        if (all[i].endsWith("$")) {
+            last = i;
+            break;
+        }
+    return all.slice(first, last);
+}
+
 // The prompt is the last status in red, the cwd's basename white on blue, then
 // the $ in bright white. The suite cds, so it tracks where the shell in front
 // of it is; the boot cwd is /home.
@@ -272,7 +293,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 8)
+        if (m[0] !== 0x6d617262 || m[1] !== 9)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         if (m[4] !== 256)
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
@@ -770,15 +791,80 @@ if (mode === "--kernel") {
         if (!rows(s).some((line) => line.startsWith("braam —")))
             fail(`/share/motd did not read back: ${JSON.stringify(rows(s))}`);
         s = submit("clear", 1185);
+        // Two names, and the grid is stdout, so they share a row.
         s = submit("ls /share", 1186);
-        if (!rows(s).includes("help") || !rows(s).includes("motd"))
-            fail(`/share did not list its files: ${JSON.stringify(rows(s))}`);
-        // The README is at the root, where somebody arriving will see it.
+        if (output(s).join("|") !== "help  motd")
+            fail(`/share did not list its files: ${JSON.stringify(output(s))}`);
+        // The README is at the root, where somebody arriving will see it. Not
+        // the whole row: what else is at the top level moves with boot.cpp.
         s = submit("clear", 1186.1);
         s = submit("ls /", 1186.2);
-        if (!rows(s).includes("README"))
-            fail(`/ did not list the README: ${JSON.stringify(rows(s))}`);
+        if (!words(s).includes("README"))
+            fail(`/ did not list the README: ${JSON.stringify(output(s))}`);
     }
+
+    // The layout itself, on a fixture the suite owns: /bin re-breaks whenever a
+    // program is added. Sizes are chosen so name order, size order and reversed
+    // order all differ. After vmstat, which counts the syscalls these make.
+    submit("mkdir /home/t", 1186.30);
+    submit("mkdir /home/t/sub", 1186.31);
+    submit("echo 1 > /home/t/aaa", 1186.32); // 2 bytes
+    submit("echo 123456 > /home/t/bb", 1186.33); // 7 bytes
+
+    // aaa=3, bb=2, sub/=4, so the column is 4 + 2 wide and three of them fit.
+    const listing = (line, now) => {
+        submit("clear", now);
+        return output(submit(line, now + 0.005)).join("|");
+    };
+    const listings = [
+        ["ls /home/t", "aaa   bb    sub/"],
+        ["ls -1 /home/t", "aaa|bb|sub/"],
+        ["ls -l /home/t", "total 2|file 2 aaa|file 7 bb|dir  0 sub/"],
+        ["ls -lh /home/t", "total 2|file 2B aaa|file 7B bb|dir  0B sub/"],
+        ["ls -S /home/t", "bb    aaa   sub/"],
+        ["ls -r /home/t", "sub/  bb    aaa"],
+        ["ls -rS /home/t", "sub/  aaa   bb"],
+        ["ls -d /home/t", "/home/t/"],
+        // Bundled, and a named directory gets no `total`.
+        ["ls -dl /home/t", "dir  0 /home/t/"],
+        ["ls -- /home/t", "aaa   bb    sub/"],
+        ["ls -R /home/t", "/home/t:|aaa   bb    sub/||/home/t/sub:"],
+        ["ls -lR /home/t",
+            "/home/t:|total 2|file 2 aaa|file 7 bb|dir  0 sub/||/home/t/sub:|total 0"],
+        // A file operand prints before a directory one, in a block of its own.
+        ["ls /home/t/aaa /home/t", "/home/t/aaa||/home/t:|aaa   bb    sub/"],
+        // A pipe is one name per line; -C forces columns into one, at eighty.
+        ["ls /home/t | head -n 2", "aaa|bb"],
+        ["ls -C /home/t | cat", "aaa   bb    sub/"],
+    ];
+    let at = 1186.4;
+    for (const [line, want] of listings) {
+        const got = listing(line, at);
+        at += 0.02;
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    }
+
+    // A name is as wide as its codepoints, not its bytes: the grid puts one
+    // codepoint in one cell, so padding by bytes shifts every column after an
+    // accented name left by one. abcdef is six cells and six bytes, naïve five
+    // cells and six, which is what tells the two apart.
+    submit("mkdir /home/u", 1186.75);
+    submit("touch /home/u/abcdef /home/u/naïve /home/u/xy", 1186.76);
+    submit("clear", 1186.77);
+    const wide = output(submit("ls /home/u", 1186.78)).join("|");
+    if (wide !== "abcdef  naïve   xy")
+        fail(`a UTF-8 name misaligned the columns: ${JSON.stringify(wide)}`);
+    submit("rm -r /home/u", 1186.79);
+
+    s = submit("clear", 1186.8);
+    s = submit("ls -z /home/t", 1186.81);
+    if (!output(s).some((line) => line.startsWith("ls: illegal option -- z")))
+        fail(`an unknown flag said nothing: ${JSON.stringify(output(s))}`);
+    if (!rows(s).includes(prompt(2)))
+        fail(`an unknown flag left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
+
+    submit("rm -r /home/t", 1186.9);
 
     // M5, second criterion, as amended: df reports the quota and the usage as
     // a BSD table, the durability having moved to the boot banner. The whole
@@ -904,7 +990,7 @@ if (mode === "--kernel") {
     console.error("VMSTAT-DEFAULT:\n" + vm.join("\n"));
     if (!vm[0] || !/^-+procs-+\s+-+memory-+\s+-+alloc-+\s+-+faults-+\s+-*loop-*$/.test(vm[0]))
         fail(`vmstat did not rule its groups: ${JSON.stringify(vm)}`);
-    if (vm[1] !== "  r  t  h  p      use    fre      al    fr  gr     in   sy   cs      tk")
+    if (vm[1] !== "  r  t  h  p      use    fre      al    fr  gr      in    sy    cs      tk")
         fail(`vmstat did not name its columns: ${JSON.stringify(vm[1])}`);
     // Thirteen numbers. vmstat is itself one of the tasks it counts — the syscall
     // server that generated the file is runnable and the stepper is parked on its
@@ -994,7 +1080,7 @@ if (mode === "--kernel") {
         instance.exports.wake(store.held.shift(), 0, 0);
     run(1230);
     s = descriptor(addr);
-    if (!rows(s).includes("notes"))
+    if (!words(s).includes("notes"))
         fail(`the deferred listing never arrived: ${JSON.stringify(rows(s))}`);
 
     // M5, first criterion, second half: throw the instance away and build a
@@ -1794,8 +1880,10 @@ if (mode === "--kernel") {
 
     s = submit("clear", 9092);
     s = submit("ls /bin", 9093);
-    if (rows(s).includes("cd"))
+    if (words(s).includes("cd"))
         fail("cd is a builtin and must not be a file in /bin");
+    if (!words(s).includes("timeout"))
+        fail(`ls /bin lost a binary: ${JSON.stringify(output(s))}`);
 
     // A builtin is an ordinary pipeline stage, which is why `fg` can claim the
     // pump of the pipeline it is running in — so it pipes and redirects too.

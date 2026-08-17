@@ -10,6 +10,7 @@ add_executable(tests
     unit/test_hostfs.cpp
     unit/test_jsref.cpp
     unit/test_io.cpp
+    unit/test_opt.cpp
     unit/test_pane.cpp
     unit/test_path.cpp
     unit/test_parse.cpp
@@ -33,7 +34,11 @@ add_executable(tests
     # String and Vec, so it is compiled in here rather than linked from
     # braam_sh, which would drag the process runtime's imports in with it.
     ../src/sh/parse.cpp
-    ../src/sh/tokenize.cpp)
+    ../src/sh/tokenize.cpp
+
+    # The option parser is the process runtime's, and pure for the same reason:
+    # Args, Str and Result and nothing else. braam_proc is not linked here.
+    ../src/proc/opt.cpp)
 
 target_link_libraries(tests PRIVATE
     braam_user braam_fs braam_svc braam_ui braam_core braam_flags)

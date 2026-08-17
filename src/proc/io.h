@@ -119,6 +119,16 @@ struct Geometry {
     u32 rows = 0;
 };
 
+// Whether a descriptor is the terminal, and how big it is. `at` is zero unless
+// `console` is true. The only way to tell a terminal from a pipe: the grid is
+// cells (§2.3), so there is no escape sequence to ask with.
+struct TtyInfo {
+    bool console = false;
+    Geometry at;
+};
+
+Task<Result<TtyInfo>> tty_of(u32 fd);
+
 // Takes the raw keys, or gives them back. A shell gives them back before it
 // runs a foreground child, so the child can claim them in its turn; a second
 // claimant while somebody holds them is Err(Perm).

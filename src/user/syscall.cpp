@@ -1150,6 +1150,28 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             break;
         }
 
+        // Whether a descriptor is the terminal, and its geometry. A get with no
+        // state, so none of Cursor's refusals apply. Zero geometry when the
+        // answer is no: a pipe has no width.
+        case Sys::Tty: {
+            bool console = false;
+            if (fd == SYS_STDIN) {
+                console = console_is_input(p.io.in);
+            } else if (fd == SYS_STDOUT || fd == SYS_STDERR) {
+                console = tty_is_console(fd == SYS_STDOUT ? p.io.out : p.io.err);
+            } else if (!proc_handle(p, fd)) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            // Anything in the process's own table is a file, a pipe, a socket
+            // or a pick set; none is the grid.
+            if (!reply_u32(reply, console ? SYS_TTY_CONSOLE : 0u, console ? screen().cols : 0u,
+                           console ? screen().rows : 0u))
+                co_return Err(Error::NoMemory);
+            status = 0;
+            break;
+        }
+
         // Both ends in this process's table. Whichever is moved into a child is
         // closed here by the move, and that is what gives the other end an end
         // of input — there is no second copy left open to prevent it.

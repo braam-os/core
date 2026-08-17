@@ -201,7 +201,7 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with `.
 | Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path` |
 | Directory | `cwd_get()`, `cwd_set(path)` — this process's own, inherited from whoever spawned it |
 | Children | `make_pipe()`, `spawn(Args, ChildIo)`, `wait_child(pid)`, `kill_child(pid)`, `set_fg(pid)` |
-| Terminal | `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
+| Terminal | `tty_of(fd)`, `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
 | System | `storage_of()`, `sleep_for(ms)`, `clock_now()`, `proc_pid()`, `proc_now()` |
 | Host services | `fetch_url(url, spec)`, `ws_connect(url)`, `clip_get`, `clip_put`, `pick`, `pick_open`, `save` |
 | Helpers | `errln(who, what, why)`, `Input`, `LineReader`, `next_line`, `next_field` |
@@ -209,6 +209,31 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with `.
 Everything that is a stream of bytes comes back as a descriptor, so there is nothing new to
 learn for any of it: a fetched body is read with `read_chunk` until `Err(Closed)` and closed
 with `close_fd`, and a WebSocket is written with `write_all`.
+
+`tty_of(SYS_STDOUT)` is how a program lays its output out: it reports whether that descriptor
+is the terminal and, if it is, how wide. The geometry is zero for a pipe or a file, so a
+program that formats for a terminal falls back to one item per line rather than inventing a
+width. `/bin/ls` is the worked example.
+
+### `proc/opt.h` — the command line
+
+`OptParse` reads bundled short flags (`-lR`), `--` to end them, and a flag that takes a value
+(`-n5` or `-n 5`). It allocates nothing, and options end at the first operand.
+
+```cpp
+constexpr Opts SPEC{ "lr", "n" }; // letters taken; those consuming a value
+OptParse opts(args, SPEC);
+Opt o;
+for (;;) {
+    Result<bool> more = opts.next(o);
+    if (more.is_err())      // Invalid: an unknown letter, named in o.name
+        co_return 2;        // NotFound: a valued letter with nothing after it
+    if (!more.value())
+        break;
+    ...
+}
+Args paths = opts.rest();
+```
 
 Two rules about descriptors, both of which the kernel enforces rather than trusts:
 

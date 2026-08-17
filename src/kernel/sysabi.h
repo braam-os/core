@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 8;
+constexpr u32 PROC_ABI       = 9;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -145,6 +145,11 @@ enum class Sys : u32 {
           //             then the runs' bytes end to end
           //   data    = u32 x, y, on, cols, rows, scrolled
 
+    // Whether a descriptor is the terminal, and how big it is. Only the kernel
+    // knows: the grid is cells (§2.3), so there is no escape sequence to ask
+    // with and no environment to read a width out of.
+    Tty, // arg = fd;  data = u32 flags, u32 cols, u32 rows
+
     // Processes. A program that supervises another one cannot be a shell
     // builtin — the builtins are the six things no syscall could serve — so
     // this is what makes `timeout` and `watch` writable at all.
@@ -227,6 +232,11 @@ enum : u32 {
     SYS_STORE_SYNC      = 2,
     SYS_STORE_PERSISTED = 4,
     SYS_STORE_KNOWN     = 8, // the host answered at all
+};
+
+// The flags word Sys::Tty answers with.
+enum : u32 {
+    SYS_TTY_CONSOLE = 1, // this descriptor is the cell grid
 };
 
 inline u32 sys_op(Sys op, u32 arg = 0)
