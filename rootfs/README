@@ -24,7 +24,7 @@ Nothing is sent anywhere unless you ask for it. Two commands do:
 Files move in and out through the browser, since the page cannot reach your
 disk on its own:
 
-    import                 pick files; they land in /mnt/import
+    import                 pick files; they land in /import
     export notes           download notes out of the browser
 
 help lists every command. uname -a says what this is and what it is running

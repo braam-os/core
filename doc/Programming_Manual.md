@@ -112,12 +112,12 @@ ordinary filesystem against the calling process's working directory, and accepts
 carrying a well-formed stamp — so a `.wasm` that arrives at runtime is a command.
 
 **Through the file picker.** At the prompt, `import`, and choose `hello.wasm`. It lands in
-`/mnt/import/`:
+`/import/`:
 
 ```
 $ import
-/mnt/import/hello.wasm
-$ /mnt/import/hello.wasm Serge
+/import/hello.wasm
+$ /import/hello.wasm Serge
 Hello, Serge!
 ```
 

@@ -125,10 +125,11 @@ Task<void> unpack_if_stale(const u32 &pid)
 // carry. Exists is the ordinary answer on every boot but the first.
 Task<void> make_dirs()
 {
-    // Where `import` puts what the file picker hands over (Concept.md §5.4).
+    // Where `import` puts what the file picker hands over (Concept.md §5.4):
+    // /import, at the root.
     // A directory like any other: the files arrive as bytes, and nothing about
     // them is a filesystem.
-    constexpr Str DIRS[] = { "/home", "/mnt", "/mnt/import" };
+    constexpr Str DIRS[] = { "/home", "/import" };
     for (Str d : DIRS) {
         if (Task<Result<void>> t = vfs_mkdir(d)) {
             Result<void> r = co_await t;

@@ -681,9 +681,10 @@ unbuilt:
 ```
 
 **Two mounts, and one of them is generated.** Everything a user can name is in the one store:
-`/bin`, `/share`, `/home`, `/tmp` and `/mnt/import` are directories in it, not filesystems of
-their own. There is no `/usr`, and `import` writes the picker's bytes into `/mnt/import` like
-anything else — bytes are not a filesystem.
+`/bin`, `/share`, `/home`, `/tmp` and `/import` are directories in it, not filesystems of
+their own. There is no `/usr`, and no `/mnt` either: a directory named for mounting would promise
+a second filesystem there is no way to have. `import` writes the picker's bytes into `/import`
+like anything else — bytes are not a filesystem.
 
 `/bin`, `/share` and `/README` are put there at boot by unpacking `rootfs.zip`, a deflated zip
 beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js` reads; the kernel never sees
@@ -829,7 +830,7 @@ the `Fs` above, a syscall or a `/proc` write to reach it, and an answer to what 
 should see — the namespace question §5.1 leaves open.
 
 The universally available escape hatch is the boring one, and it is built: `<input type="file">`
-for import and a Blob download for export, as `/mnt/import` and the `import`/`export` commands.
+for import and a Blob download for export, as `/import` and the `import`/`export` commands.
 Both live on the **page** rather than in the worker, because a file picker and a download need
 the DOM. The picker opens inside the transient activation of the keystroke that ran the command,
 which is why `import` works without a button of its own.

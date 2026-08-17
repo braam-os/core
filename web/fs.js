@@ -166,7 +166,7 @@ export async function parseZip(bytes) {
 //
 // The top-level directories the archive carries are removed first, so a name
 // that is gone from a new release is gone from the store. Whatever it does not
-// carry — /home, /tmp, /mnt — is never named and so never touched.
+// carry — /home, /tmp, /import — is never named and so never touched.
 export function *installOps(entries, version) {
     const tops = new Set(entries.map((e) => e.name.split("/")[0]));
     for (const top of [...tops].sort())

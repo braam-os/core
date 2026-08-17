@@ -119,7 +119,7 @@ and the build treats an unused named parameter as an error.
 
 A program does not have to be part of the system image to run. Paths are looked up through the
 ordinary filesystem, so you can bring the file in with the browser's file picker and run
-`/mnt/import/hello.wasm`, or `curl` it into `/home` and run it there.
+`/import/hello.wasm`, or `curl` it into `/home` and run it there.
 [doc/Programming_Manual.md](doc/Programming_Manual.md) is the guide, and
 [examples/hello/](examples/hello/) is the worked example the SDK installs.
 

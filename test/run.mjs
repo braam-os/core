@@ -337,7 +337,7 @@ if (mode === "--kernel") {
             fail(`the first boot unpacked ${store.unpacks} times, expected 1`);
         if (!store.files.has("/bin/sh"))
             fail("the unpack did not install /bin/sh");
-        if (!store.dirs.has("/tmp") || !store.dirs.has("/mnt/import"))
+        if (!store.dirs.has("/tmp") || !store.dirs.has("/import"))
             fail("boot did not make the directories the archive does not carry");
         const stamp = new TextDecoder().decode(store.files.get("/version") || new Uint8Array(0));
         if (!/^\d+\.\d+\.\d+/.test(stamp))
@@ -1308,20 +1308,20 @@ if (mode === "--kernel") {
     if (row(s, s.cursor_y) !== prompt())
         fail(`^D on chat left ${JSON.stringify(rows(s))}, expected a bare prompt`);
 
-    // M6, third criterion: /mnt/import takes what the picker hands over, and
+    // M6, third criterion: /import takes what the picker hands over, and
     // export sends a file back out through the browser.
     net.reset();
     s = submit("clear", 3040);
     s = submit("import", 3041);
-    if (!rows(s).includes("/mnt/import/notes.txt"))
+    if (!rows(s).includes("/import/notes.txt"))
         fail(`import named nothing: ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 3042);
-    s = submit("cat /mnt/import/notes.txt", 3043);
+    s = submit("cat /import/notes.txt", 3043);
     if (!rows(s).includes("picked"))
         fail(`the imported file did not read back: ${JSON.stringify(rows(s))}`);
 
-    submit("export /mnt/import/notes.txt", 3044);
+    submit("export /import/notes.txt", 3044);
     if (net.saved.length !== 1 || net.saved[0].name !== "notes.txt")
         fail(`export saved ${JSON.stringify(net.saved.map((f) => f.name))}`);
     if (new TextDecoder().decode(net.saved[0].bytes) !== "picked\n")

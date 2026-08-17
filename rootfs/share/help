@@ -18,7 +18,7 @@ false    fail
 grep     [-i] [-v] <text> [<file>...] — pass matching lines
 head     [-n <count>] [<file>...] — the first lines, ten by default
 hog      take memory until the cap refuses more
-import   [<dir>] — copy files from the browser into /mnt/import
+import   [<dir>] — copy files from the browser into /import
 less     [<file>] — page through a file, or the input; q quits
 ls       [-1CRSdhlr] [<path>...] — list directories, in columns on a terminal
 mkdir    <dir>... — create directories

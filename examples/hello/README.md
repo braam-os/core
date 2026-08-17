@@ -18,7 +18,7 @@ was built for.
 Run it on a Braam that is already up — no rebuild of the system:
 
 - **Through the file picker.** Type `import`, choose `hello.wasm`. It lands in
-  `/mnt/import/`. Then `/mnt/import/hello.wasm`.
+  `/import/`. Then `/import/hello.wasm`.
 - **Over the network.** `curl https://example.com/hello.wasm > /home/hello`,
   then `/home/hello`.
 

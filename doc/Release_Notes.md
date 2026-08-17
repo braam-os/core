@@ -7,6 +7,29 @@ of the two needs amending.
 
 ---
 
+## /mnt/import became /import
+
+The picker's landing directory sat under a `/mnt` that never held anything else. `/mnt` is where
+Unix puts *mounted* filesystems, and §5.1's whole point is that there is one store and one
+generated tree: `/bin`, `/share`, `/home`, `/tmp` and the import directory are all directories in
+the same `OpfsFs`. A `/mnt` with a single ordinary directory under it promised a second
+filesystem the system has no way to give, and cost every user of the escape hatch four extra
+characters on a path they type by hand. `/import` says what it is at the root, beside the rest.
+
+It is a rename with no mechanism behind it: `make_dirs` in `src/user/boot.cpp` creates one
+directory instead of two, `import`'s default destination is `/import`, and the archive still
+carries neither — `installOps` names only the top-level directories `rootfs.zip` actually
+contains, so the tree it does not carry is still never touched.
+
+**An existing store keeps its old `/mnt/import`, files and all.** Boot does not migrate it and
+nothing removes it, because a boot-time rename would have to decide what to do about a collision
+with a `/import` already made and would run on every boot for ever after. `mv /mnt/import/* /import`
+then `rm -r /mnt` is the whole of it, and a store that is never touched simply carries a stale
+directory — which is what §5.2 means by the archive, not the store, being what the system
+recovers from.
+
+---
+
 ## ls asks whether it is talking to a terminal
 
 `ls` printed one name per line, always, and understood one flag. Bringing BSD's `ls` across —

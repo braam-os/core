@@ -2,11 +2,11 @@
 #include "proc/io.h"
 
 // The universally available way in (Concept.md §5.4): a file picker, and the
-// bytes land in /mnt/import. The picker needs the page's transient activation,
+// bytes land in /import. The picker needs the page's transient activation,
 // which the keystroke that ran this command still holds.
 Task<i32> proc_main(Args args)
 {
-    Str dest = args.size() > 1 ? args[1] : Str("/mnt/import");
+    Str dest = args.size() > 1 ? args[1] : Str("/import");
     if (args.size() > 2) {
         co_await write_all(SYS_STDERR, "usage: import [<dir>]\n");
         co_return 2;
