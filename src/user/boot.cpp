@@ -14,6 +14,7 @@
 #include "kernel/traits.h"
 #include "kernel/version.h"
 #include "procfs.h"
+#include "svc/svc.h"
 #include "tty.h"
 
 namespace {
@@ -22,6 +23,10 @@ namespace {
 // long one has to last to count as having got going.
 constexpr u32 RESPAWN_TRIES    = 3;
 constexpr f64 RESPAWN_FLOOR_MS = 1000;
+
+// The host's description of itself, asked for once. A pointer rather than a
+// String, because a namespace-scope global must be trivially destructible.
+String *g_host = nullptr;
 
 // On a row of its own: a shell that died left its prompt on this one.
 void say(Str s)
@@ -177,6 +182,59 @@ Task<void> show_motd()
     screen_style(COLOR_WHITE, COLOR_BLACK, 0);
 }
 
+// The half of the description above the blank line: the fields short enough to
+// put on the boot grid. The rest — the locale and the agent string, which wraps
+// a row on its own — waits in /proc/host for anyone who asks.
+Str banner_half(Str s)
+{
+    for (usize i = 0; i + 1 < s.size(); i++)
+        if (s[i] == '\n' && s[i + 1] == '\n')
+            return s.substr(0, i + 1);
+    return s;
+}
+
+// What the system is running on, under the version line main.cpp already wrote.
+// It is here rather than there because that export cannot await and runs before
+// the host's first resize(), so neither the host nor the real geometry is known
+// yet — and by the first tick both are.
+//
+// A description that does not arrive is not an error: the store is what boot
+// cannot do without, and this is the motd's kind of line, not the OPFS one.
+Task<void> show_host(const StorageBackend &b)
+{
+    if (Task<Result<String>> t = host_info()) {
+        Result<String> r = co_await t;
+        if (r.is_ok() && !r.value().empty()) {
+            if (String *held = heap_new<String>(move(r.value()))) {
+                heap_delete(g_host);
+                g_host = held;
+            }
+        }
+    }
+
+    if (Str top = banner_half(host_facts()); !top.empty())
+        screen_write(top);
+
+    {
+        Buf<96> line;
+        line.put("screen   ").put(screen().cols).put('x').put(screen().rows);
+        say(line.str());
+    }
+
+    // A snapshot, deliberately: `df` is the live view, and asking it again is
+    // what the boot figure is not for.
+    Buf<96> line;
+    line.put("store    OPFS, ");
+    if (b.quota)
+        line.put(u64((b.usage > b.quota ? 0 : b.quota - b.usage) / 1000000))
+            .put(" MB free of ")
+            .put(u64(b.quota / 1000000))
+            .put(" MB");
+    else
+        line.put("quota unknown");
+    say(line.str());
+}
+
 // Why /bin/sh would not resolve, on one line. Three different repairs hide
 // behind one Result: a store with no shell in it, one built against another
 // kernel, and one whose bytes are damaged.
@@ -208,6 +266,11 @@ void no_shell(Error e)
 
 } // namespace
 
+Str host_facts()
+{
+    return g_host ? g_host->str() : Str();
+}
+
 Task<bool> boot_filesystem(const u32 &pid)
 {
     // Idempotent. A second boot in a test finds the mounts already there and
@@ -229,6 +292,11 @@ Task<bool> boot_filesystem(const u32 &pid)
         say("braam: private browsing usually explains it; try an ordinary window");
         co_return false;
     }
+
+    // What the machine is, before what is being done to it: the mounts and the
+    // unpack below say what happened, and this says where.
+    if (Task<void> t = show_host(b))
+        co_await t;
 
     Fs *root = heap_new<OpfsFs>();
     if (!root || vfs_mount("/", root).is_err()) {

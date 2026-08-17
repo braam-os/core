@@ -82,6 +82,15 @@ Task<Result<String>> clip_wait()
     co_return co_await t;
 }
 
+Task<Result<String>> host_info()
+{
+    SvcCall c(SvcOp::HostInfo);
+    Task<Result<String>> t = svc_blob(c);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
 Task<Result<void>> clip_write(Str text)
 {
     SvcCall c(SvcOp::ClipWrite, "", 0);

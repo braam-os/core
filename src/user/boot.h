@@ -21,6 +21,12 @@ constexpr Str MOTD = "/share/motd";
 // for the claim the upgrade prompt takes on the keyboard.
 Task<bool> boot_filesystem(const u32 &pid);
 
+// What the host said about itself at boot, as `key value` lines with a blank
+// line splitting what the banner showed from the rest (src/svc/svc.h). Cached
+// because /proc/host is generated synchronously and a browser does not change
+// mid-session; empty before boot has asked, and after an answer that failed.
+Str host_facts();
+
 // `pid` is init's own, which is the shell's: it runs inside init's task rather
 // than a job of its own. Read a tick after this is called, so the caller may
 // fill it in once sched_spawn has told it what the pid is.

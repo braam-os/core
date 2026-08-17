@@ -50,17 +50,13 @@ BRAAM_EXPORT("init") void init(u32 heap_base)
     if (!screen_resize(80, 24))
         panic("braam: no screen");
 
-    HeapStats s = heap_stats();
+    // The version and what it cost to get here, and nothing else: the heap is
+    // /proc/meminfo's, and what the host is runs a tick later, from boot.cpp —
+    // this export cannot await, and the grid is still the placeholder above.
     Buf<128> line;
     line.put("braam ")
         .put(BRAAM_VERSION)
-        .put(" — heap at ")
-        .put_hex(u32(heap_origin()))
-        .put(", ")
-        .put(u32(s.bytes_reserved >> 10))
-        .put(" KiB, ")
-        .put(u32(s.allocs))
-        .put(" allocs, up in ")
+        .put(" — up in ")
         .put(u32((host_now() - started) * 1000))
         .put(" us");
     log(line.str());

@@ -31,6 +31,9 @@ export class FakeNet {
         this.saved = [];    // {name, bytes}
         this.sockets = [];
         this.now = 1782000000000;  // a fixed epoch, so `date` prints the same twice
+        // Short and fixed: it lands on the boot grid, which the tests read back,
+        // and the blank line is the split the banner stops at.
+        this.hostinfo = "browser  Fake 1\ncpu      2 cores\n\nlocale   en\nagent    fake\n";
         this.peak = 0;             // most instances alive at once (M8)
     }
 
@@ -187,6 +190,10 @@ export function makeFakeSvc(mem, net, kernel) {
             if (net.clipDenied)
                 throw { braam: E.PERM };
             r.write(utf8.encode(net.clipboard));
+            return;
+
+        case OP.HOST_INFO:
+            r.write(utf8.encode(net.hostinfo));
             return;
 
         // Answered by paste(), which stands in for the user pressing ⌘V.

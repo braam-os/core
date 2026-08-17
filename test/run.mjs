@@ -457,7 +457,7 @@ if (mode === "--kernel") {
     for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "edit",
                         "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
                         "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "pwd", "rm", "sleep",
-                        "tail", "timeout", "touch", "true", "version", "watch", "wc"])
+                        "tail", "timeout", "touch", "true", "uname", "version", "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
 
@@ -780,6 +780,44 @@ if (mode === "--kernel") {
         fail(`df did not report the quota: ${JSON.stringify(df)}`);
     if (!df.some((line) => /^used      \d+ bytes$/.test(line)))
         fail(`df did not report the usage: ${JSON.stringify(df)}`);
+
+    // /proc/host is what the kernel knows about itself and what the host said
+    // about the browser at boot, and `uname` reformats it — the arrangement
+    // `mount` has over /proc/mounts. The host half comes from the fake's fixed
+    // string, so the whole file is deterministic.
+    s = submit("clear", 1182);
+    s = submit("cat /proc/host", 1183);
+    const host = rows(s);
+    for (const want of ["system   braam", "machine  wasm32", "browser  Fake 1", "agent    fake"])
+        if (!host.includes(want))
+            fail(`/proc/host is missing ${JSON.stringify(want)}: ${JSON.stringify(host)}`);
+    if (!host.some((line) => /^release  \d+\.\d+\.\d+/.test(line)))
+        fail(`/proc/host did not report the release: ${JSON.stringify(host)}`);
+    if (!host.includes(`screen   ${s.cols}x${s.rows}`))
+        fail(`/proc/host did not report the geometry: ${JSON.stringify(host)}`);
+
+    // The default is the system name; -m is the one field neither the host nor
+    // the version supplies.
+    s = submit("clear", 1184.1);
+    s = submit("uname", 1184.2);
+    if (!rows(s).includes("braam"))
+        fail(`uname printed ${JSON.stringify(rows(s))}, expected braam`);
+    s = submit("uname -m", 1184.3);
+    if (!rows(s).includes("wasm32"))
+        fail(`uname -m printed ${JSON.stringify(rows(s))}, expected wasm32`);
+
+    // -a is every field, and the blank line splitting the banner's half from
+    // the rest is a marker rather than something to print.
+    s = submit("clear", 1184.4);
+    s = submit("uname -a", 1184.5);
+    const all = rows(s).filter((line) => line && !line.includes("$"));
+    if (!all.includes("system   braam") || !all.includes("agent    fake"))
+        fail(`uname -a printed ${JSON.stringify(all)}`);
+    s = submit("uname -z", 1184.6);
+    if (!rows(s).some((line) => line.startsWith("usage: uname ")))
+        fail(`uname -z printed ${JSON.stringify(rows(s))}, expected a usage line`);
+    if (!rows(s).includes(prompt(2)))
+        fail(`uname -z left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
 
     // M4, second criterion: ^C interrupts a running pipeline and the prompt
     // comes back. tick's return value is what proves the sleep really went.

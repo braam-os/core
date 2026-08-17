@@ -38,6 +38,25 @@ Task<i32> ask_clock()
     co_return 0;
 }
 
+// What the host says about itself, which boot asks for once and keeps. The
+// blank line in the middle is the contract: above it is the banner's half.
+bool host_split;
+
+Task<i32> ask_host()
+{
+    Task<Result<String>> t = host_info();
+    if (!t)
+        co_return 1;
+    Result<String> r = co_await t;
+    answered         = true;
+    if (r.is_err()) {
+        failure = r.error();
+        co_return 1;
+    }
+    host_split = r.value().str().contains("\n\n");
+    co_return 0;
+}
+
 // Open, send, receive: the loopback socket in the fake delivers to itself when
 // it is the only one, so one task exercises the whole path.
 Task<i32> ask_socket()
@@ -110,6 +129,17 @@ void test_svc()
     CHECK_EQ(sched_tick(0), -1);
     CHECK(answered);
     CHECK(clock_read.epoch_ms > 0);
+    CHECK_EQ(host_orphans(), 0);
+
+    // The host's description of itself, over the sized-twice reply that every
+    // string-returning service uses.
+    sched_reset();
+    answered   = false;
+    host_split = false;
+    CHECK(sched_spawn(ask_host()) != 0);
+    CHECK_EQ(sched_tick(0), -1);
+    CHECK(answered);
+    CHECK(host_split);
     CHECK_EQ(host_orphans(), 0);
 
     // A socket is a slot the host deposits into and the kernel then owns; the

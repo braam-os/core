@@ -25,9 +25,10 @@ export const OP = {
     PICK_READ: 12,
     SAVE: 13,
     CLIP_WAIT: 14,
-    PROC_SPAWN: 15,
-    PROC_STEP: 16,
-    PROC_KILL: 17,
+    HOST_INFO: 15,
+    PROC_SPAWN: 16,
+    PROC_STEP: 17,
+    PROC_KILL: 18,
 };
 
 const utf8 = new TextEncoder();
@@ -40,6 +41,92 @@ function bytesOf(v) {
     if (v instanceof Uint8Array)
         return v;
     return new Uint8Array(v);
+}
+
+// "arm" and "64" join into arm64, but "x86" and "64" are x86-64 and not x8664.
+function architecture(hi) {
+    if (!hi.architecture)
+        return "";
+    if (!hi.bitness)
+        return hi.architecture;
+    if (hi.architecture === "arm" && hi.bitness === "64")
+        return "arm64";
+    return `${hi.architecture}-${hi.bitness}`;
+}
+
+// Windows reports a platform version that is not a Windows version: 11 says
+// 15.0.0. The mapping is published rather than guessed at — UA-CH gives 0 for
+// 7/8/8.1, which it cannot tell apart, so those get no number at all.
+function platformVersion(platform, version) {
+    if (!version)
+        return "";
+    if (platform !== "Windows")
+        return version;
+    const major = Number.parseInt(version, 10);
+    if (major >= 13)
+        return "11";
+    return major > 0 ? "10" : "";
+}
+
+// What the browser will state about itself, as `key value` lines. A blank line
+// splits the two halves: above it is what the boot banner shows, below it is
+// for /proc/host alone — the agent string wraps a row on its own and only says
+// anything when the interpreted fields above are missing.
+//
+// No user-agent parsing. The precise fields belong to userAgentData, which is
+// Chromium's alone; a UA string is a compatibility fiction, and Safari still
+// claims "Intel Mac OS X 10_15_7" on Apple Silicon, so a parser would report a
+// confident lie. A field nothing can answer is left out rather than filled in
+// with "unknown". No CPU model and no clock rate appear here because no browser
+// API discloses either.
+async function describeHost() {
+    const n = navigator;
+    const top = [];
+    const rest = [];
+    const say = (into, key, value) => {
+        if (value)
+            into.push(key.padEnd(9) + value);
+    };
+
+    const uad = n.userAgentData; // absent outside Chromium and off a secure origin
+    if (uad) {
+        let hi = {};
+        try {
+            hi = await uad.getHighEntropyValues(
+                ["architecture", "bitness", "platformVersion", "uaFullVersion"]);
+        } catch {
+            // Refused, which the low-entropy brands below survive.
+        }
+
+        // One of these is deliberate nonsense, and the order of the rest is
+        // deliberately varied. Chrome lists both "Chromium" and "Google Chrome",
+        // so taking the first real one would name a different browser on
+        // different loads: the specific brand is the informative one.
+        const brands = (uad.brands || []).filter((b) => !/not.a.brand/i.test(b.brand));
+        const brand = brands.find((b) => b.brand !== "Chromium") || brands[0];
+        if (brand)
+            say(top, "browser", `${brand.brand} ${hi.uaFullVersion || brand.version}`);
+        if (uad.platform) {
+            const version = platformVersion(uad.platform, hi.platformVersion);
+            say(top, "os", version ? `${uad.platform} ${version}` : uad.platform);
+        }
+        say(top, "arch", architecture(hi));
+    }
+
+    if (n.hardwareConcurrency)
+        say(top, "cpu", `${n.hardwareConcurrency} cores`);
+    if (n.deviceMemory) // Chromium only, and rounded to a power of two
+        say(top, "memory", `${n.deviceMemory} GB`);
+
+    say(rest, "locale", n.language);
+    try {
+        say(rest, "timezone", Intl.DateTimeFormat().resolvedOptions().timeZone);
+    } catch {
+        // No Intl in this build; the line simply does not appear.
+    }
+    say(rest, "agent", n.userAgent);
+
+    return `${top.join("\n")}\n\n${rest.join("\n")}\n`;
 }
 
 // The kernel's request spec for a fetch: a method line, header lines, a blank
@@ -269,6 +356,12 @@ export function makeSvcImport(mem, deposit, relay, reply, proc) {
 
         case OP.CLIP_WAIT:
             await clipboard(r, held, "wait", () => relay({ svc: "clipWait" }));
+            return;
+
+        // Re-readable, unlike the clipboard, so there is nothing to hold across
+        // the sized-twice retry: it is simply built again.
+        case OP.HOST_INFO:
+            r.write(utf8.encode(await describeHost()));
             return;
 
         case OP.CLIP_WRITE:

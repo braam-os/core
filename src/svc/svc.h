@@ -23,6 +23,8 @@ enum class SvcOp : u32 {
     PickRead,  // ref, flags = index, result = offset -> buf, as much as fits
     Save,      // arg = the file name, buf = the bytes
     ClipWait,  // -> buf, once the user pastes
+    HostInfo,  // -> buf = what the browser says about itself, `key value` lines,
+               //   a blank line splitting what the banner shows from the rest
 
     // Isolated processes (Concept.md §4.3), in src/svc/proc.h. They are here
     // rather than behind an import of their own because §2.2 asks for one
@@ -93,6 +95,14 @@ Task<Result<WallClock>> svc_clock();
 
 Task<Result<String>> clip_read();
 Task<Result<void>> clip_write(Str text);
+
+// What the browser will state about itself: browser, OS, architecture, cores,
+// memory, locale. Asked once at boot and cached (src/user/boot.cpp), because a
+// /proc file is generated synchronously and the answer cannot change anyway.
+//
+// A CPU model and a clock rate are not in it: no browser API discloses either,
+// and the fields that would carry them are omitted rather than guessed at.
+Task<Result<String>> host_info();
 
 // The clipboard the other way round: browsers only disclose it inside a user
 // gesture handler, and a command runs long after the keystroke that started it

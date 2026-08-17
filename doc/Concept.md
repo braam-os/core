@@ -807,6 +807,13 @@ style: a new service is an enum value on each side.
 - **File transfer** — the picker, opening one of its files, and a save.
 - **The wall clock** — milliseconds since the epoch and the browser's offset from UTC.
   `Sys::Now` is monotonic and cannot name a day, so `date` needs this.
+- **The host's description of itself** — browser, OS, architecture, cores, memory, locale and the
+  raw user-agent string, as `key value` lines with a blank line separating what the boot banner
+  shows from the rest. Asked once at boot and kept (`src/user/boot.cpp`), because `/proc/host`
+  is generated synchronously and a browser does not change under a running tab. There is no CPU
+  model and no clock rate in it: no browser API discloses either, and no user-agent string is
+  parsed to guess — Safari still claims `Intel Mac OS X 10_15_7` on Apple Silicon, so a parser
+  would report a confident lie. What cannot be had is left out rather than filled in.
 - **Process operations** — compiling a binary, instantiating it in a worker, stepping it and
   killing it (§4.3). They are asynchronous operations on the host, which is this convention
   exactly, so they are operations here rather than an interface of their own; `aux` in the

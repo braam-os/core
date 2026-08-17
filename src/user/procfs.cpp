@@ -1,10 +1,12 @@
 #include "procfs.h"
 
+#include "boot.h"
 #include "exec.h"
 #include "fs/vfs.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/sched.h"
+#include "kernel/screen.h"
 #include "kernel/text.h"
 #include "kernel/traits.h"
 #include "kernel/version.h"
@@ -16,7 +18,7 @@ namespace {
 // describes a different moment from its first.
 constexpr usize PROC_MAX = 64;
 
-constexpr Str FILES[] = { "cwd", "meminfo", "mounts", "uptime", "version" };
+constexpr Str FILES[] = { "cwd", "host", "meminfo", "mounts", "uptime", "version" };
 
 bool generate(Str name, String &out)
 {
@@ -48,6 +50,19 @@ bool generate(Str name, String &out)
     if (name == "version") {
         b.put(BRAAM_VERSION).put('\n');
         return out.append(b.str());
+    }
+
+    // What this is and what it runs on, which `uname` reformats. The first four
+    // the kernel knows for itself; the rest the host said at boot and boot kept,
+    // since a /proc file is generated here and now with nothing to await.
+    //
+    // The screen is read fresh every time — it moves with the window. Storage is
+    // not here at all: quota and usage are live figures, and `df` asks for them.
+    if (name == "host") {
+        b.put("system   braam\nrelease  ").put(BRAAM_VERSION);
+        b.put("\nmachine  wasm32\nscreen   ").put(screen().cols).put('x').put(screen().rows);
+        b.put('\n');
+        return out.append(b.str()) && out.append(host_facts());
     }
 
     // prefix, kind, rw|ro, and the bytes the mount holds — which is what `df`

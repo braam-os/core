@@ -7,6 +7,74 @@ of the two needs amending.
 
 ---
 
+## The banner names the host, not the heap
+
+The boot line read `braam 0.2.65-6e62a37 — heap at 0x00030000, 64 KiB, 1 allocs, up in 200 us`.
+Three of its four facts were allocator internals that `/proc/meminfo` already reports in more
+detail, printed at the one moment nobody is asking about the allocator. What was missing is the
+thing a browser makes genuinely hard to know: what the system is running *on*. Nothing in `web/`
+read `navigator.userAgent`, `hardwareConcurrency`, `deviceMemory` or `userAgentData` at all.
+
+Now the version line carries the version and the boot time, and a block under it names the
+browser, the OS, the architecture, the cores, the memory, the grid and the store. The same facts
+are `/proc/host`, and `uname` reformats that file the way `mount` reformats `/proc/mounts`.
+
+**Two constraints decided the shape, and neither was negotiable.** `init()` is a synchronous
+export, so nothing in it can `co_await` a service — and it runs before the host's first
+`resize()`, so `screen().cols` there is always the placeholder 80. And `/proc` is generated
+synchronously: `generate()` returns `bool` and `stat`/`list`/`open` all call it without awaiting,
+so a `/proc/host` that asked the host on every read was never possible. Both point one way: ask
+once from the boot coroutine, which runs on the first tick with the real geometry in place, and
+keep the answer. A cache is not a compromise here — a browser does not change under a running
+tab. The storage figures cost nothing extra either, because `boot_filesystem` already awaits
+`storage_info()` as its first act and has the quota in hand.
+
+**What a browser will not tell you.** There is no `navigator.cpu`. A CPU model and a clock rate
+do not exist in any browser API, and the two ways of faking them were both refused: a
+microbenchmark measures the JIT and the coarsened timer as much as the silicon, and the
+WebGL renderer string names a GPU, not a processor. They are omitted. Cores come from
+`hardwareConcurrency`, which is everywhere; architecture, OS version and full browser version
+come from `userAgentData.getHighEntropyValues()`, which is Chromium's alone.
+
+**No user-agent parsing, deliberately.** It would have filled the gap on Safari and Firefox, and
+it would have lied: Safari's UA still says `Intel Mac OS X 10_15_7` on Apple Silicon. A field
+nothing can answer is left out, and the raw agent string is shown instead of an interpretation of
+it. That is the whole reason the wire format has a blank line in the middle — above it is what is
+short enough and useful enough for the boot grid, below it the locale and the agent string, which
+wraps a row on its own and only carries information when the interpreted fields are absent. Boot
+writes the half above; `/proc/host` serves all of it. It also means the kernel never parses a
+field: `next_line`/`next_field` live in `src/proc/io.h`, the process runtime, which the kernel
+cannot reach — so the split is a single scan for `"\n\n"` rather than a parser in `boot.cpp`.
+
+**Two things `userAgentData` gets wrong if taken literally.** Chrome's `brands` lists both
+`Chromium` and `Google Chrome`, and varies the order on purpose to break sniffers — so taking the
+first non-GREASE entry names a different browser on different loads. The specific brand is the
+one worth printing, so `Chromium` is chosen only when nothing else is there. And Windows reports
+a `platformVersion` that is not a Windows version: Windows 11 says `15.0.0`. That mapping is
+published rather than inferred, so it is applied; UA-CH answers `0` for 7, 8 and 8.1 without
+distinguishing them, and those get no number at all rather than a wrong one.
+
+**The formatting is the host's.** `describeHost()` in `web/svc.js` returns finished `key value`
+lines. Which fields exist varies by browser, so composing them in the kernel would have meant
+teaching it about `userAgentData`; this way `kernel.wasm` grew by the price of one service
+wrapper. `HostInfo` sits with the other services rather than after the process operations, which
+renumbered `PROC_SPAWN`/`STEP`/`KILL` — safe because only `web/svc.js` writes those numbers down,
+the C++ side using enum names and `test/fakesvc.mjs` importing the table.
+
+**`uname -a` prints the block rather than one packed line.** There is no POSIX contract here, and
+four fields is not what is worth reading about a browser. `-s`, `-r` and `-m` are the classic
+three, and `-m` is `wasm32` — the one fact neither the host nor the version supplies.
+
+Storage stayed out of `/proc/host`. Quota and usage are live, `df` exists to ask for them, and a
+cached copy would go stale; the banner's `store` line is honestly a boot-time snapshot.
+
+The banner block costs four rows of the grid. On the 60×16 screen `test/run.mjs` resizes to, boot
+now occupies 13 rows of 16 — which is why the fake's host string in `test/fakesvc.mjs` is two
+short lines. A longer one would push the motd off the top and the motd assertion is what would
+catch it.
+
+---
+
 ## One store, and rootfs.zip
 
 Three filesystems held the namespace: `MemFs` for `/`, `BundleFs` for a read-only `/bin` and

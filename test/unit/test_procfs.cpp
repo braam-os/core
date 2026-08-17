@@ -57,6 +57,10 @@ void test_procfs()
     CHECK(slurp("/proc/meminfo").str().starts_with("reserved "));
     CHECK(slurp("/proc/mounts").str().starts_with("/proc procfs ro"));
     CHECK(!slurp("/proc/uptime").empty());
+    // The four fields the kernel answers for itself. The host's half is boot's,
+    // which has not run here, so /proc/host is the kernel's alone in this case.
+    CHECK(slurp("/proc/host").str().starts_with("system   braam\nrelease  "));
+    CHECK(slurp("/proc/host").str().contains("\nmachine  wasm32\nscreen   "));
     CHECK(slurp("/proc/jobs").empty()); // no background jobs in this case
 
     // stat agrees with what a read produces, which is what `ls -l` shows.

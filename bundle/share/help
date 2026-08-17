@@ -30,6 +30,7 @@ tail     [-n <count>] [<file>...] — the last lines, ten by default
 timeout  <ms> <command> [<arg>...] — run a command, killing it after a delay (124)
 touch    <file>... — create empty files
 true     succeed
+uname    [-a|-s|-r|-m] — name the system, and with -a the host it runs on
 version  print the kernel version
 watch    [-n <ms>] <command> [<arg>...] — run a command over and over
 wc       [<file>...] — count lines, words and bytes
