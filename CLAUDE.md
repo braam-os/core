@@ -27,7 +27,7 @@ exports, and the three CTest cases pass.
 - **[doc/System_Calls.md](doc/System_Calls.md)** explains the kernel↔process mechanism end to end:
   the deferred step, staging, the two token namespaces, cancellation, the kill, and the whole
   operation table. It is *derived* — §4.3 is normative — and anything touching `src/proc/`,
-  `src/user/exec.cpp`, `src/kernel/sysabi.h` or `web/proc.js` must keep it true.
+  `src/user/`, `src/kernel/sysabi.h` or `web/proc.js` must keep it true.
 - **[doc/Programming_Manual.md](doc/Programming_Manual.md)** is the SDK's user-facing guide.
 
 ## Build

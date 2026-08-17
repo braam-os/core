@@ -7,6 +7,57 @@ of the two needs amending.
 
 ---
 
+## exec.cpp was four things in one file
+
+At 2,211 lines it was a 3.4× outlier over the next largest source in the tree and more than half
+of `src/user/`, and the reason it could not shrink was structural: everything in it sat in one
+anonymous namespace, so nothing could leave without first becoming a name another translation
+unit can see. `src/user/proctab.h` is that step — the process record, the descriptor behind a
+number, the parked call, and the counted references over all three. It is private to the
+directory in the only way this tree has ever made a header private: it is not installed, and it
+says at the top that `exec.cpp`, `syscall.cpp` and `proctab.cpp` are the whole of its audience.
+`exec.h` remains the surface for everyone else, which is why `boot.cpp`, `procfs.cpp` and
+`main.cpp` did not change a line.
+
+The cut is by *what the code is doing*, not by size. `exec.cpp` keeps the life of a process —
+resolving a name, waiting for a worker, stepping the instance, and the four entry points the
+kernel exports. `syscall.cpp` keeps what a process asks for: `proc_syscall` and the child a
+`Sys::Spawn` creates, since `Spawned` exists only because that operation does. `proctab.cpp`
+keeps the table and its accessors, and `exec_proc_state` with them — `/proc`'s view of a process
+is a query over that table and nothing else, which is what lets `g_procs` stay a file-local of
+the one file that owns it.
+
+**The syscall switch stayed one file.** The `Sys` enum blocks the ABI into families and the
+switch follows it, so cutting it four more ways along those lines was the obvious next move and
+was decided against: a family would then be a coroutine of its own, and a coroutine is a frame
+per outstanding call. The read of §8.2 that matters here is that a frame past 512 bytes costs a
+whole 64 KiB span, and the dispatcher's frame is already the union of every arm's live state —
+splitting it would have added a second frame to that, not replaced it. One file of 1,320 lines
+with four visible sections is the cheaper shape.
+
+**The helper set stops where the frame does.** `CO_CALL` (a Task that would not allocate is
+`Err(NoMemory)`, not a crash) and `CO_RETRY` (an `Again` is a stray wake) are macros for exactly
+that reason: a function wrapping an `await` is a coroutine, and these had to stay inline. What is
+left is plain functions — `chunk_reply` and `write_status` for the tails a read and a write
+share, `handle_bind` for the five arms that open something, `reply_u32` for the twelve that
+answered with a fixed header. Nothing was factored that had fewer than three callers.
+
+**Cancellation folded to one exit.** The switch had twenty-six `co_return Err(Cancelled)`
+between its arms, each an early return out of a coroutine and each carrying its own unwind. They
+are now a single check after the switch: `-Error::Cancelled` in `status` means the reply is
+abandoned, wherever in the switch it was set. That is the same semantics — no arm ever reported
+cancellation *to* the program — and it is where the size went: 147,182 bytes before the split,
+146,024 after, against a budget of 262,144. A refactor that was supposed to cost a little
+returned a kilobyte.
+
+Two out-of-memory paths were wrong and are fixed in passing, both the same mistake. `Sys::Fetch`
+bound its handle into the descriptor table and *then* released it if copying the headers failed,
+leaving the table pointing at a freed block; the release now happens before the bind. `handle_bind`
+exists so that the other four arms cannot make the same mistake: it binds, or it closes what it
+was given and reports `-NoMemory`, and there is no order left for a caller to get wrong.
+
+---
+
 ## The tree that becomes the root is called rootfs
 
 `bundle/` is now `rootfs/`, and the staging copy `build/bundle/` is `build/rootfs/`. The name was

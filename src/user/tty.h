@@ -64,7 +64,7 @@ private:
 // The alternate screen, as RAII: whoever holds this has the grid for as long
 // as it lives, and the shell's screen comes back when it dies. A destructor
 // rather than a call at the end, so that a process killed mid-paint gets its
-// screen restored anyway — ~Proc in exec.cpp is what runs it.
+// screen restored anyway — ~Proc in proctab.h is what runs it.
 //
 // There is no second grid: the cells are copied to a heap block and copied
 // back, which is what "alternate screen" means when the terminal is an array

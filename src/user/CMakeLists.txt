@@ -7,6 +7,8 @@ add_library(braam_user STATIC
     exec.cpp
     io.cpp
     procfs.cpp
+    proctab.cpp
+    syscall.cpp
     tty.cpp)
 
 target_link_libraries(braam_user PUBLIC braam_svc braam_fs braam_core braam_flags)

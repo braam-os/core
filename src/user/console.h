@@ -42,7 +42,7 @@ bool console_fg_has(u32 pid);
 // Who put what is in front there. The foreground belongs to whoever armed it:
 // a shell arms its stages one at a time and is not the keyboard's owner while
 // it does — it lets go before it spawns — so this is what says the second
-// stage is the same caller as the first (exec.cpp, Sys::Fg).
+// stage is the same caller as the first (syscall.cpp, Sys::Fg).
 u32 console_fg_owner();
 
 // How many times ^C has reached a foreground. The shell samples it around a

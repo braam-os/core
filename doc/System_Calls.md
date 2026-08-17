@@ -286,7 +286,7 @@ Four operations, answered inside the export, never parking:
 | 3 | `Now` | — | milliseconds since boot |
 | 4 | `Stage` | `a0` = bytes about to be copied in | a kernel address, or 0 |
 
-`exec_sys` (`src/user/exec.cpp:1947-1966`) is a plain switch with no scheduling in it at all.
+`exec_sys` (`src/user/exec.cpp:319-337`) is a plain switch with no scheduling in it at all.
 Note that `Sys::Exit` only *records* the status on the process record; the process still has to
 return from `_start`/`_resume` before the step reports `Exited`.
 
@@ -557,7 +557,7 @@ Both of those had to be fixed for this to work, and each was a real bug waiting:
 
 - **One staging buffer per process would have lost data.** The second `Sys::Stage` would have
   handed back the same block and overwritten the first call's payload before its server read it.
-  So the staging block lives on the `Call` record (`src/user/exec.cpp:169-183`), allocated on
+  So the staging block lives on the `Call` record (`src/user/proctab.h:164-173`), allocated on
   demand and promoted out of `p->staging` when `sys_async` arrives.
 - **One proxy performing calls in turn would have starved them.** A socket read that never
   completes would hold up the keystroke behind it. So the stepper spawns a scheduler job per
@@ -618,11 +618,11 @@ status and a message.
 
 | Status | Meaning | Where |
 |---|---|---|
-| `p->exit` | the process returned from `proc_main` | `exec.cpp:1903` |
-| 126 | the binary will not instantiate | `exec.cpp:1874` |
-| 130 | cancelled — `^C`, `kill`, a job going away | `exec.cpp:1871,1900,1931` |
-| 132 | trapped | `exec.cpp:1907` |
-| 1 | a resource failure, or "suspended with nothing pending" | `exec.cpp:1924` |
+| `p->exit` | the process returned from `proc_main` | `exec.cpp:284` |
+| 126 | the binary will not instantiate | `exec.cpp:252` |
+| 130 | cancelled — `^C`, `kill`, a job going away | `exec.cpp:249,279,312` |
+| 132 | trapped | `exec.cpp:289` |
+| 1 | a resource failure, or "suspended with nothing pending" | `exec.cpp:306` |
 
 "Suspended with nothing pending" is unrepresentable in a correct runtime — a step that reports
 `Suspended` must have parked on something — so it is reported rather than looped on.
@@ -652,7 +652,7 @@ calls is an ABI nothing tests.
 ### Asynchronous — `sys_async(op, token, ptr, len)`
 
 Reply is `i32 status` then data. A negative status is `-Error`. Served in
-`proc_syscall`, `src/user/exec.cpp:746-1823`.
+`proc_syscall`, `src/user/syscall.cpp:380-1320`.
 
 | # | Name | Op-word arg | Payload | Status | Data |
 |---|---|---|---|---|---|
@@ -813,7 +813,7 @@ pid would name somebody else's process rather than nothing.
 
 `SYS_O_*` and `SYS_KIND_*` are deliberately *not* the VFS's numbers. A process cannot see the
 filesystem, and the numbers a binary compiled today speaks must not move because the VFS's did;
-`vfs_flags` (`src/user/exec.cpp:391-405`) maps between them one bit at a time.
+`vfs_flags` (`src/user/syscall.cpp:33-47`) maps between them one bit at a time.
 
 `SYS_CHUNK` being 512 rather than a rounder number is the allocator: `FS_BLOCK` is the top size
 class on both sides of the wire, and one byte more costs a whole 64 KiB span (§8.2).

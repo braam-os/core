@@ -1,5 +1,5 @@
 // The kernel↔process wire (Concept.md §4.3), spoken by the dispatcher in
-// src/user/exec.cpp and by the process runtime in src/proc/. It sits beside
+// src/user/syscall.cpp and by the process runtime in src/proc/. It sits beside
 // host.h for the same reason: an ABI belongs in one file that both ends
 // include, so neither can drift alone.
 //
