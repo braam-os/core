@@ -463,7 +463,7 @@ if (mode === "--kernel") {
                         "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
                         "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd", "rm",
                         "sleep",
-                        "tail", "timeout", "touch", "true", "uname", "version", "vmstat",
+                        "tail", "timeout", "touch", "true", "uname", "vmstat",
                         "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);

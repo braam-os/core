@@ -108,7 +108,6 @@ target_link_libraries(kernel PRIVATE
 # Ninja, which is free to compile a dependent's objects early.
 add_dependencies(kernel revision)
 add_dependencies(braam_user revision)
-add_dependencies(bin_version revision)
 
 # bundle/ is packed rather than copied: the host unpacks one archive into OPFS,
 # so it fetches one file instead of a tree file by file. The process binaries
