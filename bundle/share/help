@@ -10,7 +10,7 @@ chat     <url> [<nick>] — talk over a WebSocket to whoever else is there
 clear    blank the screen
 curl     [-i] [-X <method>] [-H <header>] [-d <data>] <url> — fetch a URL
 date     [-u] — print the date and time
-df       report storage quota, usage and durability
+df       [-h] — report filesystem space, and with -h in scaled units
 echo     [-n] [word...] — write the arguments
 edit     <file> — a full-screen editor; ^S saves, ^Q quits
 export   <file> [<name>] — download a file out of the browser

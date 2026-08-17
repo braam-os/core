@@ -257,12 +257,17 @@ Task<void> show_host(const StorageBackend &b)
     // How much room there is, and not how much is left: the usage is the half
     // that moves, and a figure that was true at boot is the wrong one to leave
     // on the screen all session. `df` is where to ask.
+    //
+    // The durability is a property of the store, not of a mount, so it is here
+    // rather than in df's table — as boot read it, a late persist() answer
+    // correcting the store and not this line (§5.3).
     Buf<96> line;
     line.put("store:   OPFS, ");
     if (b.quota)
         line.put(u64(b.quota / 1000000)).put(" MB");
     else
         line.put("quota unknown");
+    line.put(b.persisted ? Str(", persistent") : Str(", best-effort"));
     say(line.str());
 }
 

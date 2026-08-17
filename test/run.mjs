@@ -773,18 +773,29 @@ if (mode === "--kernel") {
             fail(`/share did not list its directories: ${JSON.stringify(rows(s))}`);
     }
 
-    // M5, second criterion: df reports quota, usage and durability.
+    // M5, second criterion, as amended: df reports the quota and the usage as
+    // a BSD table, the durability having moved to the boot banner. The whole
+    // line is matched, since a row wider than this grid's sixty columns wraps.
+    const blocks = Math.floor(store.quota / 1024);
     s = submit("clear", 1180);
     s = submit("df", 1181);
     const df = rows(s);
-    if (!df.some((line) => line.startsWith("backend   opfs")))
-        fail(`df did not name the backend: ${JSON.stringify(df)}`);
-    if (!df.some((line) => line.startsWith("mode      best-effort")))
-        fail(`df did not report the mode: ${JSON.stringify(df)}`);
-    if (!df.some((line) => line.startsWith(`quota     ${store.quota} bytes`)))
-        fail(`df did not report the quota: ${JSON.stringify(df)}`);
-    if (!df.some((line) => /^used      \d+ bytes$/.test(line)))
-        fail(`df did not report the usage: ${JSON.stringify(df)}`);
+    if (!df.includes("Filesystem  1K-blocks     Used    Avail Capacity  Mounted on"))
+        fail(`df did not head the table: ${JSON.stringify(df)}`);
+    const root = df.find((line) => line.endsWith("    /"));
+    if (!root || !new RegExp(`^opfs +${blocks} +\\d+ +\\d+ +\\d+%    /$`).test(root))
+        fail(`df did not report the root: ${JSON.stringify(df)}`);
+    if (!df.some((line) => /^procfs +0 +0 +0 +-    \/proc$/.test(line)))
+        fail(`df did not report /proc: ${JSON.stringify(df)}`);
+
+    // -h, over the fake's ten gibibytes exactly — the same figure as above.
+    s = submit("clear", 1181.1);
+    s = submit("df -h", 1181.2);
+    const dfh = rows(s);
+    if (!dfh.includes("Filesystem       Size     Used    Avail Capacity  Mounted on"))
+        fail(`df -h did not head the table: ${JSON.stringify(dfh)}`);
+    if (!dfh.some((line) => /^opfs +10G +\d/.test(line)))
+        fail(`df -h did not scale the quota: ${JSON.stringify(dfh)}`);
 
     // /proc/host is what the kernel knows about itself and what the host said
     // about the browser at boot, and `uname` reformats it — the arrangement

@@ -769,8 +769,15 @@ best-effort answer if the browser has not decided within a grace period, and the
 after it, which corrects the store. The request is made once per page however many terminals are
 mounted, since persistence belongs to the origin.
 
-`df` reports the backend, the mode, the quota and the usage, so storage semantics are
-inspectable from inside the OS instead of being invisible browser behaviour.
+Storage semantics are inspectable from inside the OS instead of being invisible browser
+behaviour, and the two halves are reported in the two places they belong. `df` is a BSD table —
+blocks, used, available, capacity, per mount — over the live `quota` and `usage`; a mount backed
+by the store takes the origin's figures, since that is what backs it, and anything else answers
+from `Fs::bytes()`. The backend and the mode are not per-mount facts and are not in it: boot
+starts nothing without OPFS and sync handles, so neither is a thing `df` could vary, and
+durability belongs to the origin. The boot banner states both beside the quota. That line is
+boot's snapshot, so a `persist()` answer arriving after it corrects the store and not the
+screen — the cost of keeping the mode out of a table that is re-read all session.
 
 ### 5.4 The real local filesystem, and the escape hatch
 

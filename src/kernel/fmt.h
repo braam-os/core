@@ -61,6 +61,37 @@ struct Buf {
         return put(u32(v));
     }
 
+    // Columns: padded to `w`, and something wider is written whole.
+    Buf &put_right(Str s, usize w)
+    {
+        for (usize i = s.size(); i < w; i++)
+            put(' ');
+        return put(s);
+    }
+
+    Buf &put_left(Str s, usize w)
+    {
+        put(s);
+        for (usize i = s.size(); i < w; i++)
+            put(' ');
+        return *this;
+    }
+
+    Buf &put_right(u64 v, usize w)
+    {
+        char t[20];
+        usize k = 0;
+        do {
+            t[k++] = char('0' + u32(v % 10));
+            v /= 10;
+        } while (v);
+        for (usize i = k; i < w; i++)
+            put(' ');
+        while (k)
+            put(t[--k]);
+        return *this;
+    }
+
     Buf &put_hex(u32 v)
     {
         put("0x");

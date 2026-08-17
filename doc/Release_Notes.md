@@ -7,6 +7,65 @@ of the two needs amending.
 
 ---
 
+## df is a table
+
+`df` printed a four-line key/value block — `backend`, `mode`, `quota`, `used` — and then one
+prose line per mount. Every fact §5.3 asked for was in it and none of it looked like `df`. It is
+the BSD table now:
+
+```
+Filesystem  1K-blocks     Used    Avail Capacity  Mounted on
+opfs         10485760      487 10485273     0%    /
+procfs              0        0        0      -    /proc
+```
+
+**Nothing was added to the ABI, because nothing had to be.** The two sources `df` already used
+carry the whole table: `/proc/mounts` names each mount and its filesystem, and `Sys::Storage`
+answers with the live quota and usage. A per-mount `statfs` operation was the obvious shape and
+is the wrong one — there is one store behind every writable mount, so the syscall would return
+the same pair however many times it was asked, and Concept.md §4.3's table would have grown an
+operation to say so. What the row needs from the kernel is which mount is backed by the store,
+and the `kind` field has been saying that since M5.
+
+So a mount whose kind is `opfs` reports the origin's figures, and two of them would report the
+same ones. That is not a fudge: they *are* one store, and BSD shows one device mounted twice the
+same way. Anything else answers from `Fs::bytes()`, which is still declared and still
+unimplemented — `/proc` holds no bytes and says `0 0 0 -`, which is the honest row rather than a
+missing one.
+
+**The mode moved to the boot banner, and that amends a criterion.** M5's second was "`df` reports
+quota, usage, and persistent versus best-effort mode". The quota and the usage are the table.
+Durability is not a per-mount fact and had nowhere to sit in one: it belongs to the origin,
+beside the quota, on the `store:` line boot already prints. The backend went with it for a
+simpler reason — `boot_filesystem` refuses to start without OPFS and sync handles, so `backend
+opfs` was a line that could never read anything else.
+
+The cost is real and is accepted rather than worked around. `persisted` is not settled when boot
+reads it: the page sends a provisional best-effort answer after a 250 ms grace period and the
+real one when the browser decides, and the late one corrects `OpfsStore.persisted` in JS. `df`
+asking again was what made that correction visible; a banner line is a snapshot, so a store that
+becomes persistent a second after boot goes on saying `best-effort` until the next reload.
+Putting the mode back in `df` to recover that would put a column in the table that is the same in
+every row, which is the thing the table was written to stop.
+
+**`-h`, because the number is gigabytes.** `10485760` is not a figure anyone reads; `10G` is. The
+scaling is a dozen lines in `df.cpp` rather than anything shared — `text.h` has no formatter and
+nothing else wants one. It keeps a decimal only below ten, so three significant digits carry the
+magnitude: `9.9G`, `487K`, `0B`.
+
+**Alignment is `Buf`'s now.** Nothing in the tree could right-justify a number: `ls` does not
+align at all, `date` hand-rolls a two-digit pad, `/proc` pads its keys with literal spaces in the
+string. `put_left`, `put_right(Str)` and `put_right(u64)` are three members on `Buf`, which is a
+template — the kernel links none of them. A value wider than its column is written whole and
+pushes the rest of the row, because a truncated size is worse than a ragged line.
+
+The widths are BSD's exactly, including the quirk where the capacity column's header ends two
+places past its values. That puts the whole row inside sixty columns, which matters here more
+than it does on a terminal: the test grid is sixty wide and wrapping would have made every
+assertion a two-line one.
+
+---
+
 ## The banner names the host, not the heap
 
 The boot line read `braam 0.2.65-6e62a37 — heap at 0x00030000, 64 KiB, 1 allocs, up in 200 us`.
@@ -2724,7 +2783,9 @@ Twenty-two criteria, M0 to M9:
 - **M5 — Filesystem.** Mount table, `MemFs`, `BundleFs` from a fetched archive, `OpfsFs` with the
   open-file table.
   - Write a file, reload the page, the file is still there.
-  - `df` reports quota, usage, and persistent versus best-effort mode.
+  - `df` reports quota, usage, and ~~persistent versus best-effort mode~~ — the mode is on the
+    boot banner now, since it is a property of the origin and not of a mount. **Amended**, not
+    retired: see "df is a table".
   - ~~With OPFS unavailable, the system boots on `MemFs` and says so.~~ **Retired**, not broken:
     there is no second store to boot on, and one that loses everything at the reload is the
     failure the criterion was written against. See "One store, and rootfs.zip".
