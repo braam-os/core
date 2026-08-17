@@ -9,7 +9,8 @@ filesystem, terminal, and programs, written in freestanding C++20 and compiled t
 deployable as a static site with no server and no special HTTP headers.
 
 It is a working system; the bar for any change is that nothing below regresses. `kernel.wasm` is
-~146 KB against a 256 KiB budget, `bundle.bin` ~491 KB, the wasm ABI is six imports and nine
+~136 KB against a 256 KiB budget, the boot archive's staging tree ~491 KB, the wasm ABI is six
+imports and nine
 exports, and the three CTest cases pass.
 
 ## Documents
@@ -99,7 +100,8 @@ Two link flags are deliberately **absent** and adding either back is a regressio
 
 Three CTest cases, run on every build: `smoke` asserts the exact import/export surface of
 `kernel.wasm` and of every binary, and that the kernel boots; `unit` runs `tests.wasm` under Node;
-`size` holds `kernel.wasm` and `bundle.bin` to `tools/size_budget.txt` — a program is measured but
+`size` holds `kernel.wasm` and the boot archive's staging tree to `tools/size_budget.txt` — a
+program is measured but
 not bounded, and adding a per-binary budget is a design change. New core code gets a case in
 [test/unit/](test/unit/). Behind the three, M0–M9's acceptance criteria are the standing
 behavioural contract: re-check by hand the ones a change touches.
@@ -107,8 +109,10 @@ behavioural contract: re-check by hand the ones a change touches.
 Both wasm modules import the storage and service ABIs, so both are driven with the in-memory
 backends in [test/fakefs.mjs](test/fakefs.mjs) and [test/fakesvc.mjs](test/fakesvc.mjs), which
 answer from inside the import (no browser can, and the kernel cannot tell — `wake()` only queues a
-resumption). They take their constants and encoders from `web/fs.js`, `web/svc.js` and
-`web/abi.js`; keep it that way rather than restating the format. `tools/wsd.mjs` is a real
+resumption). They take their constants, encoders and the archive unpacker (`parseZip`,
+`installOps`) from `web/fs.js`, `web/svc.js` and `web/abi.js`; keep it that way rather than
+restating the format — `run.mjs` parses `rootfs.zip` during its own setup because inflating is
+asynchronous and every reply in the fake is not. `tools/wsd.mjs` is a real
 WebSocket server, so `make serve` gives two tabs a real conversation rather than a loopback.
 
 ## Architecture invariants
@@ -300,6 +304,13 @@ change to argue in Concept.md first.
   boundary, not the paste. Pasting one line is exact.
 - **No per-process root.** A process has its own cwd, but an absolute path resolves with the
   kernel's full authority. A per-process mount view is a milestone's work in the VFS.
+- **No file permissions, and `/bin` is writable.** OPFS stores no per-file mode and there is only
+  one store, so `writable()` is per-mount and every mount but `/proc` is the one read-write store.
+  `rm /bin/sh` is therefore reachable; what stands behind it is that `no_shell` offers to unpack
+  `rootfs.zip` again. **The archive, not the store, is what the system recovers from.**
+- **No system at all without OPFS.** Boot says so and starts no shell — deliberately, since the
+  memory fallback that used to be here would look like a system and lose everything at the reload.
+  It retires M5's third acceptance criterion; Release_Notes.md records that.
 - **Ordinary output is not held to the screen claim.** `ScreenBlit` is refused without the claim,
   but a background job still writes to the grid through `stdout` and `ScreenClear` is open to
   anyone. Gating that is per-job output routing, not a claim.
@@ -307,7 +318,7 @@ change to argue in Concept.md first.
 - **`Pane` is a primitive, not a multiplexer.** One process at a time holds the screen; a second
   `ScreenEnter` is `Err(Perm)`.
 - **Every command costs an instantiation and a worker** — roughly a millisecond, plus reading the
-  image out of `BundleFs`. The host caches the compiled `Module` by path, so only the compile is
+  image out of the store. The host caches the compiled `Module` by path, so only the compile is
   saved; the worker comes from the pool.
 - **Every syscall a program makes is two `postMessage` hops**, 34–45 µs. Bulk I/O pays it per
   `SYS_CHUNK` (512 bytes): measured at 6–13 ms over a quarter of a megabyte through three
@@ -317,9 +328,10 @@ change to argue in Concept.md first.
   and Enter to the next prompt costs five (`echo`, newline, `cwd_get`, prompt `echo`, `key_read`).
   Both are floors: the cwd is deliberately not cached, since a wrong prompt is believed, and going
   lower means fusing the keyboard into the paint — a worse ABI than it would save.
-- **The boot archive is ~491 KB.** §4.4's duplication: every binary carries the allocator, the
-  string types and the coroutine runtime, and `sh.wasm` is 81 KB of it. `bundle.bin` carries a size
-  budget and the binaries do not, so that number is where the duplication stays visible.
+- **The boot archive is ~491 KB unpacked** and 204 KB as `rootfs.zip`. §4.4's duplication: every
+  binary carries the allocator, the string types and the coroutine runtime, and `sh.wasm` is 81 KB
+  of it. The staging *tree* carries the size budget and the binaries do not, so that number is
+  where the duplication stays visible — the archive is deflated and would hide it.
 - **A soft keyboard has no control keys.** `^C`/`^D`/`^L`, `Esc`, `Tab` and the arrows reach a
   tablet only through the page's key bar (`mount({keys})`); widening it is a page change, not a
   system one. The focus lives on a hidden `<textarea>`, not the canvas — a canvas is focusable but

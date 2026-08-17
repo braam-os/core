@@ -8,13 +8,23 @@
 // and the tick that issued the request drains the queue on its way out. Set
 // `defer` to hold replies back and prove the parked path as well.
 
-import { E, OP, Request, SYNC, packEntries, packInfo } from "../web/fs.js";
+import { E, OP, Request, SYNC, installOps, packEntries, packInfo } from "../web/fs.js";
 
 const O_CREATE = 4, O_TRUNC = 8;
 
 function dirname(p) {
     const at = p.lastIndexOf("/");
     return at <= 0 ? "/" : p.slice(0, at);
+}
+
+function removeTree(store, path) {
+    const under = path + "/";
+    for (const n of [...store.dirs])
+        if (n === path || n.startsWith(under))
+            store.dirs.delete(n);
+    for (const n of [...store.files.keys()])
+        if (n === path || n.startsWith(under))
+            store.files.delete(n);
 }
 
 export class FakeStore {
@@ -30,7 +40,11 @@ export class FakeStore {
         this.sync = true;
         this.persisted = false;
         this.quota = 10737418240;
-        this.bundle = null;
+        // The archive already parsed: parseZip is async and every reply here
+        // is synchronous, so run.mjs reads it during its own setup and this
+        // side only installs it. The parser still runs over the real bytes.
+        this.entries = null;
+        this.unpacks = 0;
         this.defer = false;
         this.held = [];         // tokens whose replies are being withheld
     }
@@ -54,7 +68,7 @@ export class FakeStore {
 // exports, which change when the test re-instantiates.
 export function makeFakeImports(mem, store, kernel) {
     function perform(r, op) {
-        const path = op === OP.INFO || op === OP.BUNDLE ? "" : r.arg();
+        const path = op === OP.INFO || op === OP.UNPACK ? "" : r.arg();
         switch (op) {
         case OP.INFO:
             return r.write(packInfo({
@@ -66,14 +80,20 @@ export function makeFakeImports(mem, store, kernel) {
                 persisted: store.persisted,
             }));
 
-        case OP.BUNDLE:
-            if (!store.bundle) {
-                r.set("resultLo", 0);
-                r.set("bufLen", 0);
-                r.set("status", 0);
-                return;
+        case OP.UNPACK: {
+            if (!store.entries)
+                return r.fail(E.NOTFOUND);
+            store.unpacks++;
+            for (const step of installOps(store.entries, r.arg())) {
+                if (step.op === "remove")
+                    removeTree(store, step.path);
+                else if (step.op === "mkdir")
+                    store.dirs.add(step.path);
+                else
+                    store.files.set(step.path, step.bytes);
             }
-            return r.write(store.bundle);
+            return r.ok(store.entries.length);
+        }
 
         case OP.OPEN: {
             const flags = r.get("flags");

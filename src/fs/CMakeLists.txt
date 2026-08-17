@@ -1,7 +1,5 @@
 add_library(braam_fs STATIC
-    bundlefs.cpp
     hostfs.cpp
-    memfs.cpp
     opfsfs.cpp
     path.cpp
     vfs.cpp)

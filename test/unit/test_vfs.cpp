@@ -1,7 +1,7 @@
-#include "fs/memfs.h"
 #include "fs/vfs.h"
 #include "harness.h"
 #include "kernel/alloc.h"
+#include "kernel/traits.h"
 
 namespace {
 
@@ -17,6 +17,211 @@ Result<usize> write(i32 fd, u64 off, Str s)
 {
     return vfs_write(fd, off, reinterpret_cast<const u8 *>(s.data()), s.size());
 }
+
+// The last separator in a path within a mount, which always has one.
+usize last_slash(Str path)
+{
+    usize at = 0;
+    for (usize i = 0; i < path.size(); i++)
+        if (path[i] == '/')
+            at = i;
+    return at;
+}
+
+Str parent_of(Str path)
+{
+    usize at = last_slash(path);
+    return at == 0 ? Str("/") : path.substr(0, at);
+}
+
+Str base_of(Str path)
+{
+    return path.substr(last_slash(path) + 1);
+}
+
+// A writable filesystem in linear memory, and a fixture rather than something
+// the kernel ships: it answers without suspending, which is what these cases
+// need — run_now panics on a suspension, and OpfsFs awaits the host for
+// everything but a read or a write.
+//
+// Flat, because the suite is: names are whole paths within the mount. A write
+// inside a file truncates the tail rather than overwriting in place, which is
+// enough for a suite that writes files whole.
+struct TempFs final : Fs {
+    Str kind() const override { return "tempfs"; }
+
+    bool writable() const override { return true; }
+
+    Task<Result<Stat>> stat(Str path) override
+    {
+        if (path == "/")
+            co_return Stat{ NodeKind::Dir, 0 };
+        const Node *n = find(path);
+        if (!n)
+            co_return Err(Error::NotFound);
+        co_return Stat{ n->kind, n->data.size() };
+    }
+
+    Task<Result<Vec<Entry>>> list(Str path) override
+    {
+        Vec<Entry> out;
+        for (const Node &n : nodes_) {
+            if (parent_of(n.name.str()) != path)
+                continue;
+            Entry e;
+            e.kind = n.kind;
+            e.size = n.data.size();
+            if (!e.name.assign(base_of(n.name.str())) || !out.push(move(e)))
+                co_return Err(Error::NoMemory);
+        }
+        co_return move(out);
+    }
+
+    Task<Result<u32>> open(Str path, u32 flags) override
+    {
+        Node *n = find(path);
+        if (n && n->kind == NodeKind::Dir)
+            co_return Err(Error::IsDir);
+        if (!n) {
+            if (!(flags & O_CREATE))
+                co_return Err(Error::NotFound);
+            n = make(path, NodeKind::File);
+            if (!n)
+                co_return Err(Error::NoMemory);
+        }
+        if (flags & O_TRUNC)
+            n->data.clear();
+
+        for (usize h = 0; h < open_.size(); h++) {
+            if (open_[h] == 0) {
+                open_[h] = n->id;
+                co_return u32(h);
+            }
+        }
+        if (!open_.push(n->id))
+            co_return Err(Error::NoMemory);
+        co_return u32(open_.size() - 1);
+    }
+
+    Task<Result<void>> mkdir(Str path) override
+    {
+        if (find(path))
+            co_return Err(Error::Exists);
+        if (!make(path, NodeKind::Dir))
+            co_return Err(Error::NoMemory);
+        co_return Result<void>{};
+    }
+
+    Task<Result<void>> remove(Str path, bool all) override
+    {
+        for (usize i = 0; i < nodes_.size(); i++) {
+            if (nodes_[i].name.str() != path)
+                continue;
+            if (nodes_[i].kind == NodeKind::Dir && !all)
+                for (const Node &n : nodes_)
+                    if (parent_of(n.name.str()) == path)
+                        co_return Err(Error::NotEmpty);
+            nodes_.erase(i);
+            co_return Result<void>{};
+        }
+        co_return Err(Error::NotFound);
+    }
+
+    Result<usize> read(u32 h, u64 off, u8 *buf, usize n) override
+    {
+        Node *node = node_of(h);
+        if (!node)
+            return Err(Error::Invalid);
+        if (off >= node->data.size())
+            return usize(0);
+        usize at = usize(off);
+        usize k  = min(n, node->data.size() - at);
+        __builtin_memcpy(buf, node->data.data() + at, k);
+        return k;
+    }
+
+    Result<usize> write(u32 h, u64 off, const u8 *buf, usize n) override
+    {
+        Node *node = node_of(h);
+        if (!node)
+            return Err(Error::Invalid);
+        usize at = usize(off);
+        while (node->data.size() < at)
+            if (!node->data.push('\0'))
+                return Err(Error::NoMemory);
+        node->data.truncate(at);
+        if (!node->data.append(Str(reinterpret_cast<const char *>(buf), n)))
+            return Err(Error::NoMemory);
+        return n;
+    }
+
+    Result<u64> size(u32 h) override
+    {
+        Node *node = node_of(h);
+        if (!node)
+            return Err(Error::Invalid);
+        return u64(node->data.size());
+    }
+
+    Result<void> truncate(u32 h, u64 n) override
+    {
+        Node *node = node_of(h);
+        if (!node)
+            return Err(Error::Invalid);
+        node->data.truncate(usize(n));
+        return {};
+    }
+
+    void close(u32 h) override
+    {
+        if (h < open_.size())
+            open_[h] = 0;
+    }
+
+private:
+    // Named by an id rather than an index, so erasing one does not move the
+    // file another descriptor is holding.
+    struct Node {
+        String name;
+        String data;
+        NodeKind kind = NodeKind::File;
+        u32 id        = 0;
+    };
+
+    Node *find(Str path)
+    {
+        for (Node &n : nodes_)
+            if (n.name.str() == path)
+                return &n;
+        return nullptr;
+    }
+
+    const Node *find(Str path) const { return const_cast<TempFs *>(this)->find(path); }
+
+    Node *make(Str path, NodeKind kind)
+    {
+        Node n;
+        n.kind = kind;
+        n.id   = ++next_;
+        if (!n.name.assign(path) || !nodes_.push(move(n)))
+            return nullptr;
+        return &nodes_[nodes_.size() - 1];
+    }
+
+    Node *node_of(u32 h)
+    {
+        if (h >= open_.size() || open_[h] == 0)
+            return nullptr;
+        for (Node &n : nodes_)
+            if (n.id == open_[h])
+                return &n;
+        return nullptr;
+    }
+
+    Vec<Node> nodes_;
+    Vec<u32> open_;
+    u32 next_ = 0;
+};
 
 // A filesystem that refuses everything, to prove the VFS checks before it
 // asks. /bin and /share are both this shape.
@@ -50,7 +255,7 @@ struct ReadOnlyFs final : Fs {
 };
 
 // Counts what reaches the filesystem, which is the whole point of sharing: two
-// descriptors on one file are one open() and one close() down here. MemFs would
+// descriptors on one file are one open() and one close() down here. TempFs would
 // answer a second open happily, so only these counters can tell the difference.
 // They are out here because vfs_reset() destroys the mount before they are read.
 u32 fs_opens = 0, fs_closes = 0;
@@ -93,14 +298,14 @@ void test_vfs()
     usize in_use = heap_stats().bytes_in_use;
     vfs_reset();
 
-    CHECK(vfs_mount("/", heap_new<MemFs>()).is_ok());
-    CHECK(vfs_mount("/home", heap_new<MemFs>()).is_ok());
+    CHECK(vfs_mount("/", heap_new<TempFs>()).is_ok());
+    CHECK(vfs_mount("/home", heap_new<TempFs>()).is_ok());
     CHECK(vfs_mount("/share", heap_new<ReadOnlyFs>()).is_ok());
     CHECK_EQ(vfs_mounts().size(), 3);
 
     // Mounting twice on one point is an error, and the rejected filesystem is
     // destroyed rather than leaked: the table takes ownership either way.
-    CHECK(vfs_mount("/home", heap_new<MemFs>()).error() == Error::Exists);
+    CHECK(vfs_mount("/home", heap_new<TempFs>()).error() == Error::Exists);
 
     // Longest prefix wins, and the path handed down is relative to the mount.
     Str sub;

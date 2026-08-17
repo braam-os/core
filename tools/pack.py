@@ -1,55 +1,64 @@
 #!/usr/bin/env python3
-"""Pack a directory into the boot archive BundleFs reads.
+"""Pack a directory into the boot archive the host unpacks into OPFS.
 
-    pack.py <dir> <out.bin>
+    pack.py <dir> <out.zip>
 
-Layout, little-endian, as documented in src/fs/bundlefs.h:
-
-    "BBND", u32 version, u32 count
-    count * { u32 name_off, u32 name_len, u32 data_off, u32 size }
-    names and data
+An ordinary deflated zip, holding files only: web/fs.js creates each entry's
+parent directories as it writes. `stamp` and `MODE` are here rather than in
+release.py because both tools pack and only one of them is the higher level.
 """
 
-import struct
+import os
 import sys
+import time
+import zipfile
 from pathlib import Path
 
-VERSION = 1
-HEADER = 12
-SLOT = 16
+MODE = 0o100644 << 16
+
+# The earliest a zip can express.
+EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def stamp():
+    """One timestamp for every entry: SOURCE_DATE_EPOCH, else the pack time."""
+    epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if epoch is None:
+        # A zip's date field is local time by definition.
+        t = time.localtime()
+    else:
+        try:
+            # UTC, so a pinned stamp does not move with the packer's zone.
+            t = time.gmtime(int(epoch))
+        except ValueError:
+            sys.exit(f"pack.py: SOURCE_DATE_EPOCH is not an integer: {epoch}")
+    return max(t[:6], EPOCH)
 
 
 def collect(root: Path):
-    files = []
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            files.append((path.relative_to(root).as_posix(), path.read_bytes()))
-    return files
-
-
-def pack(files):
-    names = [name.encode("utf-8") for name, _ in files]
-    at = HEADER + SLOT * len(files)
-
-    table, blob = bytearray(), bytearray()
-    for name, (_, data) in zip(names, files):
-        name_off = at + len(blob)
-        blob += name
-        data_off = at + len(blob)
-        blob += data
-        table += struct.pack("<IIII", name_off, len(name), data_off, len(data))
-
-    return b"BBND" + struct.pack("<II", VERSION, len(files)) + bytes(table) + bytes(blob)
+    return sorted((p.relative_to(root).as_posix(), p)
+                  for p in root.rglob("*") if p.is_file())
 
 
 def main(argv):
     if len(argv) != 3:
-        sys.exit("usage: pack.py <dir> <out.bin>")
+        sys.exit("usage: pack.py <dir> <out.zip>")
 
     root, out = Path(argv[1]), Path(argv[2])
     files = collect(root) if root.is_dir() else []
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(pack(files))
+
+    # Sorted entries and one shared stamp, which is what makes a pack
+    # reproducible. Written whole rather than appended to, so a rebuild that
+    # drops a file does not leave it in the archive.
+    when = stamp()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, path in files:
+            info = zipfile.ZipInfo(name, when)
+            info.external_attr = MODE
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, path.read_bytes())
+
     print(f"{out.name} {len(files)} files, {out.stat().st_size:,} bytes")
 
 

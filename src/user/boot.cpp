@@ -2,17 +2,17 @@
 
 #include "console.h"
 #include "exec.h"
-#include "fs/bundlefs.h"
 #include "fs/hostfs.h"
-#include "fs/memfs.h"
 #include "fs/opfsfs.h"
 #include "fs/vfs.h"
 #include "io.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
+#include "kernel/key.h"
 #include "kernel/sched.h"
 #include "kernel/screen.h"
 #include "kernel/traits.h"
+#include "kernel/version.h"
 #include "procfs.h"
 #include "tty.h"
 
@@ -32,71 +32,119 @@ void say(Str s)
     screen_newline();
 }
 
-// Mounts the archive the host loaded beside kernel.wasm as /bin and /share —
-// two views of the one bundle, since the programs and the files that ship
-// beside them are one download and two directories.
+// Yes or no on the grid, before there is a shell to ask with. The keyboard's
+// receiver is the console pump, which init spawns before this task (main.cpp),
+// so a claim through it is how anything reads a key — and nothing else holds
+// one at boot. Raw keys are not echoed, so the answer is written here.
 //
-// Without it there is no /bin at all, and therefore no shell to run. That
-// was ordinary when programs were in-kernel; now it is worth saying out loud.
-Task<void> mount_bundle()
+// Anything but y is no, ^C included: it arrives as an ordinary key, since
+// nothing has armed a foreground.
+Task<bool> ask(Str question, const u32 &pid)
 {
-    Task<Result<String>> t = storage_bundle();
-    if (!t)
-        co_return;
-    Result<String> r = co_await t;
-    if (r.is_err()) {
-        say("braam: no boot bundle — /bin is empty and there is no shell to run");
-        co_return;
+    Buf<96> line;
+    line.put("braam: ").put(question).put(" [y/N] ");
+    if (screen().cursor_x != 0)
+        screen_newline();
+    screen_write(line.str());
+
+    KeyInput keys(pid);
+    if (!keys.ok()) {
+        screen_write("n\n");
+        co_return false;
     }
 
-    Result<BundleFs *> b = bundlefs_create(move(r.value()));
-    if (b.is_err()) {
-        say("braam: the boot bundle is malformed");
-        co_return;
+    for (;;) {
+        Result<Key> k = co_await keys.next();
+        if (k.is_err()) {
+            if (k.error() == Error::Again)
+                continue;
+            screen_write("n\n");
+            co_return false;
+        }
+        bool yes = k.value().code == 'y' || k.value().code == 'Y';
+        if (!yes && k.value().code != 'n' && k.value().code != 'N' && k.value().code != KEY_ENTER &&
+            !(k.value().mods & MOD_CTRL))
+            continue;
+        screen_write(yes ? "y\n" : "n\n");
+        co_return yes;
     }
-
-    Result<BundleFs *> bin   = bundlefs_at(*b.value(), "bin");
-    Result<BundleFs *> share = bundlefs_at(*b.value(), "share");
-
-    // The whole archive is not itself something to mount: the two views hold
-    // the bytes between them, so the object that parsed them can go.
-    heap_delete(b.value());
-
-    // vfs_mount refuses a null and takes ownership of anything else, so a
-    // failed view and a failed mount are the same line.
-    if (vfs_mount("/bin", bin.is_ok() ? bin.value() : nullptr).is_err())
-        say("braam: /bin would not mount");
-    if (vfs_mount("/share", share.is_ok() ? share.value() : nullptr).is_err())
-        say("braam: /share would not mount");
 }
 
-// Concept.md §5.2: OPFS is absent in Safari private browsing, and the sync
-// access handles the fast path needs exist only in a worker. Either missing
-// means /home is memory, and the user is told so rather than left to discover
-// it after a reload.
-Task<void> mount_home()
+// The stored image against this kernel's. Absent means an empty store, which
+// is unpacked without asking — there is nothing there to overwrite and no
+// prompt anyone could answer usefully. A mismatch is the user's call: the old
+// /bin may be what they want kept, and a stale one says so for itself when
+// exec_resolve refuses it.
+Task<void> unpack_if_stale(const u32 &pid)
 {
-    StorageBackend b;
-    Task<Result<StorageBackend>> t = storage_info();
-    if (t) {
-        Result<StorageBackend> r = co_await t;
+    String stored;
+    if (Task<Result<String>> t = read_file(VERSION_PATH)) {
+        Result<String> r = co_await t;
         if (r.is_ok())
-            b = r.value();
+            stored = move(r.value());
     }
 
-    if (b.opfs && b.sync) {
-        Fs *home = heap_new<OpfsFs>();
-        if (home && vfs_mount("/home", home).is_ok())
+    if (stored.str() == BRAAM_VERSION)
+        co_return;
+
+    if (!stored.empty()) {
+        Buf<128> line;
+        line.put("braam: the stored image is ")
+            .put(stored.str())
+            .put(" and this kernel is ")
+            .put(BRAAM_VERSION);
+        say(line.str());
+        bool yes = false;
+        if (Task<bool> t = ask("replace /bin and /share?", pid))
+            yes = co_await t;
+        if (!yes) {
+            say("braam: keeping the stored image");
             co_return;
-        say("braam: /home would not mount on OPFS");
+        }
     }
 
-    Fs *home = heap_new<MemFs>();
-    if (!home || vfs_mount("/home", home).is_err()) {
-        say("braam: no /home at all");
+    Result<u32> r = Err(Error::NoMemory);
+    if (Task<Result<u32>> t = storage_unpack(BRAAM_VERSION))
+        r = co_await t;
+    if (r.is_err()) {
+        say("braam: the root archive would not unpack — /bin is empty and there is no shell");
         co_return;
     }
-    say("braam: no OPFS — /home is in memory and will not survive a reload");
+
+    Buf<96> line;
+    line.put("braam: unpacked ").put(r.value()).put(" files");
+    say(line.str());
+}
+
+// The directories the store is expected to have and the archive does not
+// carry. Exists is the ordinary answer on every boot but the first.
+Task<void> make_dirs()
+{
+    // Where `import` puts what the file picker hands over (Concept.md §5.4).
+    // A directory like any other: the files arrive as bytes, and nothing about
+    // them is a filesystem.
+    constexpr Str DIRS[] = { "/home", "/mnt", "/mnt/import" };
+    for (Str d : DIRS) {
+        if (Task<Result<void>> t = vfs_mkdir(d)) {
+            Result<void> r = co_await t;
+            if (r.is_err() && r.error() != Error::Exists) {
+                Buf<96> line;
+                line.put("braam: ").put(d).put(": ").put(error_name(r.error()));
+                say(line.str());
+            }
+        }
+    }
+}
+
+// /tmp is temporary against the store's persistence, not the tab's: OPFS keeps
+// what is written to it, so what makes a temporary directory temporary now is
+// emptying it here.
+Task<void> wipe_tmp()
+{
+    if (Task<Result<void>> t = vfs_remove("/tmp", true))
+        co_await t;
+    if (Task<Result<void>> t = vfs_mkdir("/tmp"))
+        co_await t;
 }
 
 // The greeting, on the grid the prompt is about to appear in. A coroutine of
@@ -130,20 +178,20 @@ Task<void> show_motd()
 }
 
 // Why /bin/sh would not resolve, on one line. Three different repairs hide
-// behind one Result: an archive that never had a shell, one built against
-// another kernel, and one whose bytes are damaged.
+// behind one Result: a store with no shell in it, one built against another
+// kernel, and one whose bytes are damaged.
 void no_shell(Error e)
 {
     Buf<160> line;
     line.put("braam: ").put(SHELL).put(": ");
     switch (e) {
     case Error::NotFound:
-        line.put("not in the boot archive");
+        line.put("not in the store");
         break;
     case Error::Unsupported:
         line.put("built for another process ABI — this kernel speaks ")
             .put(u32(PROC_ABI))
-            .put(", so the boot archive is stale");
+            .put(", so the stored image is stale");
         break;
     case Error::Invalid:
         line.put("not a program — no braam section, or a damaged image");
@@ -156,34 +204,37 @@ void no_shell(Error e)
         break;
     }
     say(line.str());
-    say("braam: there is no prompt — reload once the boot archive is repaired");
 }
 
 } // namespace
 
-Task<void> boot_filesystem()
+Task<bool> boot_filesystem(const u32 &pid)
 {
     // Idempotent. A second boot in a test finds the mounts already there and
     // leaves them, rather than reporting every one of them as an error.
     if (!vfs_mounts().empty())
-        co_return;
+        co_return true;
 
-    Fs *root = heap_new<MemFs>();
-    if (!root || vfs_mount("/", root).is_err()) {
-        say("braam: no root filesystem");
-        co_return;
+    // Concept.md §5.2: OPFS is absent in Safari private browsing, and the sync
+    // access handles the fast path needs exist only in a worker. There is no
+    // second store to fall back to any more — everything is in this one.
+    StorageBackend b;
+    if (Task<Result<StorageBackend>> t = storage_info()) {
+        Result<StorageBackend> r = co_await t;
+        if (r.is_ok())
+            b = r.value();
+    }
+    if (!b.opfs || !b.sync) {
+        say("braam: this browser has no OPFS — Braam cannot run here");
+        say("braam: private browsing usually explains it; try an ordinary window");
+        co_return false;
     }
 
-    if (Task<Result<void>> t = vfs_mkdir("/tmp"))
-        co_await t;
-
-    // Where `import` puts what the file picker hands over (Concept.md §5.4).
-    // A directory on the root MemFs rather than a mount of its own: the files
-    // arrive as bytes, and nothing about them is a filesystem.
-    if (Task<Result<void>> t = vfs_mkdir("/mnt"))
-        co_await t;
-    if (Task<Result<void>> t = vfs_mkdir("/mnt/import"))
-        co_await t;
+    Fs *root = heap_new<OpfsFs>();
+    if (!root || vfs_mount("/", root).is_err()) {
+        say("braam: no root filesystem");
+        co_return false;
+    }
 
     // The scheduler and the heap, readable with cat and grep. The job table is
     // not here any more: it is the shell's own memory, and the shell is a
@@ -192,27 +243,34 @@ Task<void> boot_filesystem()
         if (vfs_mount("/proc", proc).is_err())
             say("braam: /proc would not mount");
 
-    if (Task<void> t = mount_bundle())
+    if (Task<void> t = unpack_if_stale(pid))
         co_await t;
-    if (Task<void> t = mount_home())
+    if (Task<void> t = make_dirs())
+        co_await t;
+    if (Task<void> t = wipe_tmp())
         co_await t;
 
     // Landing in /home is what makes `echo hi > notes` persist by default. It
     // is the kernel's own directory now, and what /bin/sh inherits at exec.
     if (Task<Result<void>> t = vfs_chdir("/home"))
         co_await t;
+    co_return true;
 }
 
 Task<i32> init_task(const u32 &pid)
 {
-    // The mounts come first, and they always did — but the shell used to do
-    // them. It cannot any more: it is a file in /bin, and /bin is one of them.
-    if (Task<void> t = boot_filesystem())
-        co_await t;
+    // The store comes first, and the mounts always did — but the shell used to
+    // do them. It cannot any more: it is a file in /bin, which is in the store.
+    bool up = false;
+    if (Task<bool> t = boot_filesystem(pid))
+        up = co_await t;
+    if (!up)
+        co_return 1;
 
-    bool greeted = false;
-    u32 tries    = 0;
-    i32 status   = 1;
+    bool greeted  = false;
+    bool restored = false;
+    u32 tries     = 0;
+    i32 status    = 1;
 
     for (;;) {
         // Resolved every time round: the image was moved into the instance, so
@@ -223,10 +281,31 @@ Task<i32> init_task(const u32 &pid)
             found = co_await t;
         if (found.is_err()) {
             // Said on the grid rather than through a Stream, because there is
-            // nobody left to print it: a bundle that will not give up /bin/sh
+            // nobody left to print it: a store that will not give up /bin/sh
             // is a system with no prompt, and the reason has to reach the
             // screen.
             no_shell(found.error());
+
+            // /bin is writable now, so `rm /bin/sh` is reachable from the
+            // prompt — and the stamp would still match, so nothing would ever
+            // put it back. This offer is what keeps the archive the thing the
+            // store can be recovered from. Once: a second failure after a
+            // fresh unpack is not something another unpack fixes.
+            if (!restored) {
+                restored = true;
+                bool yes = false;
+                if (Task<bool> t = ask("restore /bin and /share from the archive?", pid))
+                    yes = co_await t;
+                if (yes) {
+                    Result<u32> r = Err(Error::NoMemory);
+                    if (Task<Result<u32>> t = storage_unpack(BRAAM_VERSION))
+                        r = co_await t;
+                    if (r.is_ok())
+                        continue;
+                    say("braam: the root archive would not unpack");
+                }
+            }
+            say("braam: there is no prompt — reload once the store is repaired");
             co_return 1;
         }
         // Init's own, and every replacement takes it again: the record under it

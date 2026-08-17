@@ -11,7 +11,7 @@ export { E, Request, statusOf };
 
 export const OP = {
     INFO: 1,
-    BUNDLE: 2,
+    UNPACK: 2,
     OPEN: 3,
     STAT: 4,
     LIST: 5,
@@ -74,12 +74,128 @@ function parts(path) {
     return path.split("/").filter((s) => s.length > 0);
 }
 
+// Where the unpacked archive's version is left, for boot to compare against
+// the kernel's own (src/user/boot.cpp).
+export const VERSION_PATH = "/version";
+
+const u16 = (b, at) => b[at] | (b[at + 1] << 8);
+const u32 = (b, at) => (u16(b, at) | (u16(b, at + 2) << 16)) >>> 0;
+
+// A name out of an archive is not a path until it has been looked at: an
+// absolute one, a drive letter or a `..` component would be written outside
+// the root. Same-origin or not, this is the one zip bug worth checking by hand.
+function safeName(name) {
+    if (!name || name.startsWith("/") || name.includes("\\") || /^[A-Za-z]:/.test(name))
+        return false;
+    return !name.split("/").some((c) => c === "." || c === "..");
+}
+
+async function inflate(bytes) {
+    const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+}
+
+// rootfs.zip -> [{name, bytes}]. An ordinary deflated zip, read through the
+// central directory: the end record points at it, and each of its entries
+// points at a local header whose own name and extra lengths say where the data
+// begins. Taking the central directory's offset for the data is the classic
+// way to get this wrong.
+//
+// Async, because there is no synchronous inflate; installOps below is not, so
+// a caller that cannot await inside a call can parse ahead of time.
+export async function parseZip(bytes) {
+    const bad = () => { throw { braam: E.INVALID }; };
+
+    let eocd = -1;
+    for (let at = bytes.length - 22; at >= 0 && at >= bytes.length - 22 - 0xffff; at--) {
+        if (u32(bytes, at) === 0x06054b50) {
+            eocd = at;
+            break;
+        }
+    }
+    if (eocd < 0)
+        bad();
+
+    const count = u16(bytes, eocd + 10);
+    let at = u32(bytes, eocd + 16);
+    // Zip64 announces itself by saturating these; nothing we pack comes near
+    // either limit, so refusing is better than reading half an archive.
+    if (count === 0xffff || at === 0xffffffff)
+        throw { braam: E.UNSUPPORTED };
+
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        if (at + 46 > bytes.length || u32(bytes, at) !== 0x02014b50)
+            bad();
+
+        const flags = u16(bytes, at + 8);
+        const method = u16(bytes, at + 10);
+        const packed = u32(bytes, at + 20);
+        const nameLen = u16(bytes, at + 28);
+        const local = u32(bytes, at + 42);
+        const name = new TextDecoder().decode(bytes.subarray(at + 46, at + 46 + nameLen));
+        at += 46 + nameLen + u16(bytes, at + 30) + u16(bytes, at + 32);
+
+        if (flags & 1)
+            throw { braam: E.UNSUPPORTED }; // encrypted
+        if (name.endsWith("/"))
+            continue; // a directory entry; the paths below imply it anyway
+        if (!safeName(name))
+            bad();
+
+        if (local + 30 > bytes.length || u32(bytes, local) !== 0x04034b50)
+            bad();
+        const from = local + 30 + u16(bytes, local + 26) + u16(bytes, local + 28);
+        if (from + packed > bytes.length)
+            bad();
+
+        const data = bytes.subarray(from, from + packed);
+        if (method === 0)
+            out.push({ name, bytes: data.slice() });
+        else if (method === 8)
+            out.push({ name, bytes: await inflate(data) });
+        else
+            throw { braam: E.UNSUPPORTED };
+    }
+    return out;
+}
+
+// What installing an archive *is*, as operations for the caller to perform:
+// OPFS awaits each one and the test fake does them synchronously, and neither
+// has its own idea of what the archive means.
+//
+// The top-level directories the archive carries are removed first, so a name
+// that is gone from a new release is gone from the store. Whatever it does not
+// carry — /home, /tmp, /mnt — is never named and so never touched.
+export function *installOps(entries, version) {
+    const tops = new Set(entries.map((e) => e.name.split("/")[0]));
+    for (const top of [...tops].sort())
+        yield { op: "remove", path: "/" + top };
+
+    const made = new Set();
+    for (const e of entries) {
+        const dirs = e.name.split("/").slice(0, -1);
+        for (let i = 1; i <= dirs.length; i++) {
+            const path = "/" + dirs.slice(0, i).join("/");
+            if (!made.has(path)) {
+                made.add(path);
+                yield { op: "mkdir", path };
+            }
+        }
+        yield { op: "write", path: "/" + e.name, bytes: e.bytes };
+    }
+
+    // Last, so an interrupted unpack leaves a stamp that does not match and is
+    // therefore done again rather than believed.
+    yield { op: "write", path: VERSION_PATH, bytes: new TextEncoder().encode(version) };
+}
+
 // The OPFS backend. Every method may reject; the caller turns that into a
 // status, so a browser quirk becomes an error value rather than a dead kernel.
 export class OpfsStore {
-    constructor(root, bundle, persisted) {
+    constructor(root, rootfsUrl, persisted) {
         this.root = root;               // FileSystemDirectoryHandle, or null
-        this.bundle = bundle;           // Uint8Array, or null
+        this.rootfsUrl = rootfsUrl;     // fetched only to unpack
         this.persisted = !!persisted;
         this.handles = [];              // index -> FileSystemSyncAccessHandle
         this.sync = typeof FileSystemFileHandle !== "undefined" &&
@@ -179,6 +295,42 @@ export class OpfsStore {
         const dir = await this.dir(path.slice(0, at), false);
         await dir.removeEntry(path.slice(at + 1), { recursive });
     }
+
+    // A whole file at once, and a handle of its own: the unpack runs at boot
+    // with nothing else open, so the exclusive lock is uncontended and the
+    // handle never enters the table descriptors are drawn from.
+    async put(path, bytes) {
+        const at = path.lastIndexOf("/");
+        const dir = await this.dir(path.slice(0, at), true);
+        const file = await dir.getFileHandle(path.slice(at + 1), { create: true });
+        const h = await file.createSyncAccessHandle();
+        try {
+            h.truncate(0);
+            h.write(bytes, { at: 0 });
+            h.flush();
+        } finally {
+            h.close();
+        }
+    }
+
+    // Fetched here rather than at boot, so a system whose stored image is
+    // current never asks for the archive at all.
+    async unpack(version) {
+        const res = await fetch(this.rootfsUrl);
+        if (!res.ok)
+            throw { braam: E.NOTFOUND };
+        const entries = await parseZip(new Uint8Array(await res.arrayBuffer()));
+
+        for (const step of installOps(entries, version)) {
+            if (step.op === "remove")
+                await this.remove(step.path, true).catch(() => {});
+            else if (step.op === "mkdir")
+                await this.dir(step.path, true);
+            else
+                await this.put(step.path, step.bytes);
+        }
+        return entries.length;
+    }
 }
 
 // Builds the two imports. `reply` delivers a finished request to the kernel;
@@ -191,14 +343,9 @@ export function makeFsImports(mem, store, reply) {
         case OP.INFO:
             r.write(packInfo(await store.info()));
             return;
-        case OP.BUNDLE:
-            if (!store.bundle) {
-                r.set("resultLo", 0);
-                r.set("bufLen", 0);
-                r.set("status", 0);
-                return;
-            }
-            r.write(store.bundle);
+        case OP.UNPACK:
+            // The argument is the version to stamp, not a path.
+            r.ok(await store.unpack(r.arg()));
             return;
         case OP.OPEN:
             r.ok(await store.open(r.arg(), r.get("flags")));
@@ -229,7 +376,7 @@ export function makeFsImports(mem, store, reply) {
     return {
         fs(op, token, req) {
             const r = new Request(mem, req);
-            if (!store.root && op !== OP.INFO && op !== OP.BUNDLE) {
+            if (!store.root && op !== OP.INFO) {
                 Promise.resolve().then(() => {
                     r.fail(E.UNSUPPORTED);
                     reply(token);
@@ -280,9 +427,10 @@ export function makeFsImports(mem, store, reply) {
     };
 }
 
-// Probes for OPFS and loads the boot bundle. Returns a store either way: with
-// no OPFS the kernel falls back to MemFs and says so (Concept.md §5.2).
-export async function openStore(bundleUrl, persisted) {
+// Probes for OPFS. Returns a store either way: a root of null is what the
+// kernel reads as "no OPFS", which it now reports as fatal (Concept.md §5.2).
+// The archive is not fetched here — only an unpack needs it.
+export async function openStore(rootfsUrl, persisted) {
     let root = null;
     try {
         if (navigator.storage && navigator.storage.getDirectory)
@@ -291,14 +439,5 @@ export async function openStore(bundleUrl, persisted) {
         root = null;
     }
 
-    let bundle = null;
-    try {
-        const res = await fetch(bundleUrl);
-        if (res.ok)
-            bundle = new Uint8Array(await res.arrayBuffer());
-    } catch {
-        bundle = null;
-    }
-
-    return new OpfsStore(root, bundle, persisted);
+    return new OpfsStore(root, rootfsUrl, persisted);
 }

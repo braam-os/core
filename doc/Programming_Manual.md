@@ -346,7 +346,7 @@ In the Braam source tree, `test/run.mjs` asserts all of that for every binary, a
 for a binary of yours if you hand it one:
 
 ```
-node test/run.mjs --kernel build/kernel.wasm build/web/bundle.bin /path/to/hello.wasm
+node test/run.mjs --kernel build/kernel.wasm build/web/rootfs.zip /path/to/hello.wasm
 ```
 
 ---

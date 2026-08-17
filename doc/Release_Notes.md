@@ -7,6 +7,86 @@ of the two needs amending.
 
 ---
 
+## One store, and rootfs.zip
+
+Three filesystems held the namespace: `MemFs` for `/`, `BundleFs` for a read-only `/bin` and
+`/share` unpacked from a fetched archive in linear memory, `OpfsFs` for `/home`. Only `/home`
+survived a reload, every boot downloaded 491 KB whether or not anything had changed, and the
+files a user made outside `/home` — in `/tmp`, in `/mnt/import` — quietly did not exist after
+one. Now `/` is one `OpfsFs` and everything else is a directory in it. `kernel.wasm` lost 10 KB
+with the other two filesystems, but that is not why: three stores meant three answers to every
+question about durability, and users only ever wanted one.
+
+**Nothing above the VFS had to change.** `exec_resolve` reads a program image with `read_file`
+and boot builds its directories with `vfs_mkdir`, so which backend a path lands in was never
+visible from userland. That is the property the mount layering was built for, and this is the
+first change that spent it.
+
+**The unpacker moved to JS, and the format became a zip.** `BBND` existed because a kernel had
+to parse it: 231 lines of `bundlefs.cpp` reading a table of offsets into a blob it kept in
+linear memory, with a matching writer in `tools/pack.py`. Once the archive is written into OPFS
+rather than mounted, the only thing that reads it is `web/fs.js` — and there the browser's own
+`DecompressionStream` and Python's `zipfile` do the work, so the hand-rolled format bought
+nothing and cost two implementations to keep in step. `rootfs.zip` is inspectable with
+`unzip -l`, buildable by hand, and 204 KB where `bundle.bin` was 491 KB.
+
+Deflating it moved what the size budget means. That entry exists so §4.4's per-binary
+duplication "shows in one number", and a compressor hides precisely that — so `size_budget.py`
+grew a directory branch and the budget now names the *staging tree*, at the number `bundle.bin`
+used to report. The download got smaller as a side effect rather than as a way of not looking at
+the total.
+
+**The fetch is lazy, and the stamp is what makes it so.** The host writes `/version` as the last
+step of an unpack, with the string the kernel passed — its own `BRAAM_VERSION`, so the stamp
+cannot disagree with the kernel that asked for it. Boot compares, and a match means the archive
+is never requested: the steady state costs no download at all. Written last, so an interrupted
+unpack leaves a stamp that does not match and is done again rather than believed.
+
+A mismatch asks. The alternative was overwriting on sight, which is what a service worker would
+do, but a stored `/bin` is the user's — they may have put something there — and the prompt costs
+one line above a prompt they were about to see anyway. Declining boots on what is stored; if
+those binaries are stale, `exec_resolve` already says so by name ("built for another process
+ABI"), so the failure explains itself rather than needing the boot path to predict it. The
+prompt reads keys through `KeyInput`, which works because init spawns the console pump before
+this task — the same claim a full-screen program takes, a few hundred milliseconds earlier than
+anything else has ever taken it.
+
+**`/bin` is writable now, and that needed an answer.** It used to be immutable by construction:
+a read-only archive mount refused a write below the VFS. One store means one `writable()`, and
+`rm /bin/sh` is reachable from the prompt — with a matching stamp, nothing would ever put it
+back, and the origin could not boot again. So `no_shell` offers the unpack a second time. The
+rule that comes out of it is worth stating plainly: **the archive, not the store, is what the
+system can be recovered from**, which is also why it is never cached into the store as bytes.
+
+A per-file read-only flag was considered and rejected. OPFS has no such thing — `FileSystemHandle`
+carries `kind` and `name` and nothing else, and `createSyncAccessHandle({mode})` chooses a lock,
+not a protection — so it would have to be Braam's own metadata, in a manifest or a sidecar, with
+no inode layer to hang a bit on and nothing to keep a user from rewriting whatever held it. With
+one user and no privilege boundary it would protect against accident only, which the restore
+prompt already does.
+
+**No OPFS is fatal, and that retires a criterion.** M5's third was "with OPFS unavailable, the
+system boots on `MemFs` and says so", and it was a good criterion while `/home` was the only
+thing at stake. It is not one now: there is no second store, so a memory namespace would be a
+system that looks like it works and loses everything at the reload — the failure mode the line
+was written to prevent, arrived at by a different road. Boot says what is wrong and starts no
+shell. The criteria list keeps it, struck, the way M8's third is kept.
+
+**What the tests lost, and where it went.** `test_memfs` and `test_bundlefs` are deleted with
+their subjects. `test_vfs` needed a writable filesystem that answers *without suspending* —
+`run_now` panics on a suspension and `OpfsFs` awaits the host for everything but a read — so it
+grew a `TempFs` beside the `ReadOnlyFs` and `CountingFs` it already had. A fixture rather than a
+component: flat, no `df` accounting, and honest about it in a comment.
+
+`test/run.mjs` drives everything synchronously, and there is no synchronous inflate. Rather than
+make the driver async — which would reach every assertion in it — `parseZip` is separated from
+`installOps`: the parser is async and runs once during the driver's own setup, and the generator
+of operations is plain and runs inside the import. Both stores drive the same generator, so
+neither has its own idea of what an archive means. It also made the one check worth writing by
+hand cheap: an entry named `../escape` is put in front of the parser and has to be refused.
+
+---
+
 ## A release archive dated today
 
 Every entry in `braam-<version>.zip` was stamped `01-01-1980 00:00`. That was deliberate — see
@@ -1356,7 +1436,7 @@ The per-binary lines in `tools/size_budget.txt` are gone, along with the POST_BU
 behind them. What they were for was making §4.4's duplication visible — every binary carries
 its own allocator, string types and coroutine runtime — but `bundle.bin` already shows that in
 one number, and it is the number that matters, since the archive is awaited before the first
-prompt. Thirty-two limits underneath it caught nothing the archive's own limit would not, and
+prompt. (That number is the staging tree's now: see "One store, and rootfs.zip".) Thirty-two limits underneath it caught nothing the archive's own limit would not, and
 each was a line to edit whenever a program legitimately grew.
 
 Two entries remain, `kernel.wasm` and `bundle.bin`. CI still reports every binary's size into
@@ -2566,7 +2646,9 @@ Twenty-two criteria, M0 to M9:
   open-file table.
   - Write a file, reload the page, the file is still there.
   - `df` reports quota, usage, and persistent versus best-effort mode.
-  - With OPFS unavailable, the system boots on `MemFs` and says so.
+  - ~~With OPFS unavailable, the system boots on `MemFs` and says so.~~ **Retired**, not broken:
+    there is no second store to boot on, and one that loses everything at the reload is the
+    failure the criterion was written against. See "One store, and rootfs.zip".
 - **M6 — Host services.** `fetch`, timers, WebSocket, clipboard, the `externref` table and `JsRef`.
   - A `curl`-ish command fetches a URL and prints the body.
   - A chat client works over a WebSocket.
@@ -3375,6 +3457,11 @@ file, no new import, and the format is small enough that `tools/pack.py` and
 build just produced, so the packer and the reader are checked against each other rather than
 each against its own reading of the format.
 
+*Superseded.* The archive is unpacked into the store rather than mounted from memory, so the
+kernel does not read it at all and the hand-rolled format bought nothing — it is `rootfs.zip`
+now, and only `web/fs.js` parses it. See "One store, and rootfs.zip". The last sentence still
+holds: the smoke test is still given the archive the build just produced.
+
 ### Two round trips, not one enormous buffer
 
 A reply whose size is not known in advance — a listing, the bundle — is asked for twice: the
@@ -3418,6 +3505,10 @@ Mounting needs to `co_await`, and `init()` is not a coroutine. Spawning a mounte
 shell would race the first prompt against the mount table. Awaiting it in `shell()` before the
 prompt is the only ordering that is correct, and it is also where the "no OPFS" line belongs —
 the third acceptance criterion is a sentence printed above the first prompt.
+
+*Superseded in part.* The ordering is unchanged and the reason for it stands, but the line above
+the first prompt is now a refusal rather than a warning, and there is no prompt after it. See
+"One store, and rootfs.zip".
 
 The work is in `boot_filesystem()` rather than inline so that its locals stay out of the
 shell's frame, which has a size class to fit inside; `test_shell` guards that at 1 KiB and the

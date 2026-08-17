@@ -3,6 +3,10 @@
 
 With --report, a file with no budget is printed rather than refused: the
 programs are measured and not bounded, and CI reports every one of them.
+
+A directory is summed rather than stat'ed, and is named with a trailing slash
+in the budget file. That is how the boot archive is bounded: rootfs.zip is
+compressed, so its own size would hide §4.4's duplication rather than show it.
 """
 
 import argparse
@@ -24,6 +28,14 @@ def read_budgets(path):
     return budgets
 
 
+def tree_size(root):
+    total = 0
+    for dirpath, _, names in os.walk(root):
+        for name in names:
+            total += os.path.getsize(os.path.join(dirpath, name))
+    return total
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--budgets", required=True)
@@ -35,8 +47,13 @@ def main():
     failed = False
 
     for path in args.binaries:
-        name = os.path.basename(path)
-        size = os.path.getsize(path)
+        path = path.rstrip("/")
+        if os.path.isdir(path):
+            name = os.path.basename(path) + "/"
+            size = tree_size(path)
+        else:
+            name = os.path.basename(path)
+            size = os.path.getsize(path)
         limit = budgets.get(name)
         if limit is None:
             if args.report:

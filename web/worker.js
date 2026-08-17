@@ -12,8 +12,8 @@ const mem = new Memory();
 let renderer = null;
 let pending = null; // a canvas or viewport that arrived before the kernel did
 
-// What an embedder may choose: where the module and the bundle live, and how
-// the renderer draws. The defaults are the files beside this one, so a page
+// What an embedder may choose: where the module and the root archive live, and
+// how the renderer draws. The defaults are the files beside this one, so a page
 // that wants none of this posts nothing (web/braam.js).
 let options = {};
 
@@ -83,8 +83,8 @@ function relay(msg) {
 
 async function boot() {
     const url = new URL(options.wasmUrl || "./kernel.wasm", import.meta.url);
-    const bundle = new URL(options.bundleUrl || "./bundle.bin", import.meta.url);
-    store = await openStore(bundle, await persistedKnown);
+    const rootfs = new URL(options.rootfsUrl || "./rootfs.zip", import.meta.url);
+    store = await openStore(rootfs, await persistedKnown);
 
     // A reply arrives on a promise, so it is never on the stack of the tick
     // that issued the request; pumping from here is what gets the resumed task

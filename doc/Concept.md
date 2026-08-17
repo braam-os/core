@@ -647,11 +647,11 @@ is the *line* rather than the key: a keystroke is two round trips and Enter to t
 is five, paid once a line, which is why it is affordable.
 
 **The real cost is duplication.** With no dynamic linking, every binary embeds its own copy of
-the allocator, the string types and the coroutine runtime; the boot archive is ~491 KB and
+the allocator, the string types and the coroutine runtime; the staged tree is ~491 KB and
 `sh.wasm` is 81 KB of it. Keep the process-side runtime minimal and push anything substantial
-into syscalls, so it lives once in the kernel rather than N times in userland. `bundle.bin`
+into syscalls, so it lives once in the kernel rather than N times in userland. That *tree*
 carries a size budget and the individual binaries do not, so that number is where the
-duplication stays visible.
+duplication stays visible — `rootfs.zip` is deflated, and its own size would hide it.
 
 Cross-instance data movement is Appendix B.
 
@@ -664,9 +664,7 @@ Appendix A has the full comparison of browser storage APIs and the durability ca
 ### 5.1 The mount layering
 
 ```
-BundleFs   → one packed archive  (read-only /bin and /share — immutable, cheap)
-OpfsFs     → OPFS                (read-write /home — the real store)
-MemFs      → linear memory       (/, and the fallback when OPFS is absent)
+OpfsFs     → OPFS                (/, and therefore everything — the store)
 ProcFs     → the scheduler       (/proc, generated at open)
 
 unbuilt:
@@ -674,11 +672,16 @@ unbuilt:
   an Fs over Range requests      (read-only remote trees)
 ```
 
-`/bin` and `/share` are two views of one archive: the worker loads `bundle.bin` beside
-`kernel.wasm` at boot, `tools/pack.py` builds it, and `bundlefs_at` re-roots it onto a subtree,
-so the programs and the files that ship beside them stay one download and become two mounts.
-There is no `/usr`. `/mnt/import` is a directory rather than a mount: the picker hands over
-bytes, and bytes are not a filesystem, so `import` writes them into the root `MemFs`.
+**Two mounts, and one of them is generated.** Everything a user can name is in the one store:
+`/bin`, `/share`, `/home`, `/tmp` and `/mnt/import` are directories in it, not filesystems of
+their own. There is no `/usr`, and `import` writes the picker's bytes into `/mnt/import` like
+anything else — bytes are not a filesystem.
+
+`/bin` and `/share` are put there at boot by unpacking `rootfs.zip`, an ordinary deflated zip
+beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js` reads; the kernel never sees
+its bytes. They are therefore **writable**, which is the price of one store: `/bin` used to be
+immutable because it was a read-only archive mount, and what stands in for that now is that the
+archive can always be unpacked again (§5.2).
 
 `/proc` is `ProcFs` over the scheduler: `cwd`, `meminfo`, `mounts`, `uptime`, `version`, and one
 file per live pid. It is also why the process ABI is as small as it is (§4.3) — a process reads
@@ -714,6 +717,19 @@ fast path comes free. **Opening** a file is async (one wake token), but once a s
 is held, `read`/`write`/`getSize`/`truncate`/`flush` return immediately: those are plain
 value-returning imports, the second sanctioned exception to §2.2.
 
+**The store is unpacked from `rootfs.zip`, and stamped.** An empty store is filled at boot
+without asking; after that `/version` holds the `BRAAM_VERSION` of the kernel that wrote it, and
+boot compares it against its own. A mismatch is the user's decision — the prompt is on the grid
+before the shell, since a stale `/bin` may be exactly what they want kept — and declining boots
+on what is stored. The unpack replaces the top-level directories the archive carries, `bin` and
+`share`, and never names any other, so `/home` cannot be lost to one. The stamp is written last,
+so an interrupted unpack is done again rather than believed.
+
+That is also what a writable `/bin` is held up by. `rm /bin/sh` is reachable from the prompt and
+the stamp would still match, so `no_shell` offers the unpack again rather than leaving an origin
+that can never boot. **The archive, not the store, is the thing the system can be recovered
+from** — which is why it is fetched lazily and never cached into the store as bytes.
+
 Two constraints to build around:
 
 - A sync access handle takes an **exclusive lock**, so the VFS needs an open-file table. The
@@ -724,7 +740,10 @@ Two constraints to build around:
   anyone holds it — `O_TRUNC` counts as writing, since a share skips the backend open that would
   have performed it. Sharing is what makes that one rule on every backend: none of them is ever
   asked to open a file twice, so the rule cannot depend on which mount a path landed in.
-- OPFS is unavailable in Safari private browsing. Capability-detect and fall back to `MemFs`.
+- OPFS is unavailable in Safari private browsing. Capability-detect and **stop**: with the whole
+  namespace in one store there is nothing to fall back to, and a memory namespace that looks
+  like a system until the tab is reloaded is worse than a refusal. Boot says so on the grid and
+  starts no shell.
 
 ### 5.3 Capability struct, not probing
 
@@ -836,7 +855,7 @@ src/kernel/jsref.h      the externref table and JsRef (§3.7)
 src/kernel/sysabi.h     the kernel↔process wire, included by both sides (§4.3)
 src/proc/               a process binary's whole runtime: _start, syscalls, stdio
 src/cmd/                one file per program; every program is a binary of its own
-src/fs/                 Fs interface, path, VFS, MemFs, BundleFs, OpfsFs, storage ABI
+src/fs/                 Fs interface, path, VFS, OpfsFs, storage ABI
 src/svc/                fetch, WebSocket, clipboard, file transfer, clock, processes (§6)
 src/ui/                 the layout layer over a Grid: Pane, TextBuf, TextView (§3.5)
 src/user/               exec and the syscall dispatcher, the console and its pump, the
@@ -894,8 +913,8 @@ Add to Home Screen (installed web apps are exempt from the ITP timer), and make 
 | API | Shape | Where it runs | Our use |
 |---|---|---|---|
 | **OPFS** | Real files and directories, origin-private, invisible to the user | Async API anywhere; **sync** handles worker-only | **Primary store** |
-| **IndexedDB** | Async key → blob, transactional | Anywhere | Fallback; metadata; stashed directory handles |
-| **Cache API** | Request → Response pairs | Anywhere | Unused: the bundle never changes after the build |
+| **IndexedDB** | Async key → blob, transactional | Anywhere | Metadata; stashed directory handles |
+| **Cache API** | Request → Response pairs | Anywhere | Unused: rootfs.zip is fetched at most once per version |
 | **localStorage** | 5 MB, sync, strings only | Main thread only | Tiny config, nothing else |
 | **File System Access** | The *actual* user disk, with a picker | Chromium desktop only | Optional, unbuilt (§5.4) |
 

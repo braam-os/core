@@ -1091,7 +1091,7 @@ The honest closing. Each of these is absent on purpose, with the argument record
   needs a per-process mount view, which is a milestone's worth of work in the VFS rather than a
   line in the dispatcher.
 - **An instantiation per command**, roughly a millisecond, plus reading the image out of the
-  bundle. The host caches the compiled `Module` by path, so the bytes still cross the VFS on
+  store. The host caches the compiled `Module` by path, so the bytes still cross the VFS on
   every `exec` and only the compile is saved.
 - **Duplication.** With no dynamic linking, every binary embeds its own allocator, string types
   and coroutine runtime. That is why the boot archive is ~400 KB where four binaries once cost

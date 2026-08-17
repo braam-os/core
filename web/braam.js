@@ -71,7 +71,7 @@ export function mount(options = {}) {
         kind: "options",
         options: {
             wasmUrl: options.wasmUrl,
-            bundleUrl: options.bundleUrl,
+            rootfsUrl: options.rootfsUrl,
             procWorkerUrl: options.procWorkerUrl,
             palette: options.palette,
             fontFamily: options.fontFamily,

@@ -1,8 +1,8 @@
-// Bringing the system up: the mounts, and then the shell.
+// Bringing the system up: the store, and then the shell.
 //
 // init spawns the console pump and one task, and this is that task. The shell
 // used to do the mounting itself and cannot any more — it is a file in /bin,
-// and /bin is one of the mounts.
+// and /bin is in the store this mounts.
 #pragma once
 
 #include "kernel/task.h"
@@ -16,7 +16,10 @@ constexpr Str SHELL = "/bin/sh";
 // boot archive without a greeting is not a broken one.
 constexpr Str MOTD = "/share/motd";
 
-Task<void> boot_filesystem();
+// False when there is no store to run on — a browser with no OPFS, which is
+// fatal now rather than a memory fallback (Concept.md §5.2). `pid` is init's,
+// for the claim the upgrade prompt takes on the keyboard.
+Task<bool> boot_filesystem(const u32 &pid);
 
 // `pid` is init's own, which is the shell's: it runs inside init's task rather
 // than a job of its own. Read a tick after this is called, so the caller may

@@ -110,14 +110,14 @@ add_dependencies(kernel revision)
 add_dependencies(braam_user revision)
 add_dependencies(bin_version revision)
 
-# bundle/ is packed rather than copied: BundleFs reads one archive, so the
-# worker loads one file instead of fetching a tree file by file. The process
-# binaries are staged into a copy of it first, since they are build outputs and
+# bundle/ is packed rather than copied: the host unpacks one archive into OPFS,
+# so it fetches one file instead of a tree file by file. The process binaries
+# are staged into a copy of it first, since they are build outputs and
 # /bin/echo must be a plain name rather than echo.wasm.
 set(BRAAM_BUNDLE_STAGE ${CMAKE_BINARY_DIR}/bundle)
 set(BRAAM_PACK_BUNDLE
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
-    ${BRAAM_BUNDLE_STAGE} ${CMAKE_BINARY_DIR}/web/bundle.bin)
+    ${BRAAM_BUNDLE_STAGE} ${CMAKE_BINARY_DIR}/web/rootfs.zip)
 
 foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
     list(APPEND BRAAM_BIN_TARGETS bin_${prog})
@@ -127,15 +127,16 @@ foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
                 $<TARGET_FILE:bin_${prog}> ${BRAAM_BUNDLE_STAGE}/bin/${prog})
 endforeach()
 
-# The kernel and the boot archive. A program is measured but not bounded: what
-# one costs is §4.4's duplication, which the archive's number already shows.
+# The kernel and the boot archive's staging tree. A program is measured but not
+# bounded: what one costs is §4.4's duplication, which the tree's number shows.
+# The tree and not rootfs.zip, which is deflated and would hide it.
 set(BRAAM_SIZE_BUDGET_CHECK
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
     --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt
-    $<TARGET_FILE:kernel> ${CMAKE_BINARY_DIR}/web/bundle.bin)
+    $<TARGET_FILE:kernel> ${BRAAM_BUNDLE_STAGE})
 
 # Only the kernel here: BRAAM_SIZE_BUDGET_CHECK covers the archive too, from
-# the `size` test, and it cannot run before the archive is packed.
+# the `size` test, and it cannot run before the archive is staged.
 add_custom_command(TARGET kernel POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
             --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt $<TARGET_FILE:kernel>

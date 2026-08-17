@@ -69,7 +69,7 @@ Task<i32> proc_main(Args args)
         // is part of the origin's usage above and has no separate number.
         Option<u32> held = parse_u32(bytes);
         u32 n            = held ? held.value() : 0;
-        if (n || mode == "ro" || kind == "memfs")
+        if (n || mode == "ro")
             out.put(", ").put(u64(n)).put(" bytes");
         out.put('\n');
         if ((co_await write_all(SYS_STDOUT, out.str())).is_err())

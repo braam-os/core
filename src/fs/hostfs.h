@@ -9,7 +9,7 @@
 
 enum class FsOp : u32 {
     Info = 1, // the StorageBackend, into buf
-    Bundle,   // the boot archive, into buf
+    Unpack,   // version -> the root archive written into the store, result = files
     Open,     // path, flags -> result = handle
     Stat,     // path -> flags = NodeKind, result = size
     List,     // path -> packed entries, into buf
@@ -35,5 +35,11 @@ struct FsCall : HostCall {
 // Capabilities and usage, straight from the host (Concept.md §5.3).
 Task<Result<StorageBackend>> storage_info();
 
-// The boot archive BundleFs parses, or Err(NotFound) when the host has none.
-Task<Result<String>> storage_bundle();
+// Fetches rootfs.zip and writes it into the store, replacing the top-level
+// directories it carries and leaving every other one alone, then stamps
+// `version` into /version. Returns how many files it installed.
+Task<Result<u32>> storage_unpack(Str version);
+
+// Where the host leaves that stamp, and what boot compares against its own
+// BRAAM_VERSION to decide whether the stored image is this kernel's.
+constexpr Str VERSION_PATH = "/version";

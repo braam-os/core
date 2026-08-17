@@ -2,7 +2,6 @@ add_executable(tests
     unit/main.cpp
     unit/harness.cpp
     unit/test_alloc.cpp
-    unit/test_bundlefs.cpp
     unit/test_channel.cpp
     unit/test_console.cpp
     unit/test_coroutine.cpp
@@ -11,7 +10,6 @@ add_executable(tests
     unit/test_hostfs.cpp
     unit/test_jsref.cpp
     unit/test_io.cpp
-    unit/test_memfs.cpp
     unit/test_pane.cpp
     unit/test_path.cpp
     unit/test_parse.cpp
@@ -42,17 +40,17 @@ target_link_libraries(tests PRIVATE
 
 find_program(BRAAM_NODE node REQUIRED)
 
-# The bundle comes along so that the packer and BundleFs are checked against
-# each other, not each against its own reading of the format. Every binary
-# follows: the surface and the metadata are an ABI of their own, and the
-# exact-import assertion is what proves none of them picked up a host import.
+# The archive comes along so that the packer and the unpacker in web/fs.js are
+# checked against each other, not each against its own reading of the format.
+# Every binary follows: the surface and the metadata are an ABI of their own,
+# and the exact-import assertion is what proves none picked up a host import.
 foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
     list(APPEND BRAAM_SMOKE_BINARIES $<TARGET_FILE:bin_${prog}>)
 endforeach()
 
 add_test(NAME smoke
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --kernel $<TARGET_FILE:kernel>
-            ${CMAKE_BINARY_DIR}/web/bundle.bin ${BRAAM_SMOKE_BINARIES})
+            ${CMAKE_BINARY_DIR}/web/rootfs.zip ${BRAAM_SMOKE_BINARIES})
 
 add_test(NAME unit
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --tests $<TARGET_FILE:tests>)

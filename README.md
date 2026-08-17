@@ -8,7 +8,7 @@ the binary format browsers run at close to native speed. There is no server side
 is a handful of static files, so any web host can serve it.
 
 Nothing is borrowed. There is no C library, no Emscripten runtime, no `xterm.js`; every part was
-written for this project. The kernel is 146 KB and contains no programs at all. Each program is a
+written for this project. The kernel is 136 KB and contains no programs at all. Each program is a
 separate WebAssembly file that runs in a sandbox of its own.
 
 Open the page and there is a prompt:
@@ -149,8 +149,9 @@ ordinary filesystem, so you can bring the file in with the browser's file picker
 
 ## Status
 
-Finished, as a first version: everything above works and the tests pass. The kernel is 146 KB and
-the archive holding the programs is 491 KB.
+Finished, as a first version: everything above works and the tests pass. The kernel is 136 KB and
+the archive holding the programs is 204 KB, unpacked into browser storage the first time the page
+is opened.
 
 A tablet works: tap to type, drag to select. The row of buttons under the terminal supplies the
 keys a touch keyboard does not have, since `Esc`, `Tab`, `Ctrl` and the arrows are not on one.

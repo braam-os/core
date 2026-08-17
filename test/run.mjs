@@ -7,17 +7,18 @@ import { basename } from "node:path";
 
 import { E } from "../web/abi.js";
 import { FakeStore, makeFakeImports } from "./fakefs.mjs";
+import { parseZip } from "../web/fs.js";
 import { FakeNet, makeFakeSvc } from "./fakesvc.mjs";
 import { pasted } from "../web/keys.js";
 import { Renderer } from "../web/render.js";
 
 function usage() {
-    console.error("usage: run.mjs --kernel <wasm> [<bundle.bin> [<proc.wasm>...]] |" +
+    console.error("usage: run.mjs --kernel <wasm> [<rootfs.zip> [<proc.wasm>...]] |" +
                   " --tests <wasm>");
     process.exit(2);
 }
 
-const [mode, file, bundle] = process.argv.slice(2);
+const [mode, file, rootfs] = process.argv.slice(2);
 const binaries = process.argv.slice(5);
 if (!file || (mode !== "--kernel" && mode !== "--tests"))
     usage();
@@ -52,10 +53,54 @@ const mem = {
 const store = new FakeStore();
 const net = new FakeNet();
 
-// The archive tools/pack.py just produced, so the packer and src/fs/bundlefs.cpp
-// are checked against each other rather than each against its own idea.
-if (bundle)
-    store.bundle = new Uint8Array(readFileSync(bundle));
+// The archive tools/pack.py just produced, read with the unpacker web/fs.js
+// ships, so the packer and the reader are checked against each other rather
+// than each against its own idea of the format.
+//
+// Parsed here rather than inside the import: inflating is asynchronous and the
+// fake answers synchronously, so the phase that can await does it once.
+if (rootfs)
+    store.entries = await parseZip(new Uint8Array(readFileSync(rootfs)));
+
+// One stored (uncompressed) entry, by hand: pack.py always deflates, so this
+// is the only exercise method 0 gets, and it is what lets a hostile name be
+// put in front of the parser without a packer that would refuse to write one.
+function zipOf(name, body) {
+    const n = new TextEncoder().encode(name);
+    const data = new TextEncoder().encode(body);
+    const out = [];
+    const put = (...b) => out.push(...b);
+    const u16 = (v) => put(v & 0xff, (v >> 8) & 0xff);
+    const u32 = (v) => { u16(v & 0xffff); u16((v >>> 16) & 0xffff); };
+
+    u32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(0);
+    u32(0); u32(data.length); u32(data.length); u16(n.length); u16(0);
+    put(...n, ...data);
+
+    const cd = out.length;
+    u32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(0);
+    u32(0); u32(data.length); u32(data.length);
+    u16(n.length); u16(0); u16(0); u16(0); u16(0); u32(0); u32(0);
+    put(...n);
+
+    const end = out.length;
+    u32(0x06054b50); u16(0); u16(0); u16(1); u16(1);
+    u32(end - cd); u32(cd); u16(0);
+    return new Uint8Array(out);
+}
+
+const stored = await parseZip(zipOf("share/hello", "hi"));
+if (stored.length !== 1 || new TextDecoder().decode(stored[0].bytes) !== "hi")
+    throw new Error(`a stored entry did not read back: ${JSON.stringify(stored)}`);
+
+// Concept.md §5.2's store is the whole namespace now, so a name that escapes
+// the root is the one zip bug worth checking by hand.
+for (const name of ["../escape", "/etc/passwd", "bin/../../out", "C:\\out"]) {
+    let refused = false;
+    await parseZip(zipOf(name, "x")).catch(() => { refused = true; });
+    if (!refused)
+        throw new Error(`the unpacker accepted ${JSON.stringify(name)}`);
+}
 
 const imports = {
     host: {
@@ -263,6 +308,20 @@ if (mode === "--kernel") {
     run(1);
     if (presented.length !== 1 || presented[0].w !== 60 || presented[0].h !== 16)
         fail(`the resize did not repaint the whole screen: ${JSON.stringify(presented)}`);
+
+    // First boot: an empty store is unpacked without asking, and what came out
+    // of the archive is what the shell was then found in.
+    if (rootfs) {
+        if (store.unpacks !== 1)
+            fail(`the first boot unpacked ${store.unpacks} times, expected 1`);
+        if (!store.files.has("/bin/sh"))
+            fail("the unpack did not install /bin/sh");
+        if (!store.dirs.has("/tmp") || !store.dirs.has("/mnt/import"))
+            fail("boot did not make the directories the archive does not carry");
+        const stamp = new TextDecoder().decode(store.files.get("/version") || new Uint8Array(0));
+        if (!/^\d+\.\d+\.\d+/.test(stamp))
+            fail(`/version reads ${JSON.stringify(stamp)}, expected a version`);
+    }
 
     // init prints /share/motd before the shell, in green, and the prompt sets
     // its own colour rather than inheriting one. COLOR_GREEN is 2 and
@@ -635,8 +694,9 @@ if (mode === "--kernel") {
         fail(`grep with a redirection on its own file printed ${JSON.stringify(rows(s))}`);
 
     // A redirection that cannot be opened stops the command before it runs.
-    s = submit("echo hi > /bin/wc", 1174);
-    if (!rows(s).some((line) => line.startsWith("braam: /bin/wc: ")))
+    // /proc is the read-only mount now that the store holds everything else.
+    s = submit("echo hi > /proc/uptime", 1174);
+    if (!rows(s).some((line) => line.startsWith("braam: /proc/uptime: ")))
         fail(`a read-only redirection said nothing: ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes(prompt(1)))
         fail(`a refused redirection left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
@@ -695,9 +755,9 @@ if (mode === "--kernel") {
     if (!rows(s).some((line) => line.startsWith("cat: nosuchfile: not found")))
         fail(`2> did not capture a diagnostic: ${JSON.stringify(rows(s))}`);
 
-    // The boot archive is mounted read-only as /bin and /share, unpacked from
-    // the file tools/pack.py wrote at the end of the build.
-    if (bundle) {
+    // /bin and /share are directories in the store, unpacked at boot from the
+    // archive tools/pack.py wrote at the end of the build.
+    if (rootfs) {
         s = submit("clear", 1183);
         s = submit("cat /share/motd", 1184);
         if (!rows(s).some((line) => line.startsWith("braam —")))
@@ -778,11 +838,79 @@ if (mode === "--kernel") {
     if (survived.join(",") !== "one,two")
         fail(`the file did not survive the reload: ${JSON.stringify(survived)}`);
 
-    // M5, third criterion: with no OPFS the system still boots, on MemFs, and
-    // says so rather than letting the user find out by losing a file.
-    const archive = store.bundle;
+    // The stamp still matches, so the archive is not fetched, let alone
+    // written: the steady state costs no download at all.
+    if (rootfs && store.unpacks !== 1)
+        fail(`a reload on a current store unpacked again (${store.unpacks} in all)`);
+
+    // /tmp is the exception to the store's persistence, and emptying it at
+    // boot is the whole of what makes it temporary now.
+    submit("echo scratch > /tmp/note", 2020);
+    if (!store.files.has("/tmp/note"))
+        fail("/tmp is not writable");
+    store.reopen();
+    instantiate();
+    instance.exports.init(0);
+    addr = instance.exports.resize(60, 16);
+    run(2100);
+    if (store.files.has("/tmp/note"))
+        fail("boot did not wipe /tmp");
+    if (!store.files.has("/home/notes"))
+        fail("wiping /tmp took /home with it");
+
+    // A stored image from another kernel is the user's to keep or replace, and
+    // declining leaves what is there — including the binaries the shell that
+    // is about to run comes out of.
+    if (rootfs) {
+        store.files.set("/version", new TextEncoder().encode("0.0.1-stale"));
+        store.files.set("/bin/keepme", new Uint8Array(1));
+        store.reopen();
+        instantiate();
+        instance.exports.init(0);
+        addr = instance.exports.resize(60, 16);
+        run(2200);
+        s = descriptor(addr);
+        if (!rows(s).some((line) => line.includes("0.0.1-stale")))
+            fail(`a stale stamp went unmentioned: ${JSON.stringify(rows(s))}`);
+        if (!rows(s).some((line) => line.includes("replace /bin and /share?")))
+            fail(`boot did not ask before overwriting: ${JSON.stringify(rows(s))}`);
+
+        press("n".codePointAt(0));
+        run(2210);
+        if (store.unpacks !== 1)
+            fail("a declined upgrade unpacked anyway");
+        if (!store.files.has("/bin/keepme"))
+            fail("a declined upgrade replaced /bin regardless");
+        s = descriptor(addr);
+        if (row(s, s.cursor_y) !== prompt())
+            fail(`declining left ${row(s, s.cursor_y)}, expected a prompt`);
+
+        // And accepting replaces both directories: what the archive does not
+        // carry goes, and what it never names is untouched.
+        store.reopen();
+        instantiate();
+        instance.exports.init(0);
+        addr = instance.exports.resize(60, 16);
+        run(2300);
+        press("y".codePointAt(0));
+        run(2310);
+        if (store.unpacks !== 2)
+            fail(`an accepted upgrade unpacked ${store.unpacks - 1} times, expected 2 in all`);
+        if (store.files.has("/bin/keepme"))
+            fail("the unpack left a binary the archive does not carry");
+        if (!store.files.has("/home/notes"))
+            fail("the unpack reached outside the directories the archive names");
+        s = descriptor(addr);
+        if (row(s, s.cursor_y) !== prompt())
+            fail(`accepting left ${row(s, s.cursor_y)}, expected a prompt`);
+    }
+
+    // M5's third criterion, retired: there is no memory fallback any more, so
+    // a browser with no OPFS is told it cannot run rather than given a store
+    // that quietly loses everything at the next reload.
+    const entries = store.entries;
     store.reset();
-    store.bundle = archive; // served beside kernel.wasm; a reload still finds it
+    store.entries = entries; // served beside kernel.wasm; a reload still finds it
     store.opfs = false;
     store.sync = false;
     instantiate();
@@ -790,14 +918,24 @@ if (mode === "--kernel") {
     addr = instance.exports.resize(60, 16);
     run(3000);
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.startsWith("braam: no OPFS")))
+    if (!rows(s).some((line) => line.startsWith("braam: this browser has no OPFS")))
         fail(`booting without OPFS said nothing: ${JSON.stringify(rows(s))}`);
+    if (store.unpacks !== 0)
+        fail("a system with no store unpacked into it anyway");
+    if (rows(s).some((line) => line.includes("$")))
+        fail(`booting without OPFS reached a prompt: ${JSON.stringify(rows(s))}`);
 
-    s = submit("echo volatile > gone", 3010);
-    s = submit("clear", 3011);
-    s = submit("cat gone", 3012);
-    if (!rows(s).includes("volatile"))
-        fail(`the memory fallback is not writable: ${JSON.stringify(rows(s))}`);
+    // Back to a working store for what follows: the reset above emptied it, so
+    // this boot is a first boot again and unpacks without asking.
+    store.opfs = true;
+    store.sync = true;
+    instantiate();
+    instance.exports.init(0);
+    addr = instance.exports.resize(60, 16);
+    run(3005);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`the store came back but the shell did not: ${JSON.stringify(rows(s))}`);
 
     // M6, first criterion: curl fetches a URL and prints the body. -i puts the
     // status and the headers in front of it.

@@ -10,37 +10,18 @@ share one stamp: the pack time, or SOURCE_DATE_EPOCH when it is set.
 """
 
 import argparse
-import os
 import sys
-import time
 import zipfile
 from pathlib import Path
 
-# version.py sits beside this script, which is sys.path[0] as it is run.
+# Both sit beside this script, which is sys.path[0] as it is run. The stamp
+# rules are pack.py's: one implementation, and the boot archive is packed by
+# the same rules as the release that carries it.
+from pack import MODE, stamp
 from version import version_of
 
 # What a built site cannot be missing.
-REQUIRED = ("index.html", "kernel.wasm", "bundle.bin")
-
-MODE = 0o100644 << 16
-
-# The earliest a zip can express.
-EPOCH = (1980, 1, 1, 0, 0, 0)
-
-
-def stamp():
-    """One timestamp for every entry: SOURCE_DATE_EPOCH, else the pack time."""
-    epoch = os.environ.get("SOURCE_DATE_EPOCH")
-    if epoch is None:
-        # A zip's date field is local time by definition.
-        t = time.localtime()
-    else:
-        try:
-            # UTC, so a pinned stamp does not move with the packer's zone.
-            t = time.gmtime(int(epoch))
-        except ValueError:
-            sys.exit(f"release.py: SOURCE_DATE_EPOCH is not an integer: {epoch}")
-    return max(t[:6], EPOCH)
+REQUIRED = ("index.html", "kernel.wasm", "rootfs.zip")
 
 
 def collect(root: Path, extras):

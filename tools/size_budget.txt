@@ -5,6 +5,7 @@
 # costs is §4.4's duplication, which the archive below shows in one number.
 kernel.wasm = 262144
 
-# The boot archive: every binary, plus what ships beside them. Awaited before
-# the first prompt, so it is boot latency as well as bytes.
-bundle.bin = 1048576
+# The boot archive's staging tree: every binary, plus what ships beside them.
+# The tree rather than rootfs.zip, because the archive is deflated and what is
+# being bounded here is §4.4's duplication, which a compressor would hide.
+bundle/ = 1048576

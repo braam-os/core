@@ -35,9 +35,7 @@ void test_hostfs();
 void test_jsref();
 void test_svc();
 void test_sysabi();
-void test_memfs();
 void test_vfs();
-void test_bundlefs();
 
 // The kernel's init() calls this too, so the cases below start from the same
 // static state kernel.wasm does.
@@ -88,8 +86,6 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_hostfs();
     test_svc();
     test_sysabi();
-    test_memfs();
-    test_bundlefs();
     test_vfs();
     test_tokenize();
     test_parse();
