@@ -225,9 +225,8 @@ void write_labelled(Str line)
 }
 
 // What the system is running on, under the version line main.cpp already wrote.
-// It is here rather than there because that export cannot await and runs before
-// the host's first resize(), so neither the host nor the real geometry is known
-// yet — and by the first tick both are.
+// It is here rather than there because that export cannot await, and asking the
+// host is the only way to know any of this.
 //
 // A description that does not arrive is not an error: the store is what boot
 // cannot do without, and this is the motd's kind of line, not the OPFS one.
@@ -252,21 +251,16 @@ Task<void> show_host(const StorageBackend &b)
             write_labelled(line);
     }
 
-    {
-        Buf<96> line;
-        line.put("screen:  ").put(screen().cols).put('x').put(screen().rows);
-        say(line.str());
-    }
-
-    // A snapshot, deliberately: `df` is the live view, and asking it again is
-    // what the boot figure is not for.
+    // The geometry is not here: it is on the screen being reported, and
+    // /proc/host answers it live for anyone who wants the number.
+    //
+    // How much room there is, and not how much is left: the usage is the half
+    // that moves, and a figure that was true at boot is the wrong one to leave
+    // on the screen all session. `df` is where to ask.
     Buf<96> line;
     line.put("store:   OPFS, ");
     if (b.quota)
-        line.put(u64((b.usage > b.quota ? 0 : b.quota - b.usage) / 1000000))
-            .put(" MB free of ")
-            .put(u64(b.quota / 1000000))
-            .put(" MB");
+        line.put(u64(b.quota / 1000000)).put(" MB");
     else
         line.put("quota unknown");
     say(line.str());

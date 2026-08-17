@@ -327,6 +327,11 @@ if (mode === "--kernel") {
     // its own colour rather than inheriting one. COLOR_GREEN is 2 and
     // COLOR_WHITE|COLOR_BRIGHT is 15, from the enum in src/kernel/screen.h.
     s = descriptor(addr);
+    // The geometry is /proc/host's alone. On the banner it would name the very
+    // screen it is printed on, and go stale at the first resize.
+    if (rows(s).some((line) => line.startsWith("screen:")))
+        fail(`the banner reports the geometry: ${JSON.stringify(rows(s))}`);
+
     const motd_y = rows(s).findIndex((line) => line.startsWith("braam — a small operating system"));
     if (motd_y < 0)
         fail(`the motd did not print at boot: ${JSON.stringify(rows(s))}`);

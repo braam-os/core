@@ -16,8 +16,13 @@ thing a browser makes genuinely hard to know: what the system is running *on*. N
 read `navigator.userAgent`, `hardwareConcurrency`, `deviceMemory` or `userAgentData` at all.
 
 Now the version line carries the version and the boot time, and a block under it names the
-browser, the OS, the architecture, the cores, the memory, the grid and the store. The same facts
-are `/proc/host`, and `uname` reformats that file the way `mount` reformats `/proc/mounts`.
+browser, the OS, the architecture, the cores, the memory and the store. The same facts are
+`/proc/host`, and `uname` reformats that file the way `mount` reformats `/proc/mounts`.
+
+The grid's own geometry is in `/proc/host` and not in the banner: it is a fact about the screen
+it would be printed on, so it is the one line a reader can already see the answer to. `/proc/host`
+reads it fresh on every open, which is what makes it worth having there — it moves with the
+window, and a boot-time number would be wrong by the first resize.
 
 **Two constraints decided the shape, and neither was negotiable.** `init()` is a synchronous
 export, so nothing in it can `co_await` a service — and it runs before the host's first
@@ -70,12 +75,14 @@ four fields is not what is worth reading about a browser. `-s`, `-r` and `-m` ar
 three, and `-m` is `wasm32` — the one fact neither the host nor the version supplies.
 
 Storage stayed out of `/proc/host`. Quota and usage are live, `df` exists to ask for them, and a
-cached copy would go stale; the banner's `store` line is honestly a boot-time snapshot.
+cached copy would go stale. The banner names the quota alone for the same reason: the usage is the
+half that moves, so a figure true only at boot is the wrong one to leave on the screen all
+session, while how much room the origin gave is a fact about the machine like the others around it.
 
-The banner block costs four rows of the grid. On the 60×16 screen `test/run.mjs` resizes to, boot
-now occupies 13 rows of 16 — which is why the fake's host string in `test/fakesvc.mjs` is two
-short lines. A longer one would push the motd off the top and the motd assertion is what would
-catch it.
+The banner block costs three rows of the grid. On the 60×16 screen `test/run.mjs` resizes to, boot
+occupies 13 rows of 16 — which is why the fake's host string in `test/fakesvc.mjs` is two short
+lines, and why the motd is seven. A longer one would push the greeting off the top, and the motd
+assertion is what would catch it.
 
 ---
 
