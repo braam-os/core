@@ -20,7 +20,10 @@ Task<Result<void>> proc_spawn(u32 pid, Str path, String &&image, const ProcMeta 
 // kernel says which one because a process may have several outstanding, and
 // the host is not the one keeping track. It rides in `flags`, which nothing
 // else on a step uses.
-Task<Result<ProcStep>> proc_step(u32 pid, u32 token, Str payload);
+//
+// `pages` is how much memory the instance has committed, which comes back on
+// every step because only the host can see it and a step is already a message.
+Task<Result<ProcStep>> proc_step(u32 pid, u32 token, Str payload, u32 *pages = nullptr);
 
 // Drops the instance. Told, not asked: it has no reply, and it is issued from
 // a destructor, where there is nothing left to await with.

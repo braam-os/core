@@ -22,9 +22,6 @@ constexpr usize PROC_MAX = 64;
 
 constexpr Str FILES[] = { "cwd", "host", "meminfo", "mounts", "tasks", "uptime", "version" };
 
-// A wasm page: the unit the kernel caps a process's memory in.
-constexpr u64 PAGE = 65536;
-
 // What /proc/tasks and /proc/<pid> share, so the two cannot disagree.
 Str state_of(const ProcInfo &p)
 {
@@ -85,7 +82,8 @@ bool put_word(String &out, Str s)
     return true;
 }
 
-// One task as positional fields, the way /proc/mounts reads. The cwd is last, so
+// One task as positional fields, the way /proc/mounts reads: pid, name, state,
+// wait, flags, worker, ppid, calls, fds, mem, cap, age, cwd. The cwd is last, so
 // nothing after it needs finding; `-` is "no answer here".
 bool put_task(String &out, const ProcInfo &p)
 {
@@ -102,7 +100,8 @@ bool put_task(String &out, const ProcInfo &p)
     rest.put(' ').put(state_of(p)).put(' ').put(wait_of(p));
     rest.put(' ').put(flags.str()).put(' ').put(worker_of(st));
     rest.put(' ').put(st.ppid).put(' ').put(st.calls).put(' ').put(st.fds);
-    rest.put(' ').put(u64(st.max_pages) * PAGE).put(' ').put(age_of(p)).put(' ');
+    rest.put(' ').put(u64(st.pages) * PROC_PAGE).put(' ').put(u64(st.max_pages) * PROC_PAGE);
+    rest.put(' ').put(age_of(p)).put(' ');
 
     return out.append(head.str()) && put_word(out, p.name) && out.append(rest.str()) &&
            put_word(out, st.cwd) && out.push('\n');
@@ -213,7 +212,10 @@ bool generate(Str name, String &out)
         if (st.worker) {
             t.put("\ncalls  ").put(st.calls);
             t.put("\nfds    ").put(st.fds);
-            t.put("\nmem    ").put(u64(st.max_pages) * PAGE);
+            // What the instance has committed, which only the host can see, and
+            // the ceiling it may grow to.
+            t.put("\nmem    ").put(u64(st.pages) * PROC_PAGE);
+            t.put("\ncap    ").put(u64(st.max_pages) * PROC_PAGE);
             t.put("\ncwd    ");
             // Appended rather than buffered: a path has no length limit.
             return out.append(t.str()) && out.append(st.cwd) && out.push('\n');

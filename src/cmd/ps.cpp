@@ -7,9 +7,11 @@
 // so WORKER is the kernel's own bookkeeping: a worker is exactly a process, and
 // a task without one is a coroutine in the kernel.
 //
-// MEM is the cap the kernel set at spawn, not what is in use: no API reports a
-// worker's memory without the COOP/COEP headers this system does without. There
-// is no CPU column for the same reason — nothing meters one.
+// MEM is what the instance has committed, measured on the host — the one memory
+// figure a browser gives up, since a wasm Memory says its own size even though
+// nothing will say a worker's. It rides back on every step, so it is current as
+// of the last one. The cap it may grow to is /proc/<pid>. There is still no CPU
+// column: nothing meters one.
 
 namespace {
 
@@ -28,7 +30,7 @@ void put_stat(Buf<16> &b, Str state, Str flags)
         b.put(flags);
 }
 
-// 16M, 512K, 0 — the cap is a whole number of pages, so nothing needs a decimal.
+// 1.2M, 448K, 16M — one decimal below ten, the way df prints a size.
 void put_mem(Buf<128> &out, Str bytes, usize w)
 {
     Option<u32> v = parse_u32(bytes);
@@ -38,14 +40,21 @@ void put_mem(Buf<128> &out, Str bytes, usize w)
     }
 
     constexpr Str UNIT[] = { "B", "K", "M", "G" };
-    u32 n = v.value(), u = 0;
-    while (n >= 1024 && u + 1 < sizeof(UNIT) / sizeof(UNIT[0])) {
-        n /= 1024;
+    u32 whole = v.value(), rem = 0, u = 0;
+    while (whole >= 1024 && u + 1 < sizeof(UNIT) / sizeof(UNIT[0])) {
+        rem = whole % 1024;
+        whole /= 1024;
         u++;
     }
 
     Buf<16> t;
-    t.put(n).put(UNIT[u]);
+    t.put(whole);
+    if (u && whole < 10) {
+        u32 tenth = (rem * 10) / 1024;
+        if (tenth)
+            t.put('.').put(tenth);
+    }
+    t.put(UNIT[u]);
     out.put_right(t.str(), w);
 }
 
@@ -135,8 +144,9 @@ Task<i32> proc_main(Args args)
         Str calls  = next_field(line);
         Str fds    = next_field(line);
         Str mem    = next_field(line);
-        Str age    = next_field(line);
-        Str cwd    = last_field(line);
+        next_field(line); // the cap, which is uniform: /proc/<pid> has it
+        Str age = next_field(line);
+        Str cwd = last_field(line);
         if (pid.empty())
             continue;
 

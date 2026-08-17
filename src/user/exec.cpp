@@ -251,6 +251,7 @@ struct Proc {
     u32 wait_any  = 0; // the token a Wait(SYS_WAIT_ANY) is parked on
     u32 depth     = 0; // how many spawns deep this one is
     u32 max_pages = 0; // the memory cap this instance was given, for /proc
+    u32 pages     = 0; // and what it has committed, as of its last step
     bool dead     = false;
 
     i32 exit = 1;
@@ -1996,6 +1997,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
     }
     p->depth     = exe.depth;
     p->max_pages = exe.meta.max_pages;
+    p->pages     = exe.meta.initial_pages; // until the first step reports
     if (!p->cwd.assign(cwd.empty() ? vfs_cwd() : cwd)) {
         proc_remove(p);
         proc_release(p);
@@ -2064,7 +2066,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
     u32 token   = 0; // 0 is _start, which answers nothing
     usize alive = 0; // servers still running
     for (;;) {
-        Task<Result<ProcStep>> step = proc_step(p->pid, token, payload.str());
+        Task<Result<ProcStep>> step = proc_step(p->pid, token, payload.str(), &p->pages);
         if (!step)
             co_return 1;
         Result<ProcStep> s = co_await step;
@@ -2130,6 +2132,7 @@ bool exec_proc_state(u32 pid, ProcState &out)
 
     out.worker    = true;
     out.calls     = u32(p->calls.size());
+    out.pages     = p->pages;
     out.max_pages = p->max_pages;
     out.dead      = p->dead;
     out.cwd       = p->cwd.str();

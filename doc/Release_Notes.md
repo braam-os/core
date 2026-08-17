@@ -7,6 +7,45 @@ of the two needs amending.
 
 ---
 
+## MEM is measured, and it rides back on the step
+
+`ps` reported the memory *cap*, and every row read `16M` — one number, the same for every process,
+which is a column that costs eleven characters and says nothing. It reports what the instance has
+actually committed now.
+
+The figure exists after all. The section below is right that nothing will report a **worker's**
+memory — that needs `measureUserAgentSpecificMemory()` and therefore COOP/COEP — but a process is
+not only a worker: it is a `WebAssembly.Memory`, and a Memory says its own size.
+`buffer.byteLength` is the pages the instance has grown to, read off the object rather than
+measured, and it is exactly the RSS analogue `ps` wanted. Only the worker holds it, so only the
+worker can read it — which is why `Memory.pages()` is in `web/host.js` beside the other accessor
+that has to re-derive after a `grow`.
+
+**It comes back on the step, not on an operation of its own.** A new `SvcOp` was the obvious shape
+and is the wrong one twice over: `/proc` is generated at `open` with nothing to await (§5.1), so an
+asynchronous query could not have fed the file it exists for; and a step already carries a message
+each way. `result_hi` in the reply record was unused by `ProcStep`, so the pages travel there and
+`proc_step` takes a `u32 *pages` out-param the way `exec_process` takes `bool *died`. No new
+operation, no extra round trip, and nothing at all on the hot path — the kernel reads the field it
+is already being handed.
+
+So the figure is as of the process's last step, and that is the most current one there can be: a
+process grows its memory only while it runs, and it runs only during a step. A process that has
+not finished its first step reports `ProcMeta.initial_pages`, which is what the host sized the
+Memory to — the truth then, rather than nought.
+
+`/proc/<pid>` carries both, `mem` and `cap`, since a per-process ceiling is worth having somewhere
+even when it is uniform; `/proc/tasks` carries both as fields and `ps` prints only the first. The
+column scales like `df`'s, one decimal below ten, because the numbers now vary: the shell reads
+`1.2M` and `cat` `448K` where the cap column only ever said `16M` for both. `ps` asserts in the
+suite that what init holds is neither nought nor the whole cap, which is what proves a host figure
+arrived rather than a placeholder.
+
+So the shell holds 1,310,720 bytes of its 16 MB and `cat` 458,752, and the ceiling was never the
+thing worth watching — the difference between two programs is.
+
+---
+
 ## ps, and what a browser will say about a worker
 
 The question that started this was whether the browser lets us look inside a worker, so that `ps`
@@ -53,9 +92,11 @@ a cryptic four-letter name for the one fact `ps` puts at the centre of its table
 ready, `S` waiting, `C` cancelled — then `+` for the foreground and `k`/`s` for the console
 claims. So STAT says whether a task is suspended and WAIT says on what, with no redundancy.
 
-**MEM is the cap, not the usage**, because the cap is a fact the kernel owns (`ProcMeta.max_pages`,
-which `spawn_process` computed and used to discard) and the usage is one nobody can have. **There
-is no CPU column**: nothing meters one, and a runaway program is killed rather than measured.
+**MEM started as the cap, not the usage** — `ProcMeta.max_pages`, which `spawn_process` had been
+computing and discarding — on the reasoning that no browser API reports what a worker holds. That
+is true of a *worker* and not of an instance, and the section below corrects it: MEM is the
+measured figure now. **There is no CPU column**: nothing meters one, and a runaway program is
+killed rather than measured.
 
 ### WAIT needed a bit in the Waiter, because a token cannot say what it is for
 

@@ -107,19 +107,26 @@ export function serveProc(ops) {
                     ? instance.exports._resume(token >>> 0, ptr, payload.length)
                     : instance.exports._start(ptr, payload.length);
                 started = true;
+
+                // Read before any release below, and here rather than in the
+                // kernel: only this side holds the instance. A process grows its
+                // memory while it runs, so the step that ends is when the figure
+                // has just changed.
+                const pages = mem.pages();
                 if (out === 0) {
                     // The process is over, so its memory goes now rather than
                     // at the next bind: a pooled worker holds its instance and
                     // would pin as much as PROC_MAX_PAGES until it is hired.
                     release();
-                    return { result: STEP.EXITED };
+                    return { result: STEP.EXITED, pages };
                 }
-                return { result: STEP.SUSPENDED };
+                return { result: STEP.SUSPENDED, pages };
             } catch {
                 // A trap is how a process reports a fatal error, and there is
                 // nothing left to resume: the instance goes.
+                const pages = mem.pages();
                 release();
-                return { result: STEP.TRAPPED };
+                return { result: STEP.TRAPPED, pages };
             }
         },
     };
@@ -348,7 +355,9 @@ export function makeProc(mem, kernel, makeLink, clock = () => 0) {
         if (m.result !== STEP.SUSPENDED)
             retire(p);
         if (pending) {
-            pending.r.ok(m.result);
+            // result_hi is the pages the instance has committed: the kernel has
+            // no way to ask, and a step is already a message (Concept.md §4.3).
+            pending.r.ok(m.result, m.pages || 0);
             pending.done();
         }
     }

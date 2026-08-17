@@ -32,6 +32,13 @@ export class Memory {
     str(ptr, len) {
         return new TextDecoder().decode(this.view().subarray(ptr, ptr + len));
     }
+
+    // Pages committed. This is the one memory figure a browser will give up: it
+    // is the instance's own, read off the object rather than measured, and it is
+    // what /proc publishes as a process's usage (doc/Release_Notes.md).
+    pages() {
+        return this.memory ? this.memory.buffer.byteLength / 65536 : 0;
+    }
 }
 
 // `present` draws and returns; it must never call back into the kernel, which

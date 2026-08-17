@@ -31,7 +31,7 @@ enum class SvcOp : u32 {
     // import per calling convention, and this is that convention exactly.
     ProcSpawn, // aux = pid, arg = path, buf = the image, flags = the page counts
     ProcStep,  // aux = pid, buf = the payload for _start or _resume
-               //   -> result_lo = ProcStep
+               //   -> result_lo = ProcStep, result_hi = the instance's pages
     ProcKill,  // req = pid; no record, no reply
 };
 

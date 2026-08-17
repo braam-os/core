@@ -58,7 +58,8 @@ struct ProcState {
     u32 ppid      = 0;     // 0 is nobody: init's parent, and the kernel's tasks
     u32 calls     = 0;     // asynchronous syscalls the instance is parked on
     u32 fds       = 0;     // descriptors open; stdio is not one, it is a Stdio
-    u32 max_pages = 0;     // the cap the kernel set at spawn, not what is in use
+    u32 pages     = 0;     // pages the instance has committed, as of its last step
+    u32 max_pages = 0;     // and the cap the kernel set at spawn
     bool dead     = false;
     Str cwd;
 };

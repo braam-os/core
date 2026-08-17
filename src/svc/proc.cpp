@@ -17,7 +17,7 @@ Task<Result<void>> proc_spawn(u32 pid, Str path, String &&image, const ProcMeta 
     co_return {};
 }
 
-Task<Result<ProcStep>> proc_step(u32 pid, u32 token, Str payload)
+Task<Result<ProcStep>> proc_step(u32 pid, u32 token, Str payload, u32 *pages)
 {
     SvcCall c(SvcOp::ProcStep, "", token);
     if (!c.ok())
@@ -26,6 +26,8 @@ Task<Result<ProcStep>> proc_step(u32 pid, u32 token, Str payload)
     if (!c.put(payload))
         co_return Err(Error::NoMemory);
     CO_TRY_VOID(co_await c);
+    if (pages)
+        *pages = c.req().h.result_hi;
     co_return ProcStep(c.req().h.result_lo);
 }
 

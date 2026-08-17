@@ -770,8 +770,13 @@ if (mode === "--kernel") {
             fail(`/share/motd did not read back: ${JSON.stringify(rows(s))}`);
         s = submit("clear", 1185);
         s = submit("ls /share", 1186);
-        if (!rows(s).includes("doc/"))
-            fail(`/share did not list its directories: ${JSON.stringify(rows(s))}`);
+        if (!rows(s).includes("help") || !rows(s).includes("motd"))
+            fail(`/share did not list its files: ${JSON.stringify(rows(s))}`);
+        // The README is at the root, where somebody arriving will see it.
+        s = submit("clear", 1186.1);
+        s = submit("ls /", 1186.2);
+        if (!rows(s).includes("README"))
+            fail(`/ did not list the README: ${JSON.stringify(rows(s))}`);
     }
 
     // M5, second criterion, as amended: df reports the quota and the usage as
@@ -852,13 +857,23 @@ if (mode === "--kernel") {
     // in the kernel, which is the whole of what the browser could never say.
     s = submit("cat /proc/tasks", 1185.1);
     const tasks = rows(s).filter((line) => line && !line.includes("$"));
-    if (!tasks.some((line) => /^1 tty \w+ \S+ \S+ - 0 0 0 0 \d+ -$/.test(line)))
+    if (!tasks.some((line) => /^1 tty \w+ \S+ \S+ - 0 0 0 0 0 \d+ -$/.test(line)))
         fail(`/proc/tasks has no pump with no worker: ${JSON.stringify(tasks)}`);
-    if (!tasks.some((line) => /^2 init \w+ \S+ \S+ bound 0 \d+ \d+ \d+ \d+ \/home$/.test(line)))
+    if (!tasks.some((line) => /^2 init \w+ \S+ \S+ bound 0 \d+ \d+ \d+ \d+ \d+ \/home$/.test(line)))
         fail(`/proc/tasks has no init holding a worker: ${JSON.stringify(tasks)}`);
     for (const line of tasks)
-        if (line.split(" ").length !== 12)
-            fail(`/proc/tasks is not twelve fields: ${JSON.stringify(line)}`);
+        if (line.split(" ").length !== 13)
+            fail(`/proc/tasks is not thirteen fields: ${JSON.stringify(line)}`);
+
+    // The memory a process has committed is measured on the host and rides back
+    // on every step: less than the cap, and not nought, since a running instance
+    // has pages. Nothing else in a browser will say what a worker holds.
+    const shell = tasks.find((line) => line.startsWith("2 init "));
+    const [used, cap] = shell.split(" ").slice(9, 11).map(Number);
+    if (!(used > 0 && used < cap))
+        fail(`init committed ${used} of ${cap} bytes, expected some of it`);
+    if (cap !== 256 * 65536)
+        fail(`init's cap is ${cap}, expected PROC_MAX_PAGES`);
 
     // ps itself is one of the tasks it lists — it is a process like any other,
     // and the shell armed it as the foreground before waiting for it. A syscall
@@ -869,8 +884,9 @@ if (mode === "--kernel") {
         fail(`ps did not head the table: ${JSON.stringify(ps)}`);
     if (!ps.some((line) => /^ +1 +- tty +[RS] +- +\S+ +- +- +- +\d+:\d\d +-$/.test(line)))
         fail(`ps did not show the pump as workerless: ${JSON.stringify(ps)}`);
-    if (!ps.some((line) => /^ +2 +- init +[RS] +bound +\S+ +\d+ +\d+ +16M +\d+:\d\d +\/home$/.test(line)))
-        fail(`ps did not show init with its cap: ${JSON.stringify(ps)}`);
+    if (!ps.some((line) =>
+        /^ +2 +- init +[RS] +bound +\S+ +\d+ +\d+ +\d+(\.\d)?[BKM] +\d+:\d\d +\/home$/.test(line)))
+        fail(`ps did not scale init's memory: ${JSON.stringify(ps)}`);
     if (!ps.some((line) => /^ +\d+ +2 ps +S\+ +bound /.test(line)))
         fail(`ps did not list itself in the foreground: ${JSON.stringify(ps)}`);
     if (!ps.some((line) => /^ +\d+ +\d+ \/bin\/ps +[RS] +- /.test(line)))
@@ -1261,7 +1277,7 @@ if (mode === "--kernel") {
     // The bundled README is the input because it is longer than the pane, which
     // is what makes PgDn mean anything.
     s = submit("clear", 3077);
-    s = submit("cat /share/doc/README | less", 3078);
+    s = submit("cat /README | less", 3078);
     // Named once: the two checks below are the same row before and after a
     // scroll, and pinning the text twice let one of them go stale.
     const readme_top = "Braam is a small operating system in a browser tab.";
@@ -1285,7 +1301,7 @@ if (mode === "--kernel") {
     // stage asks second is refused, rather than snapshotting the blanked grid
     // the first is painting and handing that back as the shell's screen.
     s = submit("clear", 3061);
-    s = submit("less /share/doc/README | less", 3062);
+    s = submit("less /README | less", 3062);
     if (!rows(s).some((line) => line.includes("q quits")))
         fail(`neither pager took the screen: ${JSON.stringify(rows(s))}`);
     press("q".codePointAt(0));
@@ -1818,11 +1834,11 @@ if (mode === "--kernel") {
     // A full-screen child claims the keyboard sh let go of, paints, and gives
     // it back — the claim transfer that made Sys::Fg necessary.
     s = submit("clear", 9217);
-    type("less /share/doc/README");
+    type("less /README");
     press(KEY.ENTER);
     run(9218);
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.includes("/share/doc/README") && line.includes("q quits")))
+    if (!rows(s).some((line) => line.includes("/README") && line.includes("q quits")))
         fail(`less under sh painted ${JSON.stringify(rows(s))}`);
     press("q".codePointAt(0));
     run(9219);
@@ -1834,7 +1850,7 @@ if (mode === "--kernel") {
     // killed process's record, so the shell has to get it back from a program
     // that never ran a line of its own cleanup.
     s = submit("clear", 9219.1);
-    type("less /share/doc/README");
+    type("less /README");
     press(KEY.ENTER);
     run(9219.2);
     press("c".codePointAt(0), CTRL);
@@ -2005,6 +2021,12 @@ if (mode === "--kernel") {
     s = submit("cat /proc/2", 11076.1);
     if (!rows(s).some((line) => line.startsWith("name   init")))
         fail(`/proc/2 is not init: ${JSON.stringify(rows(s))}`);
+    // Both memory figures are here, where a column would have been uniform: what
+    // the instance holds, and the ceiling the kernel gave it.
+    if (!rows(s).some((line) => /^mem    \d+$/.test(line)))
+        fail(`/proc/2 does not report its memory: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes(`cap    ${256 * 65536}`))
+        fail(`/proc/2 does not report its cap: ${JSON.stringify(rows(s))}`);
     if (!rows(s).some((line) => line.startsWith("cwd    /home")))
         fail(`/proc/2 has no cwd, so no process is there: ${JSON.stringify(rows(s))}`);
 
@@ -2078,11 +2100,11 @@ if (mode === "--kernel") {
         fail(`^C on the replacement's foreground left ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 11079.8);
-    type("less /share/doc/README");
+    type("less /README");
     press(KEY.ENTER);
     run(11079.9);
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.includes("/share/doc/README") && line.includes("q quits")))
+    if (!rows(s).some((line) => line.includes("/README") && line.includes("q quits")))
         fail(`less under the replacement painted ${JSON.stringify(rows(s))}`);
     press("q".codePointAt(0));
     run(11080);

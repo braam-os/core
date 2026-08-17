@@ -619,6 +619,12 @@ through a block the host takes from the process's own `_alloc`. One message each
 and both halves of that protocol live in `web/proc.js` — `serveProc` is the process's side,
 `makeProc` the host's — because two files describing one wire is how it drifts.
 
+The step's reply also carries **how much memory the instance has committed**, in `result_hi`. It
+belongs here rather than in an operation of its own for the reason the ABI is this small: only the
+worker can read a `WebAssembly.Memory`, the message is already being sent, and `/proc` — which
+publishes the figure (§5.1) — is generated with nothing to await. It is therefore as of the last
+step, which is as current as it can be: a process grows its memory only while it runs.
+
 **Whoever takes a worker away must fail the in-flight step**, or the kernel parks for ever on a
 reply that is not coming. An abandoned request is reaped by `wake()` on its token and by nothing
 else, which is why `sched_wake` returns a bool.
@@ -679,7 +685,7 @@ unbuilt:
 their own. There is no `/usr`, and `import` writes the picker's bytes into `/mnt/import` like
 anything else — bytes are not a filesystem.
 
-`/bin` and `/share` are put there at boot by unpacking `rootfs.zip`, an ordinary deflated zip
+`/bin`, `/share` and `/README` are put there at boot by unpacking `rootfs.zip`, a deflated zip
 beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js` reads; the kernel never sees
 its bytes. They are therefore **writable**, which is the price of one store: `/bin` used to be
 immutable because it was a read-only archive mount, and what stands in for that now is that the
@@ -700,9 +706,12 @@ same snapshot rule: `ps` reformats it the way `mount` and `df` reformat `/proc/m
 `ps` built from one read per pid would describe as many moments as it had rows. It carries what
 the scheduler knows (state, what the task is suspended on, how long it has been up) beside what
 only the process record does — whether a **worker** is bound, whose child it is, how many
-syscalls and descriptors it holds, and the memory cap it was given. A worker is exactly a
-process, so that column is `proc_find` succeeding and needs nothing of the host: the browser
-discloses nothing whatever about a worker (Release_Notes.md), and nothing here needs it to.
+syscalls and descriptors it holds, and how much memory it has committed against the cap it was
+given. A worker is exactly a process, so that column is `proc_find` succeeding and needs nothing
+of the host. The memory figure is the one thing here the kernel cannot see for itself: a
+`WebAssembly.Memory` reports its own size and only the worker holds one, so it comes back in
+every step's reply (§4.3) rather than in an operation of its own — a file generated at `open`
+could not have awaited one.
 
 **Every process has a working directory of its own**, inherited from whoever spawned it and
 moved only by its own `chdir`. The shell's is the shell process's; `cd` moves that, and a typed
@@ -888,7 +897,7 @@ src/user/               exec and the syscall dispatcher, the console and its pum
 src/user/tty.h          the terminal claims: KeyInput, FullScreen
 src/sh/                 the shell: grammar, LineEditor, job runtime, builtins
 src/cmd/sh.cpp          its entry point — /bin/sh is a binary like any other
-bundle/                 the tree tools/pack.py packs into /bin and /share
+bundle/                 the tree tools/pack.py packs into the root: /bin, /share, /README
 examples/hello/         the SDK's worked example, and an ordinary build target
 test/                   in-wasm unit tests, the Node driver, and the fakes: storage,
                         services, and a process worker with no thread in it

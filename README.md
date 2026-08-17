@@ -18,7 +18,7 @@ $ ls /bin                            # every program, one wasm file each
 $ echo hello > notes                 # files under /home survive a reload
 $ curl https://www.rfc-editor.org/rfc/rfc2324.txt | less   # a download, into a pager
 $ edit notes                         # ^S saves, ^Q quits
-$ tail -n 5 /share/doc/README | wc
+$ tail -n 5 /README | wc
 $ spin &                             # a program that loops forever
 $ kill %1                            # killed anyway
 ```

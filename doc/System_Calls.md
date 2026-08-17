@@ -503,7 +503,7 @@ step — one `_resume`, or a hundred syscalls and a spawn:
                                                   │                            │  `calls`
                                                   │◄──── returns 1 ────────────│
                                                   │ {exit, calls} = ops.end()
-   │◄── postMessage({k:"step", result:1,          │
+   │◄── postMessage({k:"step", result:1, pages:7, │
    │        exit:3, calls:[{op,token,len,buf}]},  │
    │        [each buf]) ──────────────────────────┘
    │
@@ -513,7 +513,7 @@ step — one `_resume`, or a hundred syscalls and a spawn:
      dst = kernel().sys(pid, Stage, len)
      mem.view().set(new Uint8Array(call.payload), dst)
      kernel().sys_async(pid, call.op, call.token, call.len)
-   pending.r.ok(result); pending.done()   → wake(tok)
+   pending.r.ok(result, pages); pending.done()   → wake(tok)
 ```
 
 That `for` loop is the whole kernel side of the protocol: `finish` in `web/proc.js`, straight-line
@@ -523,6 +523,12 @@ files cannot describe one wire.
 
 The exit status goes first and the step's own answer last, which is what leaves `p->exit` already
 recorded by the time the stepper wakes to `ProcStep::Exited` and reads it (§5).
+
+`pages` is how much memory the instance has committed, and it rides here rather than on an
+operation of its own: only the worker can read a `WebAssembly.Memory`, `/proc` is generated with
+nothing to await, and the step is already a message each way. It arrives in the reply record's
+otherwise unused `result_hi`, and `proc_step` hands it to the stepper through a `u32 *pages`
+out-param, which stores it on the `Proc` record for `/proc` to publish as a process's usage.
 
 `slice` rather than `subarray` is load-bearing on both sides. A view is detached by the next
 `memory.grow` (§8.4), and one that has been transferred cannot be re-derived.

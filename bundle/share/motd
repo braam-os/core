@@ -5,4 +5,4 @@ The whole filesystem is in OPFS and survives a reload; only /tmp is emptied
 at boot. Every program in /bin is a wasm binary in a worker of its own.
 
 edit is a full-screen editor: type to insert, ^S saves, ^Q quits, no modes.
-Try: help, ls /bin, uname -a, df, echo hello > notes, edit notes
+Try: help, ls /bin, uname -a, df, ps, echo hello > notes, edit notes
