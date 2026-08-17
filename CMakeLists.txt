@@ -93,7 +93,7 @@ include(cmake/BraamProgram.cmake)
 
 add_subdirectory(src/cmd)
 
-# Built like any other program, and not packed into the bundle: it is the SDK's
+# Built like any other program, and not packed into the archive: it is the SDK's
 # worked example, and compiling it here is what keeps it from rotting.
 add_subdirectory(examples/hello)
 
@@ -109,21 +109,21 @@ target_link_libraries(kernel PRIVATE
 add_dependencies(kernel revision)
 add_dependencies(braam_user revision)
 
-# bundle/ is packed rather than copied: the host unpacks one archive into OPFS,
+# rootfs/ is packed rather than copied: the host unpacks one archive into OPFS,
 # so it fetches one file instead of a tree file by file. The process binaries
 # are staged into a copy of it first, since they are build outputs and
 # /bin/echo must be a plain name rather than echo.wasm.
-set(BRAAM_BUNDLE_STAGE ${CMAKE_BINARY_DIR}/bundle)
-set(BRAAM_PACK_BUNDLE
+set(BRAAM_ROOTFS_STAGE ${CMAKE_BINARY_DIR}/rootfs)
+set(BRAAM_PACK_ROOTFS
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/pack.py
-    ${BRAAM_BUNDLE_STAGE} ${CMAKE_BINARY_DIR}/web/rootfs.zip)
+    ${BRAAM_ROOTFS_STAGE} ${CMAKE_BINARY_DIR}/web/rootfs.zip)
 
 foreach(prog IN LISTS BRAAM_BIN_PROGRAMS)
     list(APPEND BRAAM_BIN_TARGETS bin_${prog})
     list(APPEND BRAAM_BINARIES $<TARGET_FILE:bin_${prog}>)
     list(APPEND BRAAM_STAGE_BINARIES
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:bin_${prog}> ${BRAAM_BUNDLE_STAGE}/bin/${prog})
+                $<TARGET_FILE:bin_${prog}> ${BRAAM_ROOTFS_STAGE}/bin/${prog})
 endforeach()
 
 # The kernel and the boot archive's staging tree. A program is measured but not
@@ -132,7 +132,7 @@ endforeach()
 set(BRAAM_SIZE_BUDGET_CHECK
     ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/size_budget.py
     --budgets ${CMAKE_SOURCE_DIR}/tools/size_budget.txt
-    $<TARGET_FILE:kernel> ${BRAAM_BUNDLE_STAGE})
+    $<TARGET_FILE:kernel> ${BRAAM_ROOTFS_STAGE})
 
 # Only the kernel here: BRAAM_SIZE_BUDGET_CHECK covers the archive too, from
 # the `size` test, and it cannot run before the archive is staged.
@@ -150,9 +150,9 @@ add_custom_target(web ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:kernel> ${CMAKE_BINARY_DIR}/web/kernel.wasm
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_SOURCE_DIR}/bundle ${BRAAM_BUNDLE_STAGE}
+            ${CMAKE_SOURCE_DIR}/rootfs ${BRAAM_ROOTFS_STAGE}
     ${BRAAM_STAGE_BINARIES}
-    COMMAND ${BRAAM_PACK_BUNDLE}
+    COMMAND ${BRAAM_PACK_ROOTFS}
     DEPENDS kernel ${BRAAM_BIN_TARGETS}
     VERBATIM)
 

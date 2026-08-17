@@ -913,14 +913,14 @@ src/user/               exec and the syscall dispatcher, the console and its pum
 src/user/tty.h          the terminal claims: KeyInput, FullScreen
 src/sh/                 the shell: grammar, LineEditor, job runtime, builtins
 src/cmd/sh.cpp          its entry point — /bin/sh is a binary like any other
-bundle/                 the tree tools/pack.py packs into the root: /bin, /share, /README
+rootfs/                 the tree tools/pack.py packs into the root: /bin, /share, /README
 examples/hello/         the SDK's worked example, and an ordinary build target
 test/                   in-wasm unit tests, the Node driver, and the fakes: storage,
                         services, and a process worker with no thread in it
 web/                    braam.js (the embedding API), worker.js, host shim, renderer
 web/proc.js             both halves of the process protocol; procworker.js is one
                         process's worker, and wiring only
-tools/                  build scripts, bundle packer, metadata stamper, version and
+tools/                  build scripts, archive packer, metadata stamper, version and
                         release scripts, size-budget check, chat server
 ```
 

@@ -358,7 +358,7 @@ change to argue in Concept.md first.
   syscall dispatcher, the console and its pump, the pipes behind a stage's stdio, `ProcFs`, boot
   and init); `src/proc/` (a process binary's runtime, `screen.cpp` included); `src/sh/` (grammar,
   line editor, job runtime, builtins); `src/cmd/` (one file per program, `sh.cpp` among them);
-  `test/unit/`; `web/`; `bundle/`; `examples/`; `tools/`; `cmake/`.
+  `test/unit/`; `web/`; `rootfs/`; `examples/`; `tools/`; `cmake/`.
 - `braam_fs` and `braam_svc` are siblings above the kernel and below userland: they must not depend
   upwards or on each other, and anything needing the scheduler or screen belongs in `src/user/`
   (which is why `ProcFs` lives there). **`braam_sh` links `braam_proc`**, so nothing in it may

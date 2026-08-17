@@ -7,6 +7,23 @@ of the two needs amending.
 
 ---
 
+## The tree that becomes the root is called rootfs
+
+`bundle/` is now `rootfs/`, and the staging copy `build/bundle/` is `build/rootfs/`. The name was
+the last survivor of `bundle.bin`, the packed blob that `rootfs.zip` replaced: since then the
+directory, the staging tree, the size budget's entry and the archive the host fetches were one
+thing under two names, and the one nobody sees on disk was the one the code used. The budget line
+reads `rootfs/` and the archive beside it `rootfs.zip`, which is the point — the tree and the file
+are the same content, compressed or not.
+
+`/bin/version` went at the same time. It printed `BRAAM_VERSION` and nothing else, which the boot
+banner, `/proc/version` and `uname -a` each already say; a whole binary, its worker and its
+instantiation for a string the kernel prints unasked. It was also the only program that included
+`kernel/version.h`, so the `revision` dependency the build named one target at a time lost an
+entry rather than gaining a rule.
+
+---
+
 ## What the kernel is doing, as rates
 
 `ps` says what each task *is*. Nothing said what the system was *doing*. Every counter the kernel

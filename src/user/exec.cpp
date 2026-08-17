@@ -1952,7 +1952,7 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
         co_return Err(Error::NotFound);
 
     // A name with a slash is a path; a bare name is looked for in /bin, which
-    // is where the bundle puts the binaries. There is no PATH variable yet, and
+    // is where the archive puts the binaries. There is no PATH variable yet, and
     // one directory is not a search path.
     String path;
     bool ok = name.contains("/") ? path.assign(name) : path.assign("/bin/") && path.append(name);

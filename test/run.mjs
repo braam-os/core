@@ -616,7 +616,7 @@ if (mode === "--kernel") {
         fail(`an oversized resize gave ${s.cols}x${s.rows}`);
 
     // M4, first criterion: a pipeline, in the shipping kernel. /bin is the
-    // bundle's binaries, and grep filters the listing, both running at once
+    // archive's binaries, and grep filters the listing, both running at once
     // over a bounded pipe. `clear` first, so the rows below are the
     // pipeline's and nothing else's.
     addr = instance.exports.resize(60, 16);
@@ -1335,7 +1335,7 @@ if (mode === "--kernel") {
         fail(`the editor saved ${JSON.stringify(saved)}`);
 
     // A pager over a pipe: it reads its input to the end, then takes the keys.
-    // The bundled README is the input because it is longer than the pane, which
+    // The archive's README is the input because it is longer than the pane, which
     // is what makes PgDn mean anything.
     s = submit("clear", 3077);
     s = submit("cat /README | less", 3078);

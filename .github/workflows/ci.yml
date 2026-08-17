@@ -50,7 +50,7 @@ jobs:
           echo '### Binary size' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           python3 tools/size_budget.py --budgets tools/size_budget.txt --report \
-            build/kernel.wasm build/bundle build/web/rootfs.zip build/src/cmd/*.wasm \
+            build/kernel.wasm build/rootfs build/web/rootfs.zip build/src/cmd/*.wasm \
             >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 

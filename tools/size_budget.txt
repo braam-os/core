@@ -8,4 +8,4 @@ kernel.wasm = 262144
 # The boot archive's staging tree: every binary, plus what ships beside them.
 # The tree rather than rootfs.zip, because the archive is deflated and what is
 # being bounded here is §4.4's duplication, which a compressor would hide.
-bundle/ = 1048576
+rootfs/ = 1048576
