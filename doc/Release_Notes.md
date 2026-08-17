@@ -7,6 +7,86 @@ of the two needs amending.
 
 ---
 
+## Scrollback, and the renderer that was told nothing
+
+`scroll()` memcpy'd the rows up and overwrote row 0, so everything that reached the top of the
+window was gone. Shift+PageUp and Shift+PageDown now page back over it, half a screen a press,
+the way the Linux console does. `kernel.wasm` went from 146,326 to 148,483 bytes against an
+unchanged 256 KiB budget.
+
+**The history has to be the kernel's**, and that is the one thing not open to argument. A row is
+overwritten inside a `tick`, often many of them, and `host_present` fires once at the end — so by
+the time the page could look, the row it would have kept is already gone. There is no capturing it
+from `web/render.js` and no ABI that would let the page ask.
+
+**The renderer, though, is told nothing at all.** `struct Screen` gained no field, there is no new
+import or export, and `web/render.js` changed by one comment. The kernel composes the view into a
+cell array and points `cells` at it; the renderer paints row *i* at canvas row *i* as it always
+did. Selection came free out of that: `all()`, `text()` and `bounds()` index `S_CELLS` freshly on
+every call, so a drag over scrollback selects and copies scrollback without a line of it knowing.
+The alternative — `view_top` and `history_cells` in the descriptor, and `render.js` biasing its row
+reads — would have had to re-teach the selection, `text()` and select-all what a row means, and
+would have put the ring's layout into the ABI where the magic word is the only versioning there is.
+
+**Which buffer moves is the whole design.** The obvious arrangement keeps `cells` pinned and
+shadows the live screen while a view is up — and then every write has to be kept from damaging a
+rectangle that is no longer on screen, which means hooks in `damage`, `damage_all`, `screen_touch`,
+`screen_flush` and `screen_cursor`, plus a private path for the view's own repaint to bypass them
+all. Six edits to the hottest code in the kernel. Inverting it costs one: `g_cells` stays the live
+screen, every writer is untouched, and `cells` points at a composed block instead. A write while
+scrolled back damages a rectangle the renderer then repaints out of the composed block, where those
+cells are unchanged — wasted paint, never wrong pixels. What it costs is that the address in the
+descriptor moves when a view opens or closes; nothing caches it, because `memory.grow` detaching
+the buffer (§8.4) already forced everyone to re-derive, but a test that holds a descriptor across a
+press is a hazard that did not exist before, so `test/run.mjs` says so where it reads `cells`.
+
+**The live screen stays live, which is what keeps the anchor arithmetic honest.** Output goes on
+into the grid underneath, `screen_scrolled()` goes on counting, and `LineEditor`'s anchor follows
+it — none of them can tell there is a view. Freezing output instead would have meant deciding what
+`Sys::Echo` should answer with, and the answer would have been a lie the moment the view came down.
+
+**Composing is the flush's, not the scroll's.** `scroll()` runs once per output line. Recomposing
+there would memcpy the whole grid that often — a megabyte a line at the widest geometry, thousands
+of times inside one `tick`, which is a hang rather than a slowdown. It sets a flag instead, and
+`screen_flush` composes once a tick, where `host_present` already is.
+
+**The view stays on the rows being read.** When output scrolls the grid underneath, the offset
+grows with it, so the text does not slide. Once the ring is full the oldest row is evicted and the
+offset clamps instead, and from there the view drifts by a row per scroll — correct, since those
+rows are genuinely gone, but the kind of thing someone later reads as a bug, so it is asserted.
+
+**Any key comes home, and that is a choice.** The Linux console leaves you where you are until you
+page back down. Coming home on the next keystroke is the more forgiving rule, and it also makes the
+prompt provably live whenever anything is typed — so the line editor's anchor can never be pointing
+into a view, and there is no interaction to reason about. Paging is therefore the only chord that
+does not come home, and `MOD_SHIFT` was free: nothing in the kernel had ever looked at it.
+
+**The pump owns the chord, but not while a program holds the screen.** `less` and `edit` page with
+PageUp and switch on the code alone, and the grid they are painting is not the one with the history
+behind it — so the claim gates the interception, and an unshifted PageUp was never the pump's
+anyway. `FullScreen` brings the view home before it snapshots, and that is load-bearing rather than
+tidy: `less /README &` claims the screen from a syscall with no keystroke in between, and without
+it the renderer would sit on a frozen view while the pager painted underneath.
+
+**512 rows, allocated on the first scroll.** A row is `cols * 8` bytes, so it is 320 KB at eighty
+columns and 2 MiB at the widest grid the host can ask for; a screen that never fills pays nothing,
+and a heap that will not give it up means no scrollback rather than no screen. A width change
+re-widths the ring, clipping and padding each row exactly as the grid itself is clipped and
+padded — there is no line model to re-wrap with, which is the same reason resize has never had one.
+Only on a width change: `web/worker.js` calls `resize()` on every viewport event, and a rows-only
+change must not copy megabytes per frame.
+
+**`clear` does not clear it**, the way the Linux console does not. The screen blanks and what
+scrolled off it is still there to page back to.
+
+**Re-wrapping logical lines is still outstanding.** §3.5 promised it would "land with whichever
+milestone needs scrollback"; scrollback landed without it, because the per-row continuation bit is
+a property of how a row was *written*, and history stores rows that were already written. The
+promise moves rather than being kept — and the selection that dies on the next keystroke is still
+waiting on the same bit.
+
+---
+
 ## /mnt/import became /import
 
 The picker's landing directory sat under a `/mnt` that never held anything else. `/mnt` is where

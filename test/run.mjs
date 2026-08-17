@@ -128,6 +128,8 @@ function descriptor(addr) {
 }
 
 // One cell is {ch: u32, fg|bg|attrs|pad: u32} — the layout render.js assumes.
+// `cells` moves when a scrollback view opens or closes, so a descriptor taken
+// before a keystroke must not be read after one.
 function cell(s, x, y) {
     const words = new Uint32Array(memory.buffer, s.cells + (y * s.cols + x) * 8, 2);
     return { ch: words[0], fg: words[1] & 0xff, bg: (words[1] >>> 8) & 0xff };
@@ -187,6 +189,7 @@ const KEY = {
     PAGE_DOWN: NAMED + 13,
 };
 const CTRL = 2;
+const SHIFT = 1;
 
 const module = new WebAssembly.Module(readFileSync(file));
 
@@ -2105,6 +2108,64 @@ if (mode === "--kernel") {
         fail(`^L left the cursor at column ${s.cursor_x}`);
     press("c".codePointAt(0), CTRL);
     run(9230.93);
+
+    // Scrollback. Sixteen echoes on a sixteen-row screen put seventeen rows off
+    // the top, so two presses of half a screen land the first of them on the
+    // top row. `s.cells` is a composed block while a view is up, which is why
+    // the descriptor is re-read after every one of these.
+    s = submit("clear", 9230.94);
+    for (let i = 0; i < 16; i++)
+        s = submit(`echo line${i}`, 9230.95 + i / 10000);
+    const bottom = rows(s).join("\n");
+    if (bottom.includes("line0"))
+        fail(`line0 was meant to have scrolled off: ${JSON.stringify(rows(s))}`);
+
+    press(KEY.PAGE_UP, SHIFT);
+    press(KEY.PAGE_UP, SHIFT);
+    run(9230.96);
+    s = descriptor(addr);
+    if (row(s, 0) !== "line0")
+        fail(`Shift+PageUp put ${JSON.stringify(row(s, 0))} on top, expected line0`);
+    if (s.cursor_on !== 0)
+        fail("the cursor is drawn over the scrollback");
+
+    // Back down again, onto exactly the screen that was left behind.
+    press(KEY.PAGE_DOWN, SHIFT);
+    press(KEY.PAGE_DOWN, SHIFT);
+    run(9230.97);
+    s = descriptor(addr);
+    if (rows(s).join("\n") !== bottom)
+        fail(`Shift+PageDown did not restore the screen: ${JSON.stringify(rows(s))}`);
+    if (!s.cursor_on)
+        fail("the cursor did not come back with the live screen");
+
+    // And any other key is the way back, the keystroke itself still landing.
+    press(KEY.PAGE_UP, SHIFT);
+    run(9230.98);
+    type("x");
+    run(9230.99);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== `${prompt()} x`)
+        fail(`typing did not leave the scrollback: ${JSON.stringify(rows(s))}`);
+    press("c".codePointAt(0), CTRL);
+    run(9230.995);
+
+    // A program holding the screen keeps the chord: less pages its own grid,
+    // and the console's history is not the one on screen.
+    s = submit("clear", 9230.996);
+    type("less /README");
+    press(KEY.ENTER);
+    run(9230.997);
+    press(KEY.PAGE_UP, SHIFT);
+    run(9230.998);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line.includes("/README") && line.includes("q quits")))
+        fail(`Shift+PageUp took the screen from less: ${JSON.stringify(rows(s))}`);
+    press("q".codePointAt(0));
+    run(9230.999);
+    s = submit("echo alive", 9230.9995);
+    if (!rows(s).includes("alive"))
+        fail(`the shell did not survive the pager: ${JSON.stringify(rows(s))}`);
 
     // From here to `exit`, every case takes a worker away — and the shell is
     // one of the processes holding one, so each of them kills it and init

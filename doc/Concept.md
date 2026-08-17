@@ -247,7 +247,22 @@ struct Screen {
 The wrap is deferred, so filling the last column does not scroll the screen on its own. A resize
 keeps the rows in use — `0..cursor_y` — dropping from the top when they no longer fit, and lands
 them at the top of the new grid. Re-wrapping logical lines needs a per-row continuation bit the
-grid does not have, and lands with whichever milestone needs scrollback.
+grid does not have; scrollback arrived without it, and it is still outstanding.
+
+**A row that leaves the top is kept**, in a ring of `SCREEN_SCROLLBACK` rows at the grid's own
+width, fed by the scroll and by the resize's drop and by nothing else. **Shift+PageUp and
+Shift+PageDown page a view over it**, half a screen at a time, and any other key returns to the
+live screen. The console pump owns the chord, since the history is the kernel's grid — but not
+while a program holds the screen, whose grid it is not.
+
+The renderer is told nothing. While a view is up the live grid is left exactly where it is, so
+output, the cursor and `screen_scrolled()` carry on into it unaware, and `cells` points at a
+composed block instead: the rows above the live screen out of the ring, the rest out of the grid.
+So the descriptor's `cells` moves when a view opens or closes, the cursor is hidden rather than
+turned off, and a selection over scrollback is the same arithmetic over the same array. The
+composition is done once per `tick`, not once per scrolled row, and the view stays on the rows
+being read as output moves the grid underneath — until the ring's oldest row is evicted, past
+which it drifts, because those rows are genuinely gone.
 
 **The layout layer over the grid** is `src/ui/`, four small things rather than a widget toolkit:
 

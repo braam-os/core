@@ -100,6 +100,10 @@ FullScreen::FullScreen(u32 pid)
         return;
     }
 
+    // After the refusal and before the snapshot: a background job takes the
+    // screen with no keystroke to have brought the view home first.
+    screen_view_home();
+
     const Screen &s = screen();
     if (!s.cols || !s.rows || !screen_cells())
         return;

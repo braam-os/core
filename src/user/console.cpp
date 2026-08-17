@@ -106,6 +106,17 @@ Task<i32> console_pump()
 
         Key k = r.value();
 
+        // Shift+PageUp and Shift+PageDown page the screen's history, half a
+        // screen at a time — but not while a program holds the screen, whose
+        // grid that is not. Every other key returns to the live screen.
+        if (!tty_screen_owner() && (k.mods & MOD_SHIFT) &&
+            (k.code == KEY_PAGE_UP || k.code == KEY_PAGE_DOWN)) {
+            i32 page = i32(max(1u, screen().rows / 2));
+            screen_view_scroll(k.code == KEY_PAGE_UP ? -page : page);
+            continue;
+        }
+        screen_view_home();
+
         // ^C reaches whatever is in front, whatever is claimed: a program that
         // has taken the screen and stopped answering must still be killable,
         // and that is also M4's acceptance criterion. With nobody in front it

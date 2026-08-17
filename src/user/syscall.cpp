@@ -1019,7 +1019,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 screen_cursor(sys_get_u32(c.stage + 8) != 0);
             }
 
-            if (!reply_u32(reply, screen().cursor_x, screen().cursor_y, screen().cursor_on,
+            if (!reply_u32(reply, screen().cursor_x, screen().cursor_y, screen_cursor_on(),
                            screen().cols, screen().rows))
                 co_return Err(Error::NoMemory);
             status = 0;
@@ -1143,7 +1143,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             }
             screen_cursor((arg & SYS_ECHO_SHOW) != 0);
 
-            if (!reply_u32(reply, screen().cursor_x, screen().cursor_y, screen().cursor_on,
+            if (!reply_u32(reply, screen().cursor_x, screen().cursor_y, screen_cursor_on(),
                            screen().cols, screen().rows, scrolled))
                 co_return Err(Error::NoMemory);
             status = 0;

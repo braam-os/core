@@ -10,6 +10,13 @@ char32_t at(u32 x, u32 y)
     return screen_cells()[y * screen().cols + x].ch;
 }
 
+// What the renderer paints, which is the view's cells while one is up.
+char32_t shown(u32 x, u32 y)
+{
+    const Cell *cells = reinterpret_cast<const Cell *>(usize(screen().cells));
+    return cells[y * screen().cols + x].ch;
+}
+
 } // namespace
 
 void test_screen()
@@ -170,10 +177,107 @@ void test_screen()
     CHECK_EQ(s.cursor_x, 0);
     CHECK_EQ(s.cursor_y, 0);
 
-    // The grid is the only allocation, and reset gives it back.
+    // Nothing is kept until something scrolls: a screen that never fills pays
+    // nothing for the ring.
+    screen_reset();
+    screen_resize(4, 3);
+    CHECK_EQ(screen_history(), 0u);
+    CHECK_EQ(screen_view(), 0u);
+    screen_write("a\nb\nc"); // fills it exactly, so nothing has left
+    CHECK_EQ(screen_history(), 0u);
+    CHECK_EQ(screen_view_scroll(-1), 0u); // and there is nowhere to go
+    screen_write("\nd");
+    CHECK_EQ(screen_history(), 1u);
+
+    // Paging back shows what left, over a live grid that has not moved.
+    screen_cursor(true);
+    CHECK_EQ(screen_view_scroll(-1), 1u);
+    CHECK_EQ(screen_view(), 1u);
+    CHECK_EQ(shown(0, 0), 'a'); // out of the ring
+    CHECK_EQ(shown(0, 1), 'b'); // and the live rows below it
+    CHECK_EQ(shown(0, 3 - 1), 'c');
+    CHECK_EQ(at(0, 0), 'b'); // the grid itself is untouched
+    CHECK_EQ(s.cursor_on, 0u);
+    CHECK(screen_cursor_on()); // hidden, not turned off
+
+    // Home restores both, and clamps hold at either end.
+    screen_view_home();
+    CHECK_EQ(screen_view(), 0u);
+    CHECK_EQ(shown(0, 0), 'b');
+    CHECK_EQ(shown(0, 2), 'd');
+    CHECK_EQ(s.cursor_on, 1u);
+    CHECK_EQ(screen_view_scroll(-100), screen_history());
+    CHECK_EQ(screen_view_scroll(100), 0u);
+
+    // Output moves the live grid under a view; the view stays on its rows.
+    screen_reset();
+    screen_resize(4, 2);
+    screen_write("a\nb\nc\nd");
+    CHECK_EQ(screen_history(), 2u);
+    CHECK_EQ(screen_view_scroll(-2), 2u);
+    CHECK_EQ(shown(0, 0), 'a');
+    u64 was = screen_scrolled();
+    screen_write("\ne");
+    CHECK_EQ(screen_scrolled(), was + 1); // the anchor count is unaffected
+    CHECK_EQ(screen_view(), 3u);          // and the offset followed the rows
+    screen_flush();                       // where the recompose happens
+    CHECK_EQ(shown(0, 0), 'a');
+    CHECK_EQ(at(0, 1), 'e'); // the live screen carried on regardless
+
+    // Past the ring's depth the oldest row is gone, so the view drifts.
+    screen_reset();
+    screen_resize(2, 2);
+    for (u32 i = 0; i < SCREEN_SCROLLBACK + 4; i++) {
+        screen_put(char32_t('0' + i % 10));
+        screen_newline();
+    }
+    CHECK_EQ(screen_history(), SCREEN_SCROLLBACK);
+    CHECK_EQ(screen_view_scroll(-i32(SCREEN_SCROLLBACK)), SCREEN_SCROLLBACK);
+    char32_t top = shown(0, 0);
+    screen_newline();
+    CHECK_EQ(screen_view(), SCREEN_SCROLLBACK); // clamped, not grown
+    screen_flush();
+    CHECK(shown(0, 0) != top);
+
+    // Clearing the screen does not clear what has scrolled off it.
+    screen_view_home();
+    screen_clear();
+    CHECK_EQ(screen_history(), SCREEN_SCROLLBACK);
+
+    // Rows a resize drops off the top are history in the same sense.
+    screen_reset();
+    screen_resize(4, 4);
+    screen_write("one\ntwo\nsix\nfor\n");
+    CHECK_EQ(screen_history(), 1u);
+    CHECK(screen_resize(4, 2) != 0);
+    CHECK_EQ(screen_history(), 3u);
+    CHECK_EQ(screen_view_scroll(-3), 3u);
+    CHECK_EQ(shown(0, 0), 'o'); // "one", the oldest of them
+    CHECK_EQ(shown(0, 1), 't'); // "two"
+
+    // History follows a width change, clipped and padded like the grid.
+    screen_reset();
+    screen_resize(4, 2);
+    screen_write("abcd\nefgh\nij");
+    CHECK_EQ(screen_history(), 1u);
+    CHECK(screen_resize(2, 2) != 0);
+    CHECK_EQ(screen_view_scroll(-1), 1u);
+    CHECK_EQ(shown(0, 0), 'a');
+    CHECK_EQ(shown(1, 0), 'b'); // "abcd", to the two columns there are
+    CHECK(screen_resize(4, 2) != 0);
+    CHECK_EQ(screen_view(), 0u); // a resize takes the view down first
+    CHECK_EQ(screen_view_scroll(-1), 1u);
+    CHECK_EQ(shown(1, 0), 'b');
+    CHECK_EQ(shown(2, 0), 0); // and pads the width back out blank
+
+    // The grid, the ring and the view are the allocations, and reset gives all
+    // three back.
     screen_reset();
     usize in_use = heap_stats().bytes_in_use;
-    screen_resize(80, 24);
+    screen_resize(8, 2);
+    screen_write("a\nb\nc\nd");
+    CHECK(screen_history() != 0);
+    CHECK(screen_view_scroll(-1) != 0);
     CHECK(heap_stats().bytes_in_use > in_use);
     screen_reset();
     CHECK_EQ(heap_stats().bytes_in_use, in_use);

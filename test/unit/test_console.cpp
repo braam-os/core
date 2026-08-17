@@ -1,4 +1,5 @@
 #include "harness.h"
+#include "kernel/alloc.h"
 #include "kernel/key.h"
 #include "kernel/sched.h"
 #include "kernel/screen.h"
@@ -149,6 +150,67 @@ void test_console()
     sched_cancel(cpid);
     settle();
     CHECK(tty_raw() == nullptr);
+
+    // Scrollback is the pump's: the history is the kernel's grid, and no
+    // program is holding it. Half a screen a press.
+    screen_clear();
+    for (u32 i = 0; i < 20; i++)
+        screen_write("row\n"); // twice the ten rows there are
+    CHECK(screen_history() >= 10);
+    CHECK_EQ(screen_view(), 0u);
+
+    press(KEY_PAGE_UP, MOD_SHIFT);
+    settle();
+    CHECK_EQ(screen_view(), 5u);
+    press(KEY_PAGE_UP, MOD_SHIFT);
+    settle();
+    CHECK_EQ(screen_view(), 10u);
+    press(KEY_PAGE_DOWN, MOD_SHIFT);
+    settle();
+    CHECK_EQ(screen_view(), 5u);
+
+    // Unshifted it is an ordinary key, and any ordinary key is the way back.
+    press(KEY_PAGE_UP);
+    settle();
+    CHECK_EQ(screen_view(), 0u);
+
+    // A claimant never sees the chord, and the prompt is a claimant — but the
+    // key that brings the view home is still delivered.
+    got_n     = 0;
+    claimed   = false;
+    u32 cpid2 = sched_spawn(claimant());
+    CHECK(cpid2 != 0);
+    settle();
+    CHECK(claimed);
+    press(KEY_PAGE_UP, MOD_SHIFT);
+    settle();
+    CHECK_EQ(got_n, 0u);
+    CHECK_EQ(screen_view(), 5u);
+    press('k');
+    settle();
+    CHECK_EQ(screen_view(), 0u);
+    CHECK_EQ(got_n, 1u);
+    CHECK_EQ(got[0], u32('k'));
+
+    // With the screen claimed the chord belongs to the program: less and edit
+    // page a grid of their own.
+    {
+        FullScreen *alt = heap_new<FullScreen>(7);
+        CHECK(alt && alt->ok());
+        got_n = 0;
+        press(KEY_PAGE_UP, MOD_SHIFT);
+        settle();
+        CHECK_EQ(got_n, 1u);
+        CHECK_EQ(got[0], u32(KEY_PAGE_UP));
+        CHECK_EQ(screen_view(), 0u);
+        heap_delete(alt);
+    }
+
+    sched_cancel(cpid2);
+    settle();
+    CHECK(tty_raw() == nullptr);
+    screen_reset();
+    CHECK(screen_resize(40, 10));
 
     // Nothing claimed: keys are cooked, a line at a time, and reach whatever is
     // reading the console's own stdin.

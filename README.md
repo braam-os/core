@@ -47,7 +47,8 @@ enough to check by eye, and a test asserts exactly what crosses it.
 
 **A shell.** Line editing with history, and one pipeline per line: `|`, `<`, `>`, `>>`, `2>`,
 `2>>`, and `&` to run in the background. `^C` stops whatever is running and gives the prompt back.
-Background jobs are managed with `jobs`, `fg` and `kill`.
+Background jobs are managed with `jobs`, `fg` and `kill`. `Shift+PageUp` and `Shift+PageDown` page
+back over what has scrolled off the screen, and any other key returns to the prompt.
 
 **A filesystem.** `/` lives in memory. `/bin` and `/share` come out of an archive downloaded
 alongside the kernel. `/home` is stored by the browser and is the only place where files survive a

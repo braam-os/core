@@ -82,6 +82,20 @@ void test_tty()
         heap_delete(b);
         CHECK_EQ(screen_cells()[0].ch, 'a');
     }
+
+    // A view is taken down before the snapshot: a background job claims the
+    // screen with no keystroke to have brought it home.
+    screen_reset();
+    screen_resize(4, 2);
+    screen_write("ab\ncd\nef");
+    CHECK(screen_view_scroll(-1) != 0);
+    {
+        FullScreen *a = heap_new<FullScreen>(5);
+        CHECK(a && a->ok());
+        CHECK_EQ(screen_view(), 0u);
+        heap_delete(a);
+        CHECK_EQ(screen_cells()[0].ch, 'c');
+    }
     screen_reset();
 
     // What Sys::Tty answers with: a console stream and a pipe's are the same

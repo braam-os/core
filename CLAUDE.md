@@ -297,9 +297,13 @@ change to argue in Concept.md first.
 
 - **No `bg` and no `^Z`.** Stopping a running coroutine at an arbitrary point is the resume-side
   twin of `CancelToken` and would have to reach every awaitable.
-- **Resize drops rows from the top rather than re-wrapping logical lines**, which §3.5 promised.
+- **Resize drops rows from the top rather than re-wrapping logical lines**, which §3.5 promised
+  would arrive with scrollback. Scrollback arrived without it, and clips history rows the same way.
 - **A mouse selection does not survive output.** Dropped by the next keystroke and by a resize;
-  holding one needs the per-row continuation bit the re-wrap is waiting for.
+  holding one needs the per-row continuation bit the re-wrap is waiting for. A selection *over*
+  scrollback works, since the view is composed into the cells the renderer already reads.
+- **Scrollback is 512 rows and pages by half a screen**, and any key but the chord returns to the
+  live screen. It is not a pager: no search, no mark, and no line model behind it.
 - **A multi-line paste loses everything after the first command** — type-ahead across a command
   boundary, not the paste. Pasting one line is exact.
 - **No per-process root.** A process has its own cwd, but an absolute path resolves with the

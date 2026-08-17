@@ -219,8 +219,9 @@ export class Renderer {
         this.refresh(was, this.sel);
     }
 
-    // The whole grid, for the select-all chord. There is no scrollback, so
-    // "all" is what is on the screen and nothing more.
+    // The whole grid, for the select-all chord: what is on the screen and
+    // nothing more, which while scrolled back is the view rather than the live
+    // screen. The kernel composes that into the cells, so nothing here changes.
     all() {
         if (!this.info)
             return;

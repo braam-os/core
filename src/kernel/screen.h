@@ -40,6 +40,10 @@ enum : u32 {
     SCREEN_MAX_ROWS = 256,
 };
 
+// Rows of scrollback. A row costs cols * 8 bytes; the ring is allocated on the
+// first scroll, and without it there is simply no scrollback.
+enum : u32 { SCREEN_SCROLLBACK = 512 };
+
 // The kernel writes 'BSCR' here; a renderer that reads anything else is looking
 // at the wrong build, and should say so rather than draw noise (Concept.md §8.4).
 enum : u32 { SCREEN_MAGIC = 0x42534352 };
@@ -69,6 +73,22 @@ Cell *screen_cells();
 // top. Nothing else counts them, so a writer holding an anchor row takes the
 // difference across whatever it did to learn how far the anchor went.
 u64 screen_scrolled();
+
+// The scrollback view. While one is up the live grid is untouched underneath
+// and `cells` points at a composed block instead, so that address moves when a
+// view opens or closes. Negative pages back, clamped to the history there is;
+// returns the resulting offset.
+u32 screen_view_scroll(i32 delta);
+
+// Back to the live screen, and nothing when already there.
+void screen_view_home();
+
+// Rows the view sits above the live screen, and rows there are to page over.
+u32 screen_view();
+u32 screen_history();
+
+// The cursor as the live screen has it; a view hides it.
+bool screen_cursor_on();
 
 void screen_style(u8 fg, u8 bg, u8 attrs);
 
