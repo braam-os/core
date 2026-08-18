@@ -25,7 +25,7 @@ Files move in and out through the browser, since the page cannot reach your
 disk on its own:
 
     import                 pick files; they land in /import
-    export notes           download notes out of the browser
+    save notes             download notes out of the browser
 
 help lists every command. uname -a says what this is and what it is running
 on, and df shows how much room the browser gave it. ps lists what is running,

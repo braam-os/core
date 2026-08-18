@@ -2754,7 +2754,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 2,426-byte file: more than the eight writes a pipe
+    // Three copies of a 2,569-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -2783,9 +2783,9 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "braam: nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 7,416 bytes is fifteen chunks against eight
+    // The many-writes case: 7,707 bytes is sixteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1248 7416");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "129 1284 7707");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

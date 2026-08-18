@@ -97,7 +97,7 @@ or, since `find_package(braam)` refuses a non-wasm32 compiler, a message saying 
 the build directory and configure again.
 
 `braam_add_program(NAME <n> SOURCES <...> [LIBS <...>])` is the same function `src/cmd/` builds
-the system's own thirty-two programs with. It links `braam::proc` and `braam::flags`, links with
+the system's own thirty-six programs with. It links `braam::proc` and `braam::flags`, links with
 `--import-memory` so the memory cap is the kernel's, and runs `stamp.py` over the result. `LIBS`
 names anything else the program is made of. The CMake target it defines is `bin_<name>` — the
 file is `<name>.wasm`, and the prefix is there because a program may be called `test` or
@@ -144,7 +144,7 @@ Write the new one beside the old, or reload.
 **Not every command has to be a binary.** `/bin/sh` is a Bourne shell — variables, `if`, the three
 loops, `case`, functions, globbing, `$( )`, here-documents, `test` and `trap` — so a command whose
 work is running other commands is a text file, and needs no toolchain at all. The grammar is
-Concept.md §4.5.
+Concept.md §4.5, and [Shell.md](Shell.md) is the whole shell in detail.
 
 Write it anywhere the filesystem reaches — `edit` is in `/bin` — and run it by name after `sh`:
 
@@ -455,5 +455,8 @@ node test/run.mjs --kernel build/kernel.wasm build/web/rootfs.zip /path/to/hello
 - [Concept.md](Concept.md) — the specification. §4.3 is the process ABI, §4.4 is what a
   process costs, §4.5 is the shell's language, §2 is the three invariants everything else
   follows from.
-- `src/cmd/` in the source tree — thirty-two worked examples, from `true.cpp` at six lines
+- [Shell.md](Shell.md) — the shell as a user sees it, which is the long form of §4 above:
+  the grammar, the expansions, the twenty-six builtins, the jobs and what is deliberately
+  absent.
+- `src/cmd/` in the source tree — thirty-six worked examples, from `true.cpp` at six lines
   to the shell.

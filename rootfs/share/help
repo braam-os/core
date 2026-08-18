@@ -13,6 +13,7 @@ date     [-u] — print the date and time
 df       [-h] — report filesystem space, and with -h in scaled units
 echo     [-n] [<word>...] — write the arguments
 edit     <file> — a full-screen editor; ^S saves, ^Q quits
+env      [-i] [<name>=<value>...] [<command> [<arg>...]] — print the environment, or change it
 false    fail
 grep     [-i] [-v] <text> [<file>...] — pass matching lines
 head     [-n <count>] [<file>...] — the first lines, ten by default

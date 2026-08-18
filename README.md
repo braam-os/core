@@ -2,13 +2,13 @@
 
 An operating system that runs in a browser tab.
 
-Braam is a small command-line system: a kernel, a filesystem, a terminal, a shell, thirty-two
-programs and six shell builtins. It is written from scratch in C++20 and compiled to WebAssembly,
-the binary format browsers run at close to native speed. There is no server side. The whole system
-is a handful of static files, so any web host can serve it.
+Braam is a small command-line system: a kernel, a filesystem, a terminal, a shell, thirty-six
+programs and twenty-six shell builtins. It is written from scratch in C++20 and compiled to
+WebAssembly, the binary format browsers run at close to native speed. There is no server side. The
+whole system is a handful of static files, so any web host can serve it.
 
 Nothing is borrowed. There is no C library, no Emscripten runtime, no `xterm.js`; every part was
-written for this project. The kernel is 136 KB and contains no programs at all. Each program is a
+written for this project. The kernel is 148 KB and contains no programs at all. Each program is a
 separate WebAssembly file that runs in a sandbox of its own.
 
 Open the page and there is a prompt:
@@ -45,11 +45,14 @@ enough to check by eye, and a test asserts exactly what crosses it.
 
 ## What is in it
 
-**A shell.** Line editing with history, and one pipeline per line: `|`, `<`, `>`, `>>`, `2>`,
-`2>>`, and `&` to run in the background. `^C` stops whatever is running and gives the prompt back.
-Background jobs are managed with `jobs`, `fg` and `kill`. `Shift+PageUp` and `Shift+PageDown` page
-back over what has scrolled off the screen, `Shift+Up` and `Shift+Down` — and the mouse wheel —
-move a row at a time, and any other key returns to the prompt.
+**A shell.** A Bourne shell after v7: variables, functions, `if`, three loops, `case`, globbing,
+command substitution, here-documents and `trap`, so a line is a tree of pipelines joined by `;`,
+`&&` and `||`. Redirection is `|`, `<`, `>`, `>>`, `2>`, `2>>`, `>&`, `2>&`, `<<` and `<<-`, and
+`&` runs a pipeline in the background. Line editing with history. `^C` stops whatever is running
+and gives the prompt back, and background jobs are managed with `jobs`, `fg` and `kill`.
+`Shift+PageUp` and `Shift+PageDown` page back over what has scrolled off the screen, `Shift+Up`
+and `Shift+Down` — and the mouse wheel — move a row at a time, and any other key returns to the
+prompt. [doc/Shell.md](doc/Shell.md) is the manual.
 
 **A filesystem.** `/` lives in memory. `/bin` and `/share` come out of an archive downloaded
 alongside the kernel. `/home` is stored by the browser and is the only place where files survive a
@@ -65,15 +68,17 @@ They draw into a grid of their own and send only the part that changed, and `^C`
 them.
 
 **Every program is an isolated process.** No program lives inside the kernel, and there is no way
-to write one that does. Each of the thirty-two commands is a separate wasm file that runs in a
+to write one that does. Each of the thirty-six commands is a separate wasm file that runs in a
 worker of its own, with its own memory, its own open files and its own permissions. A program
 stuck in a loop is killed outright, without having to cooperate; `spin` exists to show that.
 
 **The shell is one of those programs.** `/bin/sh` is an ordinary binary, and everything a prompt
-needs it asks for through the same system calls any program can use. Six commands are *not*
-programs, because each one changes the shell's own state: `cd`, `jobs`, `fg`, `kill`, `exit` and
-`help`. They are built into the shell, but they are still ordinary pipeline stages, so
-`help | grep ls` works.
+needs it asks for through the same system calls any program can use. Twenty-six commands are *not*
+programs. Most of them change the shell's own state — its directory, its job table, its
+variables, its options — and so could not be anything else: `cd`, `jobs`, `fg`, `kill`, `exit`,
+`set`, `read`, `trap` and the rest. Six more are built in only because their whole cost is the
+spawn: `test`, `[`, `:`, `echo`, `true` and `false`, which keep their file in `/bin` all the
+same. Either way they are still ordinary pipeline stages, so `help | grep ls` works.
 
 **An embedding API.** `web/braam.js` puts a terminal on any web page with `mount({ canvas })`, and
 `web/embed.html` is a working example.
@@ -145,14 +150,16 @@ ordinary filesystem, so you can bring the file in with the browser's file picker
 - [doc/Concept.md](doc/Concept.md) is the specification: what the system is, and the reasoning
   behind each decision. Read it first.
 - [doc/Release_Notes.md](doc/Release_Notes.md) says why the code looks the way it does.
+- [doc/Shell.md](doc/Shell.md) is the manual for `/bin/sh`: the grammar, the expansions, the
+  builtins and the jobs.
 - [doc/System_Calls.md](doc/System_Calls.md) walks through how a program talks to the kernel.
 - [doc/Programming_Manual.md](doc/Programming_Manual.md) is for writing a program of your own,
   outside this repository.
 
 ## Status
 
-Finished, as a first version: everything above works and the tests pass. The kernel is 136 KB and
-the archive holding the programs is 204 KB, unpacked into browser storage the first time the page
+Finished, as a first version: everything above works and the tests pass. The kernel is 148 KB and
+the archive holding the programs is 288 KB, unpacked into browser storage the first time the page
 is opened.
 
 A tablet works: tap to type, drag to select. The row of buttons under the terminal supplies the
