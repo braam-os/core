@@ -1,13 +1,12 @@
 // The shell's lexer. Quoting, escaping, `|` and the redirection operators are
 // one grammar, so they arrive together; the parser above this is in parse.h.
 //
-// A word with its quotes removed is not a substring of the line, which is why
-// next() fills a caller-owned String instead of returning a view.
+// A word arrives raw — quotes and backslashes still in it. Removing them is
+// expand.h's, one step later.
 #pragma once
 
 #include "kernel/result.h"
 #include "kernel/str.h"
-#include "kernel/string.h"
 
 enum class Tok : u8 {
     End,       // the line is exhausted
@@ -24,9 +23,10 @@ enum class Tok : u8 {
 struct Lexer {
     explicit Lexer(Str line) : s_(line) {}
 
-    // Clears `word` and fills it when the result is Tok::Word. The only error
-    // is Err(Invalid), for a quote that is never closed.
-    Result<Tok> next(String &word);
+    // Sets `word` to a view of the line when the result is Tok::Word, and to
+    // nothing otherwise. The only error is Err(Invalid), for a quote that is
+    // never closed.
+    Result<Tok> next(Str &word);
 
 private:
     Str s_;

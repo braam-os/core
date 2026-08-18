@@ -664,6 +664,15 @@ if (mode === "--kernel") {
     if (!rows(s).includes("1 2 4"))
         fail(`echo 'a b' | wc printed ${JSON.stringify(rows(s))}, expected 1 2 4`);
 
+    // Two spaces: one would survive the word becoming two arguments, since
+    // echo joins with a single space.
+    s = submit("echo 'a  b'", 1161);
+    if (!rows(s).includes("a  b"))
+        fail(`echo 'a  b' printed ${JSON.stringify(rows(s))}, expected a  b`);
+    s = submit("echo a\\ \\ b", 1162);
+    if (!rows(s).includes("a  b"))
+        fail(`echo a\\ \\ b printed ${JSON.stringify(rows(s))}, expected a  b`);
+
     // M5: the shell starts in /home, which is where a redirection lands.
     // `pwd` reads its own cwd through Sys::Chdir now, so this is also the proof
     // that a top-level command inherits the shell's rather than starting at /.

@@ -18,6 +18,7 @@ add_executable(tests
     unit/test_result.cpp
     unit/test_sched.cpp
     unit/test_screen.cpp
+    unit/test_expand.cpp
     unit/test_str.cpp
     unit/test_tokenize.cpp
     unit/test_string.cpp
@@ -30,9 +31,11 @@ add_executable(tests
     unit/test_vec.cpp
     unit/test_vfs.cpp
 
-    # The grammar is the shell binary's, and pure: it touches nothing but Str,
-    # String and Vec, so it is compiled in here rather than linked from
-    # braam_sh, which would drag the process runtime's imports in with it.
+    # The grammar and the word expander are the shell binary's, and pure: they
+    # touch nothing but Str, String and Vec, so they are compiled in here rather
+    # than linked from braam_sh, which would drag the process runtime's imports
+    # in with them.
+    ../src/sh/expand.cpp
     ../src/sh/parse.cpp
     ../src/sh/tokenize.cpp
 

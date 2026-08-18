@@ -1,5 +1,6 @@
 #include "job.h"
 
+#include "expand.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/traits.h"
@@ -25,10 +26,24 @@ struct Stage {
 // Everything a running pipeline owns, on the heap rather than in run_line's
 // frame: the allocator's top size class is 512 bytes and a frame past it costs
 // a whole 64 KiB span (Concept.md §8.2), and a Pipeline alone is most of one.
+//
+// The pipeline holds the words raw; the four below hold them expanded.
 struct Run {
     Pipeline pl;
     Vec<Stage> stages;
     Vec<u32> spare; // descriptors nobody took, closed on the way out
+
+    Vec<Field> words; // every stage's argv, then every redirection's target
+    Vec<Str> argv;    // views over words, contiguous per command
+    Vec<usize> argv0; // where each command's argv starts in argv
+    Vec<Str> targets; // one per Redirect, in the order the pipeline lists them
+
+    Args args(usize i) const
+    {
+        usize a = argv0[i];
+        usize b = i + 1 < argv0.size() ? argv0[i + 1] : argv.size();
+        return Args{ Span<const Str>(argv.data() + a, b - a) };
+    }
 };
 
 // One line of the job table. It outlives the frame that started the job, so the
@@ -333,13 +348,44 @@ Task<i32> run_line(Str line, bool interactive)
     for (usize i = 0; i < n; i++)
         r->stages.push(Stage{});
 
+    // Expansion, before anything is opened or spawned. Argv first, then the
+    // redirection targets, in the order the pipeline lists them.
+    for (usize i = 0; i < n; i++) {
+        if (!r->argv0.push(r->words.size())) {
+            co_await say(SYS_STDERR, "out of memory");
+            co_return 1;
+        }
+        Args raw = r->pl.args(i);
+        for (usize k = 0; k < raw.size(); k++)
+            if (expand_word(raw[k], r->words).is_err()) {
+                co_await say(SYS_STDERR, "out of memory");
+                co_return 1;
+            }
+    }
+    usize argvn = r->words.size();
+    for (usize i = 0; i < n; i++)
+        for (const Redirect &rd : r->pl.redirects(i))
+            if (expand_word(r->pl.target(rd), r->words).is_err()) {
+                co_await say(SYS_STDERR, "out of memory");
+                co_return 1;
+            }
+
+    // The views come after the last append, as parse.h's freeze() does.
+    if (!r->argv.reserve(argvn) || !r->targets.reserve(r->words.size() - argvn)) {
+        co_await say(SYS_STDERR, "out of memory");
+        co_return 1;
+    }
+    for (usize k = 0; k < r->words.size(); k++)
+        (k < argvn ? r->argv : r->targets).push(r->words[k].text.str());
+
     // Redirections first. Refusing here rather than at the first write is what
     // stops a command running and producing side effects before its
     // redirection turns out to be impossible.
-    i32 bad = 0;
+    i32 bad  = 0;
+    usize at = 0; // the next target, in the order they were expanded above
     for (usize i = 0; i < n && !bad; i++) {
         for (const Redirect &rd : r->pl.redirects(i)) {
-            Str path            = r->pl.target(rd);
+            Str path            = r->targets[at++];
             Task<Result<i32>> t = open_at(path, open_flags(rd.kind));
             Result<i32> fd      = t ? co_await t : Err(Error::NoMemory);
             if (fd.is_err()) {
@@ -384,7 +430,7 @@ Task<i32> run_line(Str line, bool interactive)
     }
 
     for (usize i = 0; i < n; i++)
-        r->stages[i].b = builtin_find(r->pl.args(i)[0]);
+        r->stages[i].b = builtin_find(r->args(i)[0]);
 
     // The keyboard goes back *before* anything is spawned. A child is a
     // scheduler job that runs as soon as this shell next parks, and a
@@ -405,7 +451,7 @@ Task<i32> run_line(Str line, bool interactive)
         Stage &s = r->stages[i];
         if (s.b)
             continue;
-        Task<Result<u32>> t = spawn(r->pl.args(i), ChildIo{ s.in, s.out, s.err });
+        Task<Result<u32>> t = spawn(r->args(i), ChildIo{ s.in, s.out, s.err });
         Result<u32> pid     = t ? co_await t : Err(Error::NoMemory);
         if (pid.is_err()) {
             // A stale binary is its own answer: the file is there and is a
@@ -420,7 +466,7 @@ Task<i32> run_line(Str line, bool interactive)
                 why = "not found";
             else if (pid.error() == Error::Unsupported)
                 why = "built for another process ABI";
-            co_await say2(SYS_STDERR, r->pl.args(i)[0], why);
+            co_await say2(SYS_STDERR, r->args(i)[0], why);
             bad = pid.error() == Error::NotFound ? 127 : 126;
             break;
         }
@@ -445,7 +491,7 @@ Task<i32> run_line(Str line, bool interactive)
         Stage &s = r->stages[i];
         if (!s.b)
             continue;
-        if (Task<i32> t = s.b->run(r->pl.args(i), ShIo{ s.in, s.out, s.err }))
+        if (Task<i32> t = s.b->run(r->args(i), ShIo{ s.in, s.out, s.err }))
             s.status = co_await t;
         else
             s.status = 1;

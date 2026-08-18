@@ -15,6 +15,7 @@ add_library(braam_sh STATIC
     builtin/kill.cpp
     builtin/table.cpp
     edit.cpp
+    expand.cpp
     job.cpp
     parse.cpp
     shell.cpp

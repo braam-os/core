@@ -82,10 +82,10 @@ void test_parse()
     CHECK(shape("a > f | b") == "{a}>{f}|{b}");
     CHECK(shape("> f ls") == "{ls}>{f}"); // a redirection may lead
 
-    // Quote removal survives into argv, which is the point of the owning
-    // store: these words are not substrings of the line.
-    CHECK(shape("echo 'a b' c") == "{echo}{a b}{c}");
-    CHECK(shape("echo \"a|b\"") == "{echo}{a|b}");
+    // A word is stored raw: quoting decides where it ends, and what it then
+    // means is expand.h's.
+    CHECK(shape("echo 'a b' c") == "{echo}{'a b'}{c}");
+    CHECK(shape("echo \"a|b\"") == "{echo}{\"a|b\"}");
 
     CHECK(shape("| ls") == "!syntax error near '|'");
     CHECK(shape("ls |") == "!syntax error: expected a command");
@@ -122,7 +122,7 @@ void test_parse()
     }
     CHECK(shape("& ls") == "!syntax error near '&'");
     CHECK(shape("ls & wc") == "!syntax error: '&' must end the line");
-    CHECK(shape("echo '&'") == "{echo}{&}");
+    CHECK(shape("echo '&'") == "{echo}{'&'}");
 
     // Stage boundaries, checked apart from the rendering above.
     {
@@ -148,7 +148,7 @@ void test_parse()
         CHECK(parse("echo 'a b' | wc", pl, message).is_ok());
         Pipeline moved = move(pl);
         CHECK_EQ(moved.size(), 2);
-        CHECK(moved.args(0)[1] == "a b");
+        CHECK(moved.args(0)[1] == "'a b'");
         CHECK(moved.args(1)[0] == "wc");
     }
 }

@@ -7,6 +7,63 @@ of the two needs amending.
 
 ---
 
+## The lexer stopped removing quotes
+
+First of the stages in [src/sh/TODO.md](../src/sh/TODO.md), which is the plan for making
+`/bin/sh` a language rather than a prompt. Nothing a user can see changed: the grammar is the
+same one line it was, and the same commands do the same things. What moved is *when* quotes come
+off — out of `Lexer::next`, into a new `expand.cpp` that runs between the parse and the run.
+`sh.wasm` went from 79,899 to 83,485 bytes, and the staging tree from 549,379 to 552,965 against
+an unchanged 1 MiB budget.
+
+**Two things force the move, and neither is a preference.** A loop body is parsed once and
+expanded once per iteration, so `for f in *; do echo $f; done` cannot have its words collapsed at
+parse time — there is nothing left to re-expand. And `$` acts inside `"…"` and does not inside
+`'…'`, a distinction a one-pass collapse throws away before anything can act on it. Both bite in
+the stages after this one, which is exactly why this one is separate: it is the whole refactor
+with none of the new behaviour, so a regression here is visible on its own.
+
+**`parse.h`'s comment was the thing that had to change.** It said words are owned "because quote
+removal makes a word something the line does not contain" — and with quotes left in, a word *is*
+a substring of the line again. The store did not become unnecessary, but its justification did:
+it is now that a parse outlives the text it came from, which is what a function body and a
+sourced file will need. The old reason was true and would have quietly stopped being true.
+
+**The lexer got smaller and stopped allocating.** It already walked the quotes to find where a
+word ends; it merely also copied. Now it only walks, and `next(Str &)` hands back a view. The
+double-quote arm keeps its escape rule verbatim — only `\"` and `\\` — because that is not a
+copying detail but a *scanning* one: without it a `\"` would close the run early and the word
+would end in the wrong place.
+
+**The quoting mark is a parallel byte array, and v7's encoding was rejected on the reference's
+own argument.** The V7 shell marks a quoted character in bit `0200` of the character, and the
+BESM-6 port had to move that to a `QESC` prefix byte because its console is UTF-8. Braam's is
+too, and here it fails twice over: there is no `int`-wide character space to hide a flag in
+either. So `Field` carries `String text` plus a `Vec<u8> mark`, one byte per byte. Nothing reads
+it yet — field splitting and globbing are the only two readers there will ever be, and both are
+stages away — but it is built now because adding it later means rewriting every branch of the
+expander. It is deliberately unconditional rather than lazily allocated: an unused optimisation
+nobody has measured is worse than an allocation nobody has measured.
+
+**The expanded words are a second set, not a rewrite of the first.** `Run` grew `words`, `argv`,
+`argv0` and `targets` beside the `Pipeline` it already held, because one raw word may yield any
+number of fields and because the same tree may be run more than once. `Run::args(i)` replaces
+`Pipeline::args(i)` at the four sites that build a spawn, find a builtin or name one in a
+diagnostic. The views are built only after the last append, which is `freeze()`'s rule one level
+up — though the reason differs: a `Vec<Field>` moves its elements by stealing their pointers, so
+the bytes never move and the discipline is habit rather than necessity here. Habit is the point.
+
+**What the tests now prove separately.** `test_tokenize.cpp` and `test_parse.cpp` render words
+with their quotes still on and assert only where a word *ends*; the quote-removal cases they lost
+are `test_expand.cpp`'s, along with the mark, rendered as `^` and `.` per byte so one string
+compare checks text and mark together. `expand.cpp` joins `parse.cpp` and `tokenize.cpp` in
+`tests.wasm` — it touches nothing but `Str`, `String` and `Vec`, and the link is what enforces
+that. Two cases went into `test/run.mjs` as well, because the unit suite cannot prove the words
+reach a real `argv`: `echo 'a  b'` and `echo a\ \ b`, both with **two** spaces, since one would
+survive the word becoming two arguments and echo joining them back with a single space.
+
+---
+
 ## Scrollback, and the renderer that was told nothing
 
 `scroll()` memcpy'd the rows up and overwrote row 0, so everything that reached the top of the

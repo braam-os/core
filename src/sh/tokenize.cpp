@@ -11,9 +11,9 @@ bool is_operator(char c)
 
 } // namespace
 
-Result<Tok> Lexer::next(String &word)
+Result<Tok> Lexer::next(Str &word)
 {
-    word.clear();
+    word = Str();
 
     while (i_ < s_.size() && is_space(s_[i_]))
         i_++;
@@ -52,8 +52,9 @@ Result<Tok> Lexer::next(String &word)
         return Tok::ErrGreat;
     }
 
-    // A word runs to the next unquoted separator. Quotes and backslashes are
-    // removed here, which is what makes the word an owned copy.
+    // A word runs to the next *unquoted* separator, so the quotes are walked
+    // here to find where it ends — and left in it, for expand.h to take off.
+    usize start = i_;
     for (; i_ < s_.size(); i_++) {
         c = s_[i_];
         if (is_space(c) || is_operator(c))
@@ -63,22 +64,16 @@ Result<Tok> Lexer::next(String &word)
             usize end = s_.find('\'', i_ + 1);
             if (end == Str::npos)
                 return Err(Error::Invalid);
-            if (!word.append(s_.substr(i_ + 1, end - i_ - 1)))
-                return Err(Error::NoMemory);
             i_ = end;
             continue;
         }
 
         if (c == '"') {
             usize j = i_ + 1;
-            for (; j < s_.size() && s_[j] != '"'; j++) {
-                // Only a quote or a backslash is escapable in here; there is
-                // no expansion, so anything else keeps its backslash.
+            for (; j < s_.size() && s_[j] != '"'; j++)
+                // Only a quote or a backslash is escapable in here.
                 if (s_[j] == '\\' && j + 1 < s_.size() && (s_[j + 1] == '"' || s_[j + 1] == '\\'))
                     j++;
-                if (!word.push(s_[j]))
-                    return Err(Error::NoMemory);
-            }
             if (j >= s_.size())
                 return Err(Error::Invalid);
             i_ = j;
@@ -89,11 +84,9 @@ Result<Tok> Lexer::next(String &word)
             if (i_ + 1 >= s_.size())
                 return Err(Error::Invalid);
             i_++;
-            c = s_[i_];
         }
-        if (!word.push(c))
-            return Err(Error::NoMemory);
     }
 
+    word = s_.substr(start, i_ - start);
     return Tok::Word;
 }

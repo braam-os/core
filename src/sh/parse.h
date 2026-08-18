@@ -4,8 +4,9 @@
 //   command  := (word | redirect)+
 //   redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
 //
-// Words are owned here rather than viewed out of the line, because quote
-// removal makes a word something the line does not contain. They are appended
+// Words arrive raw — quotes and backslashes still in them, since expand.h
+// takes those off later — but are still owned here rather than viewed out of
+// the line, because a parse outlives the text it came from. They are appended
 // to one growing store first and turned into Str only by freeze(), since the
 // store moves under them until it stops growing.
 #pragma once

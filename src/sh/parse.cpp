@@ -111,7 +111,7 @@ Option<Redir> redir_of(Tok t)
 Result<void> parse(Str line, Pipeline &out, Str &message)
 {
     Lexer lx(line);
-    String w;
+    Str w;
     bool any_word  = false; // the command being built has an argv
     bool any_token = false;
 
@@ -128,7 +128,7 @@ Result<void> parse(Str line, Pipeline &out, Str &message)
         any_token = true;
 
         if (tok == Tok::Word) {
-            if (out.add_word(w.str()).is_err()) {
+            if (out.add_word(w).is_err()) {
                 message = "out of memory";
                 return Err(Error::NoMemory);
             }
@@ -171,7 +171,7 @@ Result<void> parse(Str line, Pipeline &out, Str &message)
             message = "syntax error: expected a file name";
             return Err(Error::Invalid);
         }
-        if (out.add_redirect(kind, w.str()).is_err()) {
+        if (out.add_redirect(kind, w).is_err()) {
             message = "out of memory";
             return Err(Error::NoMemory);
         }
