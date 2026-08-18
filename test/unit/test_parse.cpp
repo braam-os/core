@@ -4,11 +4,11 @@
 
 namespace {
 
-char buf[160];
+char buf[192];
 
-Str name_of(Redir k)
+Str name_of(Redir r)
 {
-    switch (k) {
+    switch (r) {
     case Redir::In:
         return "<";
     case Redir::Out:
@@ -23,48 +23,99 @@ Str name_of(Redir k)
     return "?";
 }
 
-// Renders a parsed pipeline: an assignment prefix in brackets, argv words in
-// braces, redirections as operator plus target, stages separated by '|'.
-Str shape(Str line)
-{
-    Pipeline pl;
-    Str message;
+// Renders a parsed tree. A command is its assignment prefix in brackets, its
+// argv in braces and its redirections as operator plus target; a pipeline is
+// its stages joined by '|', with '&' after it when it is a background one; a
+// list is its members joined by ';', '&&' or '||'; a group is braced; `!` is
+// itself. An error is '!' and its message, and '?' when the text merely ended
+// early.
+struct Render {
+    const Tree &t;
     usize n = 0;
 
-    auto put = [&](Str s) {
+    void put(Str s)
+    {
         for (usize i = 0; i < s.size() && n < sizeof(buf); i++)
             buf[n++] = s[i];
-    };
-
-    if (parse(line, pl, message).is_err()) {
-        put("!");
-        put(message);
-        return Str(buf, n);
     }
 
-    for (usize c = 0; c < pl.size(); c++) {
-        if (c)
-            put("|");
-        Args v = pl.assigns(c);
+    void command(usize c)
+    {
+        Args v = t.assigns(c);
         for (usize i = 0; i < v.size(); i++) {
             put("[");
             put(v[i]);
             put("]");
         }
-        Args a = pl.args(c);
+        Args a = t.args(c);
         for (usize i = 0; i < a.size(); i++) {
             put("{");
             put(a[i]);
             put("}");
         }
-        for (const Redirect &r : pl.redirects(c)) {
+        for (const Redirect &r : t.redirects(c)) {
             put(name_of(r.kind));
             put("{");
-            put(pl.target(r));
+            put(t.target(r));
             put("}");
         }
     }
-    return Str(buf, n);
+
+    void node(u32 i)
+    {
+        const Tree::Node &nd = t.node(i);
+        switch (nd.kind) {
+        case Tree::Kind::Nop:
+            return;
+        case Tree::Kind::Pipe:
+            for (u32 c = nd.a; c < nd.b; c++) {
+                if (c != nd.a)
+                    put("|");
+                command(c);
+            }
+            if (nd.background)
+                put("&");
+            return;
+        case Tree::Kind::Seq:
+            for (u32 k = 0; k < nd.b; k++) {
+                if (k)
+                    put(";");
+                node(t.kid(nd.a + k));
+            }
+            return;
+        case Tree::Kind::AndOr:
+            for (u32 k = 0; k < nd.b; k++) {
+                if (k)
+                    put(t.op(nd.c + k - 1) == Tree::Op::And ? "&&" : "||");
+                node(t.kid(nd.a + k));
+            }
+            return;
+        case Tree::Kind::Not:
+            put("!");
+            node(nd.a);
+            return;
+        case Tree::Kind::Group:
+            put("{");
+            node(nd.a);
+            put("}");
+            return;
+        }
+    }
+};
+
+Str shape(Str line)
+{
+    Tree t;
+    ParseErr err;
+    Render r{ t };
+
+    if (parse(line, t, err).is_err()) {
+        r.put(err.more ? "?" : "!");
+        r.put(err.message);
+        return Str(buf, r.n);
+    }
+    r.node(t.root());
+    return Str(buf, r.n);
 }
 
 } // namespace
@@ -73,9 +124,11 @@ void test_parse()
 {
     test_begin("parse");
 
-    // An empty line is a pipeline with no commands, not an error.
+    // An empty text is a tree whose root is nothing, not an error.
     CHECK(shape("") == "");
     CHECK(shape("   ") == "");
+    CHECK(shape("\n\n") == "");
+    CHECK(shape("# just a comment") == "");
 
     CHECK(shape("echo hello") == "{echo}{hello}");
     CHECK(shape("ls | grep foo") == "{ls}|{grep}{foo}");
@@ -107,66 +160,114 @@ void test_parse()
     CHECK(shape("x=1 | y=2") == "[x=1]|[y=2]");
     CHECK(shape("x=1 > f") == "[x=1]>{f}");
 
+    // ---- lists ----
+
+    CHECK(shape("a; b") == "{a};{b}");
+    CHECK(shape("a;b;c") == "{a};{b};{c}");
+    CHECK(shape("a\nb") == "{a};{b}");
+    CHECK(shape("a;") == "{a}");
+    CHECK(shape(";;a") == "{a}");
+    CHECK(shape("a && b") == "{a}&&{b}");
+    CHECK(shape("a || b") == "{a}||{b}");
+    CHECK(shape("! a") == "!{a}");
+    CHECK(shape("! a | b") == "!{a}|{b}");
+
+    // `&&` and `||` are one left-to-right chain rather than a nest, which is
+    // what keeps the walk's depth the text's nesting depth.
+    CHECK(shape("a && b || c") == "{a}&&{b}||{c}");
+    CHECK(shape("a || b && c && d") == "{a}||{b}&&{c}&&{d}");
+    CHECK(shape("a; b && c") == "{a};{b}&&{c}");
+    CHECK(shape("a | b && c | d") == "{a}|{b}&&{c}|{d}");
+    CHECK(shape("a &&\nb") == "{a}&&{b}"); // a newline after the operator
+
+    // `&` is a separator now, and it marks the pipeline it follows.
+    CHECK(shape("sleep 5 &") == "{sleep}{5}&");
+    CHECK(shape("ls | wc &") == "{ls}|{wc}&");
+    CHECK(shape("a & b") == "{a}&;{b}");
+    CHECK(shape("a & b &") == "{a}&;{b}&");
+    CHECK(shape("ls") == "{ls}");
+
+    // A group, which must have a separator before its `}` — `{ a }` passes
+    // `}` as an argument, which is what Bourne does.
+    CHECK(shape("{ a; b; }") == "{{a};{b}}");
+    CHECK(shape("{ a; }") == "{{a}}");
+    CHECK(shape("{ a\nb\n}") == "{{a};{b}}");
+    CHECK(shape("{ a }") == "?syntax error: expected '}'"); // `}` became an argument
+    CHECK(shape("! { a; }") == "!{{a}}");
+    CHECK(shape("{ a; } && b") == "{{a}}&&{b}");
+    CHECK(shape("{ { a; }; }") == "{{{a}}}");
+    CHECK(shape("echo '{'") == "{echo}{'{'}"); // quoted, so not reserved
+
+    // ---- refusals ----
+
     CHECK(shape("| ls") == "!syntax error near '|'");
-    CHECK(shape("ls |") == "!syntax error: expected a command");
+    CHECK(shape("&& ls") == "!syntax error near '&&'");
+    CHECK(shape("& ls") == "!syntax error near '&'");
     CHECK(shape("ls | | wc") == "!syntax error near '|'");
     CHECK(shape("ls >") == "!syntax error: expected a file name");
     CHECK(shape("ls > | wc") == "!syntax error: expected a file name");
     CHECK(shape("> f") == "!syntax error: expected a command");
-    CHECK(shape("echo 'a") == "!unterminated quote or ${");
     CHECK(shape("a|b|c|d|e|f|g|h|i") == "!too many commands in a pipeline");
+    CHECK(shape("}") == "!syntax error near '}'");
 
-    // `&` ends the line, and it is the pipeline that carries the flag rather
-    // than a command, since a pipeline is what runs in the background.
-    {
-        Pipeline pl;
-        Str message;
-        CHECK(parse("sleep 5 &", pl, message).is_ok());
-        CHECK(pl.background());
-        CHECK_EQ(pl.size(), 1);
-        CHECK_EQ(pl.args(0).size(), 2);
-        CHECK(pl.args(0)[1] == "5");
-    }
-    {
-        Pipeline pl;
-        Str message;
-        CHECK(parse("ls | wc &", pl, message).is_ok());
-        CHECK(pl.background());
-        CHECK_EQ(pl.size(), 2);
-    }
-    {
-        Pipeline pl;
-        Str message;
-        CHECK(parse("ls", pl, message).is_ok());
-        CHECK(!pl.background());
-    }
-    CHECK(shape("& ls") == "!syntax error near '&'");
-    CHECK(shape("ls & wc") == "!syntax error: '&' must end the line");
-    CHECK(shape("echo '&'") == "{echo}{'&'}");
+    // Backgrounding is for a pipeline: the shell keeps running while it goes,
+    // and nothing in a process can wait for a sibling task.
+    CHECK(shape("a && b &") == "!cannot run a list in the background");
+    CHECK(shape("{ a; } &") == "!cannot run a list in the background");
+
+    // A group needs the base stdio S7 threads through, so it may not yet be
+    // piped or redirected.
+    CHECK(shape("{ a; } | wc") == "!syntax error: a group cannot be piped or redirected yet");
+    CHECK(shape("{ a; } > f") == "!syntax error: a group cannot be piped or redirected yet");
+
+    // ---- `more`: the text ended inside something ----
+
+    CHECK(shape("ls |") == "?syntax error: expected a command");
+    CHECK(shape("a &&") == "?syntax error: expected a command");
+    CHECK(shape("a ||") == "?syntax error: expected a command");
+    CHECK(shape("{ a;") == "?syntax error: expected '}'");
+    CHECK(shape("{ a; b") == "?syntax error: expected '}'");
+    CHECK(shape("echo 'a") == "?unterminated quote or ${");
+    CHECK(shape("echo ${x") == "?unterminated quote or ${");
+    CHECK(shape("!") == "!syntax error: expected a command");
 
     // Stage boundaries, checked apart from the rendering above.
     {
-        Pipeline pl;
-        Str message;
-        CHECK(parse("ls -l | grep foo | wc", pl, message).is_ok());
-        CHECK_EQ(pl.size(), 3);
-        CHECK_EQ(pl.args(0).size(), 2);
-        CHECK(pl.args(0)[0] == "ls");
-        CHECK(pl.args(0)[1] == "-l");
-        CHECK_EQ(pl.args(1).size(), 2);
-        CHECK(pl.args(1)[0] == "grep");
-        CHECK_EQ(pl.args(2).size(), 1);
-        CHECK(pl.args(2)[0] == "wc");
-        CHECK(pl.frozen());
+        Tree t;
+        ParseErr err;
+        CHECK(parse("ls -l | grep foo | wc", t, err).is_ok());
+        const Tree::Node &n = t.node(t.root());
+        CHECK(n.kind == Tree::Kind::Pipe);
+        CHECK_EQ(n.b - n.a, 3);
+        CHECK_EQ(t.args(0).size(), 2);
+        CHECK(t.args(0)[0] == "ls");
+        CHECK(t.args(0)[1] == "-l");
+        CHECK(t.args(1)[0] == "grep");
+        CHECK(t.args(2)[0] == "wc");
+        CHECK(t.frozen());
     }
 
-    // A frozen pipeline moves without invalidating its words: String and Vec
-    // move by stealing the pointer, so nothing shifts under the views.
+    // The bytes a pipeline came from, which is what `jobs` lists — its own,
+    // not the whole line's.
     {
-        Pipeline pl;
-        Str message;
-        CHECK(parse("echo 'a b' | wc", pl, message).is_ok());
-        Pipeline moved = move(pl);
+        Tree t;
+        ParseErr err;
+        CHECK(parse("echo hi; sleep 5 &", t, err).is_ok());
+        const Tree::Node &root = t.node(t.root());
+        CHECK(root.kind == Tree::Kind::Seq);
+        CHECK_EQ(root.b, 2);
+        CHECK(t.text(t.kid(root.a)) == "echo hi");
+        CHECK(t.text(t.kid(root.a + 1)) == "sleep 5");
+        CHECK(t.node(t.kid(root.a + 1)).background);
+    }
+
+    // A frozen tree moves without invalidating its words: String and Vec move
+    // by stealing the pointer, so nothing shifts under the views.
+    {
+        Tree t;
+        ParseErr err;
+        CHECK(parse("echo 'a b' | wc", t, err).is_ok());
+        Tree moved = move(t);
         CHECK_EQ(moved.size(), 2);
         CHECK(moved.args(0)[1] == "'a b'");
         CHECK(moved.args(1)[0] == "wc");

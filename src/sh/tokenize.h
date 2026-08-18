@@ -9,10 +9,14 @@
 #include "kernel/str.h"
 
 enum class Tok : u8 {
-    End,       // the line is exhausted
+    End,       // the text is exhausted
     Word,      //
+    Newline,   // a separator, since one text may be many lines
+    Semi,      // ;
+    Amp,       // &
+    AndIf,     // &&
+    OrIf,      // ||
     Pipe,      // |
-    Amp,       // &, and only at the end of a line
     Less,      // <
     Great,     // >
     DGreat,    // >>
@@ -31,11 +35,18 @@ struct Lexer {
     explicit Lexer(Str line) : s_(line) {}
 
     // Sets `word` to a view of the line when the result is Tok::Word, and to
-    // nothing otherwise. The only error is Err(Invalid), for a quote that is
-    // never closed.
+    // nothing otherwise. The only error is Err(Invalid), for a quote or a `${`
+    // that is never closed.
     Result<Tok> next(Str &word);
+
+    // Where the token just returned starts and ends. The parser spans a
+    // pipeline with them, which is what `jobs` lists.
+    usize begin() const { return begin_; }
+
+    usize pos() const { return i_; }
 
 private:
     Str s_;
-    usize i_ = 0;
+    usize i_     = 0;
+    usize begin_ = 0;
 };

@@ -7,6 +7,113 @@ of the two needs amending.
 
 ---
 
+## A line became a tree
+
+Third of the stages in [src/sh/TODO.md](../src/sh/TODO.md), and the one it called the largest.
+`;`, `&&`, `||`, `&` mid-line, `#` comments, `!`, `{ … ; }`, a newline as a separator, and a
+half-typed construct that asks for another line under `PS2`. `sh.wasm` went from 104,292 to
+114,936 bytes and the staging tree from 588,594 to 599,238 against an unchanged 1 MiB budget.
+**`kernel.wasm` did not move and the syscall ABI did not change**; `smoke`'s exact import and
+export surface stayed green untouched, which is what says so.
+
+**`Pipeline` became `Tree`.** It already owned the store, the words and the commands; now it owns
+the nodes above them, and a class named for one of the kinds it holds would have been read wrong
+by every stage after this one. The rename is the whole of `parse.{h,cpp}`, `job.cpp` and
+`test_parse.cpp`, and it is cheaper now than at any later point.
+
+**The arena is index links, for the reason `freeze()` already gave.** `nodes_`, `kids_` and
+`ops_` all reallocate while the parse grows, so a pointer into any of them dangles at the next
+push. Indices also keep a frozen tree trivially movable, which `test_parse.cpp` asserts and which
+a function body will depend on. `nodes_[0]` is always a `Nop`, so an index of 0 can mean
+"nothing" without a sentinel of its own — an empty line is a tree whose root is 0.
+
+**`&&` and `||` are one n-ary chain, not a left-leaning pair per link, and that is a *depth*
+decision rather than a tidiness one.** `exec_node` recurses, so `And(And(And(a,b),c),d)` would
+make `a && b && c && d` four frames deep and a hundred links a hundred frames. As one chain with
+a byte of operator per link, the walk's depth is the *text's nesting* depth — braces, `!`, and
+later `if`, `while` and a function — which is what the parser's bound of 16 actually bounds.
+`Seq` is n-ary for the same reason, so a hundred-statement script is depth one.
+
+The short circuit is a `continue` and not a `break`, and the difference is `false && a || b`: the
+`&&` skips `a`, and the status carries down the chain so the `||` still reaches `b`. Breaking out
+would have stopped the whole chain at the first failure, which is a different language.
+
+**Control transfer is a field, because there are no exceptions.** `enum class Flow { Normal,
+Exit, Interrupt }` on a `Ctx`, checked after every `co_await exec_node(…)` — one branch per node,
+the same shape as `TRY()`. `Break`, `Continue` and `Return` join it when there is something to
+break out of.
+
+`exit` is the case that shows why a field and not a return value. It was already a builtin that
+*asks* rather than acts, setting a flag the prompt loop reads at the end of a line; with a list,
+`echo a; exit; echo b` would have run `echo b` before anyone looked. So `exec_pipeline` consumes
+the flag where the builtin ran, turns it into `Flow::Exit`, and `run_line` re-arms it on the way
+out. `shell.cpp`'s two loops did not change a line for it.
+
+`Flow::Interrupt` was scheduled for the next stage, with the loops. It came here instead because
+`;` is what makes it reachable: without it `sleep 5; echo done` echoes after a `^C`. A stage
+reporting 130 stops the rest of the text, and `job.h` now says why that is the mechanism —
+there is no signal, and a status is the only thing that crosses a process boundary. The price is
+stated there too: a program that exits 130 of its own accord does the same.
+
+**`Ctx` is its own heap block, and so is the tree.** `Run` held the `Pipeline` by value, and it
+could not: the tree outlives every pipeline under it. `run_line` allocates the tree, `Run` borrows
+it and shrank by half as a result. `Ctx` is thirty-odd bytes today and did not have to be on the
+heap — but it grows with every stage left (break levels, traps, a scope, the `-e -x -u` flags),
+and `run_line`'s frame is the root of a recursion. Putting it there now freezes that frame instead
+of letting each later stage push it a little closer to the 512-byte cliff.
+
+One `Run` per pipeline, `heap_new`'d and freed as each runs, rather than one cleared and reused:
+`Vec` has no capacity-preserving `clear()`, ten of them would have to be got right every time,
+and command substitution will want two `Run`s alive at once anyway.
+
+**Multi-line input is re-parsing, and v7's best idea was rejected on its own merits.** The V7
+shell serves `.`, `eval`, traps, `-c`, substitution and here-documents through one `fileblk`
+chain — a single character source that can block. Here that would make the lexer a coroutine and
+the recursive-descent parser a stack of them, five frames deep on every word against a 512-byte
+budget, and it would drag `sys_async` into `parse.cpp`, which `tests.wasm` compiles precisely
+because it touches nothing but `Str`, `String` and `Vec`.
+
+So `parse()` gained a third outcome instead: `ParseErr{ message, more }`, where `more` means the
+text ended *inside* something. Both readers accumulate and re-parse from the top — the prompt
+under `Prompt{ {}, {}, ps2 }`, which `LineEditor` needed no change at all to draw, since a
+`Prompt` was already three independent pieces; and `sh -s` over `LineReader`, one line at a time,
+so `producer | sh -s` still streams rather than blocking to EOF. It is quadratic in the length of
+one construct, and a construct is tens of lines against a pure parser that allocates into a store
+it throws away. `more` is deliberately *not* a new `Error` value: that enum is kernel-wide.
+
+`more` is set where the operator was — a trailing `|`, `&&` or `||`, an unclosed `{`, an
+unterminated quote or `${` — and never by a command that simply had no words. `> f` is a syntax
+error at once; `a &&` waits.
+
+**A newline stopped being whitespace**, which is one asymmetry and no more: the lexer's leading
+skip takes a new `is_blank` that excludes `\n`, while the word-terminating test keeps `is_space`,
+which already included it. `#` starts a comment only where a token could start, so `echo a#b` is
+still one word. `{`, `}` and `!` stay ordinary word bytes and are reserved by *position* — and
+because a word still carries its quotes at that point, `'{'` is three bytes and can never match
+the one-byte reserved word, so quoting is handled by doing nothing.
+
+**Two refusals, both for the same reason.** `a && b &` and `{ … ; } &` are `cannot run a list in
+the background`: backgrounding means the shell keeps running while the rest goes, and nothing in
+a process can wait for a sibling task, so there would be nobody left to run `b`. What may be
+backgrounded is one pipeline whose stages are all spawned children. And `{ a; } | wc` and
+`{ a; } > f` are refused as *not yet* — a group needs the base stdio threaded through `Ctx`,
+which is the redirection stage's work, and doing it twice is how the two would drift.
+
+**`jobs` now lists a pipeline's own text.** The `JobEntry` copied the whole line, which was the
+same thing when a line was one pipeline; with `echo hi; sleep 5 &` it would have filed the lot.
+Each `Pipe` node carries the byte span it came from, which is two of the four fields a node has
+spare, and the `&` falls outside it — so the listing reads `sleep 5`, which is what it always
+should have said.
+
+**What the tests prove separately.** `test_parse.cpp`'s `shape()` grew from a loop over stages to
+a walk over the tree, and every construct is one string compare again: `{a};{b}`, `{a}&&{b}||{c}`,
+`!{a}`, `{{a};{b}}`, and `?` rather than `!` in front of a message when the text merely ended
+early. `test/run.mjs` has the four things the unit suite cannot see: that `false && a || b`
+reaches `b`, that `$?` is the *pipeline's* and not the line's, that a trailing `&&` leaves `>` on
+the screen and not a prompt, and that `echo before; exit 7; echo never` prints one of the two.
+
+---
+
 ## The shell got variables
 
 Second of the stages in [src/sh/TODO.md](../src/sh/TODO.md). `$x`, `${x}`, the `${x-y}` family,

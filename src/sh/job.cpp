@@ -6,6 +6,7 @@
 #include "kernel/traits.h"
 #include "kernel/vec.h"
 #include "parse.h"
+#include "shell.h"
 #include "var.h"
 
 namespace {
@@ -32,11 +33,13 @@ struct Saved {
 
 // Everything a running pipeline owns, on the heap rather than in run_line's
 // frame: the allocator's top size class is 512 bytes and a frame past it costs
-// a whole 64 KiB span (Concept.md §8.2), and a Pipeline alone is most of one.
-//
-// The pipeline holds the words raw; the four below hold them expanded.
+// a whole 64 KiB span (Concept.md §8.2). One per pipeline, not per line:
+// two live at once the moment a substitution runs a pipeline inside a word.
 struct Run {
-    Pipeline pl;
+    const Tree *t = nullptr; // borrowed: run_line outlives every Run under it
+    u32 cmd0      = 0;       // this pipeline's slice of the tree's commands
+    u32 ncmds     = 0;
+
     Vec<Stage> stages;
     Vec<u32> spare; // descriptors nobody took, closed on the way out
 
@@ -55,6 +58,22 @@ struct Run {
         usize b = i + 1 < argv0.size() ? argv0[i + 1] : argv.size();
         return Args{ Span<const Str>(argv.data() + a, b - a) };
     }
+};
+
+// There are no exceptions, so a transfer of control is a field. A loop and a
+// function body will consume more of these; run_line consumes these two.
+enum class Flow : u8 { Normal, Exit, Interrupt };
+
+// What the walk threads through the tree. Its own block, not a frame's: it
+// grows with every stage left, and run_line's frame is a recursion's root.
+struct Ctx {
+    static constexpr u32 MAX_DEPTH = 64;
+
+    Str line;
+    Flow flow        = Flow::Normal;
+    i32 exit_status  = 0;
+    u32 depth        = 0;
+    bool interactive = false;
 };
 
 // One line of the job table. It outlives the frame that started the job, so the
@@ -111,12 +130,12 @@ void drop_entry(u32 id)
 Result<void> expand_all(Run *r, ExpandErr &err)
 {
     const Vars &v = shell_vars();
-    usize n       = r->pl.size();
+    usize n       = r->ncmds;
 
     for (usize i = 0; i < n; i++) {
         if (!r->assign0.push(r->avals.size()))
             return Err(Error::NoMemory);
-        Args a = r->pl.assigns(i);
+        Args a = r->t->assigns(r->cmd0 + i);
         for (usize k = 0; k < a.size(); k++) {
             Str w = a[k];
             TRY_VOID(expand_word(w.substr(w.find('=') + 1), v, Split::One, r->avals, err));
@@ -126,15 +145,15 @@ Result<void> expand_all(Run *r, ExpandErr &err)
     for (usize i = 0; i < n; i++) {
         if (!r->argv0.push(r->words.size()))
             return Err(Error::NoMemory);
-        Args raw = r->pl.args(i);
+        Args raw = r->t->args(r->cmd0 + i);
         for (usize k = 0; k < raw.size(); k++)
             TRY_VOID(expand_word(raw[k], v, Split::Fields, r->words, err));
     }
 
     usize argvn = r->words.size();
     for (usize i = 0; i < n; i++)
-        for (const Redirect &rd : r->pl.redirects(i))
-            TRY_VOID(expand_word(r->pl.target(rd), v, Split::One, r->words, err));
+        for (const Redirect &rd : r->t->redirects(r->cmd0 + i))
+            TRY_VOID(expand_word(r->t->target(rd), v, Split::One, r->words, err));
 
     // The views come after the last append, as parse.h's freeze() does.
     if (!r->argv.reserve(argvn) || !r->targets.reserve(r->words.size() - argvn))
@@ -147,7 +166,7 @@ Result<void> expand_all(Run *r, ExpandErr &err)
 // One stage's assignment prefix. With `undo` the displaced values are kept.
 bool apply_assigns(Run *r, usize i, Vec<Saved> *undo, Str &bad_name)
 {
-    Args names = r->pl.assigns(i);
+    Args names = r->t->assigns(r->cmd0 + i);
     usize at   = r->assign0[i];
 
     for (usize k = 0; k < names.size(); k++) {
@@ -406,8 +425,13 @@ Task<void> jobs_report(u32 fd)
     }
 }
 
-Task<i32> run_line(Str line, bool interactive)
+namespace {
+
+// One pipeline: today's whole line, now the leaf of the walk below.
+Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
 {
+    const Tree::Node &nd = tree.node(node);
+
     Run *r = heap_new<Run>();
     if (!r) {
         co_await say(SYS_STDERR, "out of memory");
@@ -419,14 +443,11 @@ Task<i32> run_line(Str line, bool interactive)
         Run *r;
     } drop{ r };
 
-    Str message;
-    if (parse(line, r->pl, message).is_err()) {
-        co_await say(SYS_STDERR, message);
-        co_return 2;
-    }
-    usize n = r->pl.size();
-    if (n == 0)
-        co_return 0;
+    r->t     = &tree;
+    r->cmd0  = nd.a;
+    r->ncmds = nd.b - nd.a;
+
+    usize n = r->ncmds;
     if (!r->stages.reserve(n)) {
         co_await say(SYS_STDERR, "out of memory");
         co_return 1;
@@ -453,7 +474,7 @@ Task<i32> run_line(Str line, bool interactive)
     i32 bad  = 0;
     usize at = 0; // the next target, in the order they were expanded above
     for (usize i = 0; i < n && !bad; i++) {
-        for (const Redirect &rd : r->pl.redirects(i)) {
+        for (const Redirect &rd : r->t->redirects(r->cmd0 + i)) {
             Str path            = r->targets[at++];
             Task<Result<i32>> t = open_at(path, open_flags(rd.kind));
             Result<i32> fd      = t ? co_await t : Err(Error::NoMemory);
@@ -518,9 +539,9 @@ Task<i32> run_line(Str line, bool interactive)
     // full-screen program claims the keys in its very first step — so handing
     // them over afterwards is a race the child loses, and `less: no keyboard`
     // is what that looks like.
-    bool bg     = r->pl.background();
+    bool bg     = nd.background;
     bool handed = false;
-    if (!bad && !bg && interactive) {
+    if (!bad && !bg && cx.interactive) {
         if (Task<Result<Geometry>> t = keys_claim(false))
             co_await t;
         handed = true;
@@ -617,7 +638,7 @@ Task<i32> run_line(Str line, bool interactive)
     // keyboard belongs to whatever is in front.
     if (bg && !bad) {
         JobEntry *e = heap_new<JobEntry>();
-        if (e && e->cmd.assign(line) && jobs().push(e)) {
+        if (e && e->cmd.assign(tree.text(node)) && jobs().push(e)) {
             e->id = g_next_id++;
             for (const Stage &s : r->stages)
                 if (s.pid)
@@ -644,6 +665,138 @@ Task<i32> run_line(Str line, bool interactive)
     for (u32 fd : r->spare)
         co_await close_fd(fd);
 
+    // `exit` ran in our turn, so the flag is consumed here and put back by
+    // run_line; without that the rest of the list would still run. 130 is this
+    // shell's SIGINT (job.h), and it stops the list for the same reason.
+    i32 want = 0;
+    if (shell_exit_wanted(want)) {
+        cx.flow        = Flow::Exit;
+        cx.exit_status = want;
+    } else if (!bg && status == 130) {
+        cx.flow = Flow::Interrupt;
+    }
+
     var_status(status);
+    co_return status;
+}
+
+// The walk. Only this recurses, so only this counts depth.
+Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
+{
+    if (cx.depth >= Ctx::MAX_DEPTH) {
+        co_await say(SYS_STDERR, "too deeply nested");
+        cx.flow        = Flow::Exit;
+        cx.exit_status = 2;
+        co_return 2;
+    }
+    cx.depth++;
+    struct Depth {
+        ~Depth() { cx.depth--; }
+
+        Ctx &cx;
+    } guard{ cx };
+
+    const Tree::Node &nd = tree.node(n);
+
+    // One slot each, reused by every arm: a frame gets a slot per local that
+    // is live across a suspend.
+    Task<i32> step;
+    i32 status = 0;
+    u32 k      = 0;
+
+    switch (nd.kind) {
+    case Tree::Kind::Nop:
+        break;
+
+    case Tree::Kind::Pipe:
+        step   = exec_pipeline(cx, tree, n);
+        status = step ? co_await step : 1;
+        break;
+
+    case Tree::Kind::Seq:
+        for (k = 0; k < nd.b; k++) {
+            step   = exec_node(cx, tree, tree.kid(nd.a + k));
+            status = step ? co_await step : 1;
+            if (cx.flow != Flow::Normal)
+                break;
+        }
+        break;
+
+    case Tree::Kind::AndOr:
+        for (k = 0; k < nd.b; k++) {
+            // `&&` runs its right side after a 0 and `||` after anything
+            // else. Skipped rather than stopped: the status carries down the
+            // chain, so `false && a || b` still reaches b.
+            if (k && (status == 0) != (tree.op(nd.c + k - 1) == Tree::Op::And))
+                continue;
+            step   = exec_node(cx, tree, tree.kid(nd.a + k));
+            status = step ? co_await step : 1;
+            if (cx.flow != Flow::Normal)
+                break;
+        }
+        break;
+
+    case Tree::Kind::Not:
+        step   = exec_node(cx, tree, nd.a);
+        status = step ? co_await step : 1;
+        if (cx.flow == Flow::Normal) {
+            status = status == 0 ? 1 : 0;
+            var_status(status);
+        }
+        break;
+
+    case Tree::Kind::Group:
+        step   = exec_node(cx, tree, nd.a);
+        status = step ? co_await step : 1;
+        break;
+    }
+    co_return status;
+}
+
+} // namespace
+
+bool line_incomplete(Str text)
+{
+    Tree t;
+    ParseErr err;
+    return parse(text, t, err).is_err() && err.more;
+}
+
+Task<i32> run_line(Str line, bool interactive)
+{
+    // Two blocks per line, and neither in this frame: the tree outlives every
+    // pipeline under it, and Ctx grows with every stage still to come.
+    struct Drop {
+        ~Drop()
+        {
+            heap_delete(t);
+            heap_delete(cx);
+        }
+
+        Tree *t;
+        Ctx *cx;
+    } own{ heap_new<Tree>(), heap_new<Ctx>() };
+
+    if (!own.t || !own.cx) {
+        co_await say(SYS_STDERR, "out of memory");
+        co_return 1;
+    }
+
+    ParseErr perr;
+    if (parse(line, *own.t, perr).is_err()) {
+        co_await say(SYS_STDERR, perr.message);
+        co_return 2;
+    }
+    if (own.t->root() == 0)
+        co_return 0;
+
+    own.cx->line        = line;
+    own.cx->interactive = interactive;
+
+    Task<i32> t = exec_node(*own.cx, *own.t, own.t->root());
+    i32 status  = t ? co_await t : 1;
+
+    if (own.cx->flow == Flow::Exit)
+        shell_exit(own.cx->exit_status);
     co_return status;
 }

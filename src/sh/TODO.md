@@ -2,12 +2,13 @@
 
 The plan of record for turning `/bin/sh` from a prompt into a language. **What lands is deleted
 from here** — its reasoning moves to [Release_Notes.md](../../doc/Release_Notes.md), which is
-where the *why* lives once it is code. Two stages have landed, recorded there under *"The lexer
+where the *why* lives once it is code. Three stages have landed, recorded there under *"The lexer
 stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h), which
-carries the quoting mark out of band as a `Vec<u8>` beside the text rather than in a bit of the
-byte) and *"The shell got variables"* (the `$` walk, `IFS` splitting, the `Field` flag the mark
-could not carry, and the five variable builtins). What remains is numbered below, once, in the
-order it should be done.
+carries the quoting mark out of band beside the text), *"The shell got variables"* (the `$` walk,
+`IFS` splitting, the `Field` flag the mark could not carry, and the five variable builtins) and
+*"A line became a tree"* (the node arena in [parse.h](parse.h), `exec_node`/`Flow` in
+[job.cpp](job.cpp), and multi-line input by re-parsing). What remains is numbered below, once, in
+the order it should be done.
 
 Stages are **S1**…**S10**. A number is a name, not a position: when a stage lands its section is
 deleted and its number retires with it, so the rest keep the numbers they have and a commit
@@ -23,9 +24,9 @@ command  := (word | redirect)+
 redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
 ```
 
-There is no `;`, no `&&`/`||`, no control flow, no globbing — `*` and `?` are ordinary word
-characters — and no way to run a file of commands beyond `sh -s` reading stdin a line at a time.
-Release_Notes.md records this as an explicit *non-*decision:
+There is no control flow, no globbing — `*` and `?` are ordinary word characters — and no way to
+run a file of commands beyond `sh -s` reading stdin. Release_Notes.md records this as an explicit
+*non-*decision:
 
 > `/bin/sh` has no variables, no `-c`, no globbing and no scripts beyond `sh -s`. None of that
 > was blocked by the shell being kernel code and none of it is blocked now; they were simply
@@ -37,8 +38,8 @@ the `${x-y}` family, positional parameters, command substitution, here-documents
 `/Users/vak/Project/Besm-6/v7besm/cmd/sh/` (≈3,450 lines of code across 29 files).
 
 **Headroom is not the constraint.** `kernel.wasm` does not change — every line of this is in the
-process binary. `sh.wasm` is 104,292 bytes and only `sh` links `src/sh/`; the only budget it
-spends is `rootfs/ = 1048576` against a 588,594-byte tree.
+process binary. `sh.wasm` is 114,936 bytes and only `sh` links `src/sh/`; the only budget it
+spends is `rootfs/ = 1048576` against a 599,238-byte tree.
 
 **And no syscall changes.** Everything scripting needs — pipe, spawn, wait, open, list, stat,
 chdir, getpid — is already in the §4.3 table. That is the concrete proof of the note above.
@@ -81,7 +82,6 @@ moves to Release_Notes.md when the stage lands and this section is deleted.
 
 | # | Stage | Days |
 |---|---|---|
-| S2 | Lists and the node arena | 3.0 |
 | S3 | Control flow | 2.0 |
 | S4 | Globbing and `case` | 2.0 |
 | S5 | Command substitution | 2.0 |
@@ -91,115 +91,22 @@ moves to Release_Notes.md when the stage lands and this section is deleted.
 | S9 | Entry points | 1.0 |
 | S10 | Integration, docs, budget | 2.0 |
 
-**18.5 days, call it 21 — four working weeks.** The two places it will go over are the
-capture/deadlock reasoning in S5 and the here-doc/fd bookkeeping in S7. A
-minimum-credible slice (S2–S3, plus `test` and `sh file`) is **~7 days** and is most of the utility.
-
-### S2. Lists and the node arena
-
-**Scope.** `;` `&&` `||` `&` mid-line, `#` comments, `!`, `{ … ; }`, newline as a separator; the
-`Node`/`kids_` arena; `exec_node`/`Flow`; multi-line continuation and PS2. This is the stage that
-turns a pipeline into a tree, and it is the largest.
-
-**`parse.h`'s arena discipline survives, as a node arena with index links.** `Pipeline` keeps
-every field it has — `store_`, `words_`, `targets_`, `redirs_`, `cmds_`, the `_view_` vectors,
-`freeze()` — and gains a node layer on top:
-
-```cpp
-enum class NodeKind : u8 { Nop, Pipe, Seq, And, Or, Not, Group, Sub,
-                           If, While, Until, For, Case, CaseArm, FuncDef };
-
-struct Node {          // fixed size, no owning members, index links only
-    NodeKind kind;
-    bool background;
-    u32 a, b, c, d;    // node indices, or (off, len) into kids_
-};
-
-Vec<Node> nodes_;
-Vec<u32> kids_;        // child lists, so a Node stays fixed-size
-u32 root_ = 0;         // node 0 is always Nop, so 0 reads as "none"
-```
-
-`Pipe` keeps the existing layout verbatim — `a = cmd0, b = cmdn` into `cmds_` — so `args(i)`,
-`redirects(i)`, `target(r)` and `MAX_STAGES = 8` survive untouched.
-
-Name it something else: [../fs/fs.h](../fs/fs.h) already has a namespace-scope
-`enum class NodeKind : u8 { File, Dir }`. No translation unit includes both today and neither has
-linkage, so it compiles — but both are linked into `tests.wasm`, and one name meaning two things
-in one binary is a trap for whoever reads it next. `Kind` inside `Pipeline` costs nothing.
-
-Indices and not pointers, because **the vectors reallocate while the parse grows**, so a pointer
-into `nodes_` dangles the moment another node is pushed — the same argument `freeze()` already
-makes for `store_`. Indices also keep the tree trivially move-safe, which
-[../../test/unit/test_parse.cpp](../../test/unit/test_parse.cpp) already asserts and which
-functions depend on. Nesting depth is bounded in the parser at 16.
-
-**The executor is a recursive coroutine; `break`/`continue`/`return` are state, not unwinding.**
-`run_line` splits three ways: `exec_node` (a small-framed switch that recurses), `exec_pipeline`
-(today's `run_line` body verbatim), and `run_line` (parse, then `exec_node(root)`).
-`exec_pipeline` keeps its `heap_new<Run>` for exactly today's reason.
-
-`Ctx` is one heap block per `run_line`, passed by reference through the recursion: variables,
-positional parameters, base stdio, `Flow`, break levels, `$?`, recursion depth, `read`'s per-fd
-leftover, traps, and the `-e -x -u` flags.
-
-There are no exceptions, so control transfer is a field:
-`enum class Flow { Normal, Break, Continue, Return, Exit, Interrupt }`. Every
-`co_await exec_node(…)` is followed by `if (cx.flow != Flow::Normal) co_return status;`. A loop
-consumes `Break`/`Continue`, a function body consumes `Return`, `run_line` consumes `Exit`. One
-branch per node — v7's `execbrk`/`breakcnt`/`loopcnt`, and the same shape as `TRY()`.
-
-**Multi-line input is re-parsing, not a coroutine input stack.** v7's best idea is its input
-stack: one `fileblk` chain serving `.`, `eval`, traps, `-c`, command substitution and
-here-documents through a single character source. **Take the idea and reject the
-implementation** — in Braam a character source that can block makes the lexer a coroutine and
-the recursive-descent parser a stack of coroutines, five frames deep on every word against a
-512-byte frame budget, and it would drag `sys_async` into `parse.cpp`, which
-[../../test/CMakeLists.txt](../../test/CMakeLists.txt) compiles straight into `tests.wasm`
-precisely because it touches nothing but `Str`, `String` and `Vec`.
-
-Instead `parse()` gains a third outcome — `struct ParseErr { Str message; bool more; }`, where
-`more` means "the text ended inside something": an unterminated quote, a trailing `|`/`&&`/`;`,
-an unclosed `$(`, an `if`/`while`/`for`/`case`/`{`/`(` with no terminator, or a pending here-doc
-body. **Not** a new `Error` value: that enum is kernel-wide and this is shell-only.
-
-Both readers then accumulate and re-parse:
-
-- **The prompt** reads a line; on `more` it appends a newline and the next line and re-parses
-  from the top. The continuation prompt is `Prompt{ {}, {}, "> " }` — `LineEditor` needs no change
-  at all, since `Prompt` is already three independent pieces. ^C discards the accumulation.
-- **A script** does the same over `LineReader`, which keeps `sh -s` genuinely streaming —
-  `producer | sh -s` would block to EOF if the file were slurped.
-- **`-c`, `eval`, `.` and a substitution body** are already complete strings.
-
-Re-parsing is quadratic in the length of one construct, and a construct is tens of lines. The
-parser is pure and allocates only into a store that is thrown away.
-
-**Files.** [parse.h](parse.h), [parse.cpp](parse.cpp), [tokenize.cpp](tokenize.cpp),
-[job.cpp](job.cpp), [job.h](job.h), [shell.cpp](shell.cpp) (the continuation loop),
-[edit.h](edit.h) untouched.
-
-**Tests.** `test_parse.cpp` — extend `shape()` to render the node tree: `A;B`, `A&&B`, `!A`,
-`{B}`, and the `more` flag at end of input. That one function is the whole strategy — every
-construct becomes a one-line `CHECK`. Keep the move-safety case. `test_tokenize.cpp` — the new
-operators, `#` comments, `more` at end of input. `run.mjs` — `a && b || c` short-circuiting; a
-continuation: type `while true`, Enter, assert the row is `> ` and not a prompt.
-
-**Done when** `;`, `&&`, `||` and `{ … ; }` work at the prompt, a half-typed construct gives
-`> `, and `parse.cpp` still links into `tests.wasm`.
+**15.5 days, call it 18 — three and a half working weeks.** The two places it will go over are
+the capture/deadlock reasoning in S5 and the here-doc/fd bookkeeping in S7. A minimum-credible
+slice (S3, plus `test` and `sh file`) is **~4 days** and is most of the remaining utility.
 
 ### S3. Control flow
 
 **Scope.** `if`/`elif`/`else`/`fi`, `while`, `until`, `for … in`, `break` and `continue`.
 
-**`^C` reaches a loop the only way it can**, and the rule must be stated or `while true; do
-sleep 5; done` becomes uninterruptible — you would ^C once per iteration for ever. **A stage
-that reports 130 sets `Flow::Interrupt`, which unwinds every enclosing list, loop and function
-up to `run_line`.** One comparison in `exec_pipeline`. In a script shell the `sh` process is
-itself cancelled instead, and since `CancelState::cancelled` is sticky the first await
-afterwards returns `Err(Cancelled)` and so does every one after — mapping to the same
-`Flow::Interrupt` and 130. [job.h](job.h) should say it: 130 is this shell's SIGINT, because
-there is no signal and a status is the only thing that crosses a process boundary.
+**`^C` reaches a loop the only way it can**, and the rule must hold or `while true; do sleep 5;
+done` becomes uninterruptible — you would ^C once per iteration for ever. **A stage that reports
+130 sets `Flow::Interrupt`, which unwinds every enclosing list, loop and function up to
+`run_line`.** That landed with S2, which is where `;` first made it reachable, so a loop needs
+only to let it through rather than consume it the way it consumes `Break`. In a script shell the
+`sh` process is itself cancelled instead, and since `CancelState::cancelled` is sticky the first
+await afterwards returns `Err(Cancelled)` and so does every one after — mapping to the same
+`Flow::Interrupt` and 130.
 
 **Files.** [parse.cpp](parse.cpp), [job.cpp](job.cpp), [job.h](job.h).
 
@@ -389,17 +296,17 @@ budget change.
 
 ### Size
 
-Calibrated against the binary rather than guessed per stage, and re-measured after S1: the
-first stage cost 20,807 bytes over 1,017 new lines — ≈20 bytes of wasm per line, since it is
-nearly all pure logic. Coroutine-heavy code (job, builtins, shell) runs nearer 45, plus ~45 new
-coroutine ramps at ~300 bytes.
+Calibrated against the binary rather than guessed per stage, and re-measured twice: S1 cost
+20,807 bytes over 1,017 new lines and S2 cost 10,644 over ~450 — ≈20 bytes of wasm per line, and
+S2 came in under that because the node arena replaced code as much as it added. The stages left
+are more coroutine than logic, so budget nearer 40.
 
-- **`sh.wasm`: 104,292 → ~185,000 bytes.**
-- **Staging tree: 588,594 → ~670,000 of 1,048,576 — 64%.** No budget change needed.
+- **`sh.wasm`: 114,936 → ~175,000 bytes.**
+- **Staging tree: 599,238 → ~660,000 of 1,048,576 — 63%.** No budget change needed.
 - **`kernel.wasm` does not move at all.**
 
-~1,900 more lines of shell C++ (`src/sh/` 3,001 → ~4,900), ~800 of `test/unit/`, ~250 of
-`test/run.mjs`, ~380 of documentation. The v7 reference is 3,710 lines of C for the same feature
+~1,500 more lines of shell C++ (`src/sh/` 3,501 → ~5,000), ~700 of `test/unit/`, ~220 of
+`test/run.mjs`, ~340 of documentation. The v7 reference is 3,710 lines of C for the same feature
 set while doing its own memory management, `setjmp` control flow and string library.
 
 ---

@@ -58,34 +58,47 @@ Task<i32> interactive()
     }
 
     LineEditor ed;
+    String acc; // what has been typed of a construct that is not finished
     i32 status = 0;
 
     for (;;) {
-        // A background job that has finished is announced here rather than
-        // wherever it happened to end, which would land in the middle of a line
-        // being typed.
-        if (Task<void> t = jobs_report(SYS_STDOUT))
-            co_await t;
-
         Buf<16> failed;
-        prompt_for(failed, status);
-
-        // Asked for rather than remembered: cd is a builtin, but nothing says
-        // it is the only thing that ever moved us. The basename points into
-        // cwd, which outlives the read_line that draws it.
-        String cwd;
+        String cwd, ps2;
         Str dir;
-        if (Task<Result<String>> t = cwd_get())
-            if (Result<String> r = co_await t; r.is_ok()) {
-                cwd = move(r.value());
-                dir = path_basename(cwd.str());
-            }
+        Prompt p;
 
-        // Sized rather than pointed at: a literal picked at run time would ask
-        // for strlen, which nothing here provides.
-        Str text = dir.empty() ? "$ "_s : " $ "_s;
+        if (acc.empty()) {
+            // A background job that has finished is announced here rather than
+            // wherever it happened to end, which would land in the middle of a
+            // line being typed.
+            if (Task<void> t = jobs_report(SYS_STDOUT))
+                co_await t;
 
-        Task<Result<Line>> t = ed.read_line(Prompt{ failed.str(), dir, text });
+            prompt_for(failed, status);
+
+            // Asked for rather than remembered: cd is a builtin, but nothing
+            // says it is the only thing that ever moved us. The basename points
+            // into cwd, which outlives the read_line that draws it.
+            if (Task<Result<String>> t = cwd_get())
+                if (Result<String> r = co_await t; r.is_ok()) {
+                    cwd = move(r.value());
+                    dir = path_basename(cwd.str());
+                }
+
+            // Sized rather than pointed at: a literal picked at run time would
+            // ask for strlen, which nothing here provides.
+            p = Prompt{ failed.str(), dir, dir.empty() ? "$ "_s : " $ "_s };
+        } else {
+            // Copied, because the table it comes from moves under a Str.
+            Str want;
+            if (!var_get("PS2", want))
+                want = "> ";
+            if (!ps2.assign(want))
+                co_return 1;
+            p = Prompt{ {}, {}, ps2.str() };
+        }
+
+        Task<Result<Line>> t = ed.read_line(p);
         Result<Line> r       = t ? co_await t : Err(Error::NoMemory);
         if (r.is_err())
             co_return r.error() == Error::Cancelled ? 0 : 1;
@@ -95,13 +108,26 @@ Task<i32> interactive()
             co_await nl;
 
         if (line.how == LineEnd::Interrupt) {
+            acc.clear();  // a half-typed construct goes with the line
             status = 130; // 128 + SIGINT, by convention
             var_status(status);
             continue;
         }
 
-        Task<i32> run = run_line(line.text.str(), true);
+        if ((!acc.empty() && !acc.push('\n')) || !acc.append(line.text.str())) {
+            co_await write_all(SYS_STDERR, "sh: out of memory\n");
+            acc.clear();
+            status = 1;
+            continue;
+        }
+
+        // Read on rather than complain: the text ended inside something.
+        if (line_incomplete(acc.str()))
+            continue;
+
+        Task<i32> run = run_line(acc.str(), true);
         status        = run ? co_await run : 1;
+        acc.clear();
 
         if (shell_exit_wanted(status))
             co_return status;
@@ -114,8 +140,9 @@ Task<i32> script()
 {
     Input in(Args{}, SYS_STDIN);
     LineReader lines(in);
-    String line;
-    i32 status = 0;
+    String line, acc;
+    i32 status   = 0;
+    bool exiting = false;
 
     for (;;) {
         Task<Result<bool>> t = lines.next(line);
@@ -125,10 +152,26 @@ Task<i32> script()
         if (!r.value())
             break;
 
-        Task<i32> run = run_line(line.str(), false);
+        if ((!acc.empty() && !acc.push('\n')) || !acc.append(line.str()))
+            co_return 1;
+        // A line at a time and never slurped, so `producer | sh -s` streams.
+        if (line_incomplete(acc.str()))
+            continue;
+
+        Task<i32> run = run_line(acc.str(), false);
         status        = run ? co_await run : 1;
-        if (shell_exit_wanted(status))
+        acc.clear();
+        if (shell_exit_wanted(status)) {
+            exiting = true;
             break;
+        }
+    }
+
+    // Unfinished at end of input: run it anyway, so it reports its own error.
+    if (!exiting && !acc.empty()) {
+        Task<i32> run = run_line(acc.str(), false);
+        status        = run ? co_await run : 1;
+        shell_exit_wanted(status);
     }
     co_return status;
 }

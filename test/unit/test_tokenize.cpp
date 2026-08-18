@@ -32,11 +32,23 @@ Str lex(Str line, char *out, usize cap)
             put(w);
             put("}");
             break;
-        case Tok::Pipe:
-            put("|");
+        case Tok::Newline:
+            put("\\n");
+            break;
+        case Tok::Semi:
+            put(";");
             break;
         case Tok::Amp:
             put("&");
+            break;
+        case Tok::AndIf:
+            put("&&");
+            break;
+        case Tok::OrIf:
+            put("||");
+            break;
+        case Tok::Pipe:
+            put("|");
             break;
         case Tok::Less:
             put("<");
@@ -96,6 +108,21 @@ void test_tokenize()
     CHECK(lexed("\"a\\nb\"") == "{\"a\\nb\"}");
 
     // Operators split words without needing spaces around them.
+    // The list operators, and the two-character scan that tells them apart.
+    CHECK(lexed("a;b") == "{a};{b}");
+    CHECK(lexed("a && b") == "{a}&&{b}");
+    CHECK(lexed("a||b") == "{a}||{b}");
+    CHECK(lexed("a & b") == "{a}&{b}");
+    CHECK(lexed("a\nb") == "{a}\\n{b}");
+    CHECK(lexed("a\n\nb") == "{a}\\n\\n{b}");
+
+    // A comment only where a token could start.
+    CHECK(lexed("a # b") == "{a}");
+    CHECK(lexed("a#b") == "{a#b}");
+    CHECK(lexed("# all of it") == "");
+    CHECK(lexed("a # b\nc") == "{a}\\n{c}");
+    CHECK(lexed("echo '#'") == "{echo}{'#'}");
+
     CHECK(lexed("a|b") == "{a}|{b}");
     CHECK(lexed("ls | grep foo") == "{ls}|{grep}{foo}");
     CHECK(lexed("a>b") == "{a}>{b}");

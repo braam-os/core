@@ -25,7 +25,7 @@ constexpr usize KEY_WAIT = 64;
 // front, ^C is delivered to whoever holds the raw route as an ordinary key —
 // which is how a line editor abandons the line being typed rather than being
 // cancelled by it.
-constexpr usize CONSOLE_FG_MAX = 8; // Pipeline::MAX_STAGES
+constexpr usize CONSOLE_FG_MAX = 8; // Tree::MAX_STAGES
 
 // One pid, for a shell that puts a pipeline in front a stage at a time — which
 // is what Sys::Fg does, since the op word carries one. False when there are

@@ -6,7 +6,14 @@ namespace {
 
 bool is_operator(char c)
 {
-    return c == '|' || c == '&' || c == '<' || c == '>';
+    return c == '|' || c == '&' || c == '<' || c == '>' || c == ';';
+}
+
+// Everything is_space takes but a newline, which is a token of its own now
+// that one text may be several lines.
+bool is_blank(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f';
 }
 
 } // namespace
@@ -54,18 +61,42 @@ Result<Tok> Lexer::next(Str &word)
 {
     word = Str();
 
-    while (i_ < s_.size() && is_space(s_[i_]))
-        i_++;
+    for (;;) {
+        while (i_ < s_.size() && is_blank(s_[i_]))
+            i_++;
+        // A comment only where a token could start, so `a#b` is one word.
+        if (i_ >= s_.size() || s_[i_] != '#')
+            break;
+        while (i_ < s_.size() && s_[i_] != '\n')
+            i_++;
+    }
+    begin_ = i_;
     if (i_ >= s_.size())
         return Tok::End;
 
     char c = s_[i_];
+    if (c == '\n') {
+        i_++;
+        return Tok::Newline;
+    }
+    if (c == ';') {
+        i_++;
+        return Tok::Semi;
+    }
     if (c == '|') {
         i_++;
+        if (i_ < s_.size() && s_[i_] == '|') {
+            i_++;
+            return Tok::OrIf;
+        }
         return Tok::Pipe;
     }
     if (c == '&') {
         i_++;
+        if (i_ < s_.size() && s_[i_] == '&') {
+            i_++;
+            return Tok::AndIf;
+        }
         return Tok::Amp;
     }
     if (c == '<') {
