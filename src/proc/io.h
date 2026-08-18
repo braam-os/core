@@ -90,7 +90,9 @@ struct ChildIo {
     u32 err = SYS_STDERR;
 };
 
-Task<Result<u32>> spawn(Args v, ChildIo io = {});
+// `env` names the child's environment as NAME=value words. Null hands it this
+// process's own, which the kernel already holds, so nothing crosses the wire.
+Task<Result<u32>> spawn(Args v, ChildIo io = {}, const Args *env = nullptr);
 
 // The child that stopped, and what it reported. Waiting on SYS_WAIT_ANY takes
 // whichever finishes first.

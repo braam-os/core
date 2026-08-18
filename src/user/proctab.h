@@ -239,6 +239,10 @@ struct Proc {
     // and a child that moves this one moves nobody else's feet.
     String cwd;
 
+    // The environment blob this process was entered with, inherited by a child
+    // whose Sys::Spawn names none. Fixed at spawn: there is no setenv.
+    String env;
+
     // What this process started, and who is waiting on it. `dead` is the
     // stepper's End having run: a child that finishes afterwards has nobody
     // left to report to, and the record is only still here because a server has
@@ -310,7 +314,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c);
 
 // Sys::Spawn. Reports the child's pid, or a negated Error — including
 // -Cancelled, which the caller turns back into a reply nobody builds.
-Task<i32> proc_spawn_child(Proc &p, Str payload);
+Task<i32> proc_spawn_child(Proc &p, u32 arg, Str payload);
 
 // u32s appended to a reply in the order the ABI reads them (sysabi.h). False is
 // out of memory. Variadic rather than an initializer list: -nostdinc++.

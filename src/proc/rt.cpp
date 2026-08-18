@@ -28,8 +28,12 @@ struct Rt {
     Waiter waiters[PROC_TASKS];
     u32 token = 1;
     Vec<Str> argv;
-    bool started = false;
-    bool exited  = false;
+    // The environment is left in the _start block and walked on demand: most
+    // programs never ask, and a Vec here is a block every process would pay.
+    const u8 *env = nullptr;
+    usize env_len = 0;
+    bool started  = false;
+    bool exited   = false;
 };
 
 // The heap is up before _start, because _alloc is: the host places argv in
@@ -120,6 +124,31 @@ Result<SysReply> SysCall::await_resume() const
     return v;
 }
 
+usize proc_env_count()
+{
+    Rt &r = rt();
+    return argv_count(r.env, r.env_len);
+}
+
+Str proc_env_at(usize i)
+{
+    Rt &r = rt();
+    return argv_at(r.env, r.env_len, i);
+}
+
+Str proc_env(Str name)
+{
+    Rt &r   = rt();
+    usize n = argv_count(r.env, r.env_len);
+    for (usize i = 0; i < n; i++) {
+        Str w    = argv_at(r.env, r.env_len, i);
+        usize eq = w.find('=');
+        if (eq != Str::npos && w.substr(0, eq) == name)
+            return w.substr(eq + 1);
+    }
+    return Str();
+}
+
 u32 proc_spawn(Task<i32> t)
 {
     Rt &r = rt();
@@ -146,9 +175,9 @@ BRAAM_EXPORT("_free") void _free(u32 ptr, u32)
     heap_free(reinterpret_cast<void *>(usize(ptr)));
 }
 
-// The host has already written the argv blob at `ptr` through _alloc. The
-// blob stays for the process's lifetime, because argv is a span of views into
-// it and a program may hold those to the end.
+// The host has already written the argv blob and the environment after it at
+// `ptr` through _alloc. The block stays for the process's lifetime, because
+// both are spans of views into it and a program may hold those to the end.
 BRAAM_EXPORT("_start") i32 _start(u32 ptr, u32 len)
 {
     ready();
@@ -163,6 +192,13 @@ BRAAM_EXPORT("_start") i32 _start(u32 ptr, u32 len)
     if (r.argv.reserve(n))
         for (usize i = 0; i < n; i++)
             r.argv.push(argv_at(blob, len, i));
+
+    // Whatever follows the argv blob. Nothing there is an empty environment.
+    usize at = argv_bytes(blob, len);
+    if (at != 0 && at < len) {
+        r.env     = blob + at;
+        r.env_len = len - at;
+    }
 
     // A frame that would not allocate leaves the task null, and status_of
     // reports the failure as exit status 1 rather than resuming nothing.

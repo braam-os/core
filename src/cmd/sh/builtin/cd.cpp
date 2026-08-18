@@ -1,3 +1,4 @@
+#include "cmd/sh/var.h"
 #include "decl.h"
 
 // A builtin because the directory it moves is *this process's own*, and that is
@@ -11,7 +12,12 @@ Task<i32> builtin_cd(Args args, ShIo io)
         co_return 2;
     }
 
-    Str where              = args.size() == 2 ? args[1] : Str("/home");
+    // $HOME, which init plants, and the literal when nothing set one.
+    Str home;
+    if (!var_get("HOME", home) || home.empty())
+        home = "/home";
+
+    Str where              = args.size() == 2 ? args[1] : home;
     Task<Result<String>> t = cwd_set(where);
     Result<String> r       = t ? co_await t : Err(Error::NoMemory);
     if (r.is_err()) {

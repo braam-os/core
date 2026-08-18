@@ -4,6 +4,7 @@
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/host.h"
+#include "proc/rt.h"
 
 namespace {
 
@@ -268,9 +269,57 @@ Str args_at(usize i)
     return i < v.size() ? v[i].str() : Str();
 }
 
+bool vars_env(String &store, Vec<Str> &words)
+{
+    // Sized first, then filled, then viewed: a view taken before the last
+    // append would dangle when the String grew.
+    usize total = 0, n = 0;
+    for (usize i = 0; i < var_count(); i++) {
+        const VarEntry *e = var_at(i);
+        if (!e->exported || !e->valued)
+            continue;
+        total += e->name.size() + 1 + e->value.size();
+        n++;
+    }
+    if (!store.reserve(total) || !words.reserve(n))
+        return false;
+
+    for (usize i = 0; i < var_count(); i++) {
+        const VarEntry *e = var_at(i);
+        if (!e->exported || !e->valued)
+            continue;
+        if (!store.append(e->name.str()) || !store.push('=') || !store.append(e->value.str()))
+            return false;
+    }
+
+    usize at = 0;
+    for (usize i = 0; i < var_count(); i++) {
+        const VarEntry *e = var_at(i);
+        if (!e->exported || !e->valued)
+            continue;
+        usize size = e->name.size() + 1 + e->value.size();
+        if (!words.push(store.str().substr(at, size)))
+            return false;
+        at += size;
+    }
+    return true;
+}
+
 bool var_init(u32 pid, Str name0)
 {
     g_pid = pid;
+
+    // What this process was spawned with becomes the table, exported, so a
+    // command inherits it again and a nested shell is not a wall.
+    for (usize i = 0; i < proc_env_count(); i++) {
+        Str w    = proc_env_at(i);
+        usize eq = w.find('=');
+        if (eq == Str::npos || eq == 0)
+            continue;
+        Str name = w.substr(0, eq);
+        if (!var_set(name, w.substr(eq + 1)) || !var_mark(name, true, false))
+            return false;
+    }
 
     Vec<String> &v = argv();
     if (!v.empty())

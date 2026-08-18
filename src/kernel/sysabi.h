@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 10;
+constexpr u32 PROC_ABI       = 11;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -153,7 +153,7 @@ enum class Sys : u32 {
 
     // Whether a descriptor is the terminal, and how big it is. Only the kernel
     // knows: the grid is cells (§2.3), so there is no escape sequence to ask
-    // with and no environment to read a width out of.
+    // with, and a COLUMNS in the environment is one a resize has made wrong.
     Tty, // arg = fd;  data = u32 flags, u32 cols, u32 rows
 
     // Processes. A program that supervises another one cannot be a shell
@@ -165,7 +165,9 @@ enum class Sys : u32 {
     // what produces the reader's end of input, and it keeps one process holding
     // one end, which is what Channel's single-sender rule needs (channel.h).
     Pipe = 80, // data = u32 read fd, u32 write fd
-    Spawn,     // payload = u32 fd0, fd1, fd2, then the argv blob; status = the child's pid
+    Spawn,     // arg bit 0 = an env blob follows, else the child inherits mine
+               //   payload = u32 fd0, fd1, fd2, the argv blob, then the env blob
+               //   status = the child's pid
                //   an fd below SYS_FD_MIN shares the stream this process was given
     Wait,      // arg = a pid, or SYS_WAIT_ANY;  status = the child's status; data = u32 pid
     Kill,      // arg = the pid, which must be a child of the caller
@@ -186,6 +188,13 @@ constexpr usize SYS_BLIT_HEAD = 7;
 
 // The three descriptor words Sys::Spawn's payload begins with, in u32s.
 constexpr usize SYS_SPAWN_HEAD = 3;
+
+// Sys::Spawn's op-word argument: an env blob follows the argv one. Without it
+// the child inherits the caller's environment.
+constexpr u32 SYS_SPAWN_ENV = 1;
+
+// The most an environment may be, and therefore what a descendant carries.
+constexpr u32 SYS_ENV_MAX = 8192;
 
 // The anchor, cursor offset and run count Sys::Echo's payload begins with, and
 // the style and length of each run header after them, in u32s. Every header
@@ -337,11 +346,15 @@ inline void sys_put_u32(u8 *p, u32 v)
     p[3] = u8(v >> 24);
 }
 
-// ---------------------------------------------------------------- the argv
+// ------------------------------------------------------- the argv and the env
 
 // argv is one blob rather than a pointer array, because it crosses an address
 // space: u32 argc, then u32 length and bytes per word. The host copies it into
 // the process with _alloc and passes it to _start.
+//
+// The environment is a word list in the same encoding, its words NAME=value.
+// The two sit back to back — in _start's payload, and after Sys::Spawn's three
+// descriptor words — and argv_bytes finds the join.
 
 inline usize argv_size(const Str *v, usize n)
 {
@@ -367,6 +380,26 @@ inline void argv_encode(const Str *v, usize n, u8 *out)
 inline usize argv_count(const u8 *p, usize len)
 {
     return len < 4 ? 0 : sys_get_u32(p);
+}
+
+// The bytes one blob occupies, so a second may follow it. 0 is malformed: the
+// smallest well-formed blob is the four of an empty word list.
+inline usize argv_bytes(const u8 *p, usize len)
+{
+    if (len < 4)
+        return 0;
+    usize n  = sys_get_u32(p);
+    usize at = 4;
+    for (usize k = 0; k < n; k++) {
+        if (at + 4 > len)
+            return 0;
+        usize size = sys_get_u32(p + at);
+        at += 4;
+        if (at + size > len)
+            return 0;
+        at += size;
+    }
+    return at;
 }
 
 // The i'th word, or an empty Str if the blob is short — a truncated blob is a

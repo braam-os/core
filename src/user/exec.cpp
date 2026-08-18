@@ -186,7 +186,7 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
     co_return {};
 }
 
-Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died)
+Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, Str env, bool *died)
 {
     // True until the one return that says otherwise, so a path added later
     // reports a death rather than being forgotten.
@@ -202,7 +202,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
     p->depth     = exe.depth;
     p->max_pages = exe.meta.max_pages;
     p->pages     = exe.meta.initial_pages; // until the first step reports
-    if (!p->cwd.assign(cwd.empty() ? vfs_cwd() : cwd)) {
+    if (!p->cwd.assign(cwd.empty() ? vfs_cwd() : cwd) || !p->env.assign(env)) {
         proc_remove(p);
         proc_release(p);
         co_await io.err.write("braam: out of memory\n");
@@ -253,15 +253,17 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, bool *died
     }
     end.spawned = true;
 
-    // The first step is _start and carries argv; every one after it is
-    // _resume, carrying the answer to a syscall.
+    // The first step is _start and carries argv then the environment; every one
+    // after it is _resume, carrying the answer to a syscall.
     String payload;
     usize n = argv_size(args.v.data(), args.size());
-    if (!payload.reserve(n))
+    if (!payload.reserve(n + p->env.size()))
         co_return 1;
     for (usize i = 0; i < n; i++)
         payload.push(0);
     argv_encode(args.v.data(), args.size(), reinterpret_cast<u8 *>(payload.data()));
+    if (!payload.append(p->env.str()))
+        co_return 1;
 
     // The stepper. It never performs a syscall itself: each one gets a
     // scheduler job of its own, because a process with two tasks can be parked

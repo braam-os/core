@@ -362,6 +362,22 @@ Task<bool> boot_filesystem(const u32 &pid)
     co_return true;
 }
 
+// What init hands the shell. No PATH — a command word resolves as function,
+// then builtin, then /bin — and no TERM, since the terminal is a cell grid.
+bool base_env(String &out)
+{
+    constexpr Str WORDS[] = { "HOME=/home", "SHELL=/bin/sh" };
+    constexpr usize N     = sizeof(WORDS) / sizeof(WORDS[0]);
+
+    usize n = argv_size(WORDS, N);
+    if (!out.reserve(n))
+        return false;
+    for (usize i = 0; i < n; i++)
+        out.push(0);
+    argv_encode(WORDS, N, reinterpret_cast<u8 *>(out.data()));
+    return true;
+}
+
 Task<i32> init_task(const u32 &pid)
 {
     // The store comes first, and the mounts always did — but the shell used to
@@ -376,6 +392,11 @@ Task<i32> init_task(const u32 &pid)
     bool restored = false;
     u32 tries     = 0;
     i32 status    = 1;
+
+    // Encoded once: every shell this loop starts is entered with the same one.
+    String env;
+    if (!base_env(env))
+        co_return 1;
 
     for (;;) {
         // Resolved every time round: the image was moved into the instance, so
@@ -435,7 +456,7 @@ Task<i32> init_task(const u32 &pid)
         // Scoped, so this shell's record — removed by a destructor in there —
         // is gone before the next one, which answers to the same pid.
         {
-            Task<i32> t = exec_process(exe, args, stdio_console(), Str(), &died);
+            Task<i32> t = exec_process(exe, args, stdio_console(), Str(), env.str(), &died);
             if (!t) {
                 say("braam: /bin/sh would not start");
                 co_return 1;

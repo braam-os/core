@@ -9,7 +9,7 @@ filesystem, terminal, and programs, written in freestanding C++20 and compiled t
 deployable as a static site with no server and no special HTTP headers.
 
 It is a working system; the bar for any change is that nothing below regresses. `kernel.wasm` is
-~145 KiB against a 256 KiB budget, the boot archive's staging tree ~688 KiB against 1 MiB, the
+~149 KiB against a 256 KiB budget, the boot archive's staging tree ~710 KiB against 1 MiB, the
 wasm ABI is six imports and nine exports, and the three CTest cases pass.
 
 ## Documents
@@ -337,9 +337,9 @@ change to argue in Concept.md first.
   and Enter to the next prompt costs five (`echo`, newline, `cwd_get`, prompt `echo`, `key_read`).
   Both are floors: the cwd is deliberately not cached, since a wrong prompt is believed, and going
   lower means fusing the keyboard into the paint — a worse ABI than it would save.
-- **The boot archive is ~688 KiB unpacked** and 277 KiB as `rootfs.zip`. §4.4's duplication: every
+- **The boot archive is ~710 KiB unpacked** and 287 KiB as `rootfs.zip`. §4.4's duplication: every
   binary carries the allocator, the string types and the coroutine runtime, and `sh.wasm` is
-  210 KiB of it — nearly a third of the tree, since the shell is a language (§4.5). The staging
+  214 KiB of it — nearly a third of the tree, since the shell is a language (§4.5). The staging
   *tree* carries the size budget and the binaries do not, so that number is where the duplication
   stays visible — the archive is deflated and would hide it.
 - **A soft keyboard has no control keys.** `^C`/`^D`/`^L`, `Esc`, `Tab` and the arrows reach a
@@ -353,10 +353,13 @@ change to argue in Concept.md first.
   since it is a process inside init's task rather than a job of its own. A nested `sh` gets one of
   its own. Nothing derives a filename from it, so nothing collides; `$$` is not a temp-file scheme
   here, because there are no temp files.
-- **`export` reaches no child.** The shell has variables, lists, control flow, `case`, globbing,
-  `$( )`, functions, `test`, `read`, `trap`, `set -e -x -u` and, since S9, `sh <file>`, `sh -c`
-  and `$0` — but there is no environment anywhere in the wasm ABI, so `export` records an intent
-  that only this process can honour. `/bin/export` was renamed `save` to give the builtin its name.
+- **No `setenv`: a process's environment is fixed at spawn.** `export` does reach a child now —
+  `Sys::Spawn` carries an env blob after the argv one, the kernel keeps it on `Proc` beside the
+  cwd, and a spawn naming none hands the child the caller's. But a process cannot change its own:
+  there is no `Sys::Env`, because nothing would call one (the shell builds the blob from its own
+  table at each spawn), and adding one would break §4.3's "every operation has a caller in
+  `src/cmd/`". `x=1 prog` reaches that child alone; `/bin/export` is still named `save`, to give
+  the builtin its name.
 - **No `#!` scripts, and a script file is parsed whole.** `exec_meta` requires `\0asm` plus a
   `braam` section, so a text file can never be exec'd: `sh file` and `sh < file` are the whole of
   it and `./script.sh` will not arrive. `sh file` reads and parses the file at once, as `.` does,

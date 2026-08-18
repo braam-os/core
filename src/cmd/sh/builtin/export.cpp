@@ -53,8 +53,8 @@ Task<i32> mark(Args args, ShIo io, bool exported)
 
 } // namespace
 
-// Records the intent and no more: there is no environment in the wasm ABI, so
-// nothing marked here reaches a child.
+// A marked variable goes into every child's environment from here on: the
+// stage builds one out of the table at each spawn (job.cpp).
 Task<i32> builtin_export(Args args, ShIo io)
 {
     Task<i32> t = mark(args, io, true);

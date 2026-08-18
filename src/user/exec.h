@@ -45,11 +45,15 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str());
 // `cwd` is the directory it starts in, inherited from whoever spawned it. Empty
 // means the shell's, which is what a command typed at the prompt gets.
 //
+// `env` is the environment blob it is entered with, in the encoding of
+// sysabi.h's argv. Empty is an empty environment.
+//
 // `died` is false only when the process ended on its own terms, and true on
 // every other way out — a trap, a step that failed, an instance that would not
 // be made. A status cannot say which: `exit 132` is a program's word for what
 // 132 is the kernel's word for. Init is what needs the difference (boot.cpp).
-Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd = Str(), bool *died = nullptr);
+Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd = Str(), Str env = Str(),
+                       bool *died = nullptr);
 
 // What only the process record knows about a task, for /proc to publish. The
 // scheduler has the rest; this is the half a worker comes with.

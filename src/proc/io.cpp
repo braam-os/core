@@ -223,24 +223,29 @@ Task<Result<Piped>> make_pipe()
     co_return Piped{ i32(sys_get_u32(p)), i32(sys_get_u32(p + 4)) };
 }
 
-Task<Result<u32>> spawn(Args v, ChildIo io)
+Task<Result<u32>> spawn(Args v, ChildIo io, const Args *env)
 {
-    // Three descriptor words, then the argv blob — the same encoding _start is
-    // entered with, so the kernel copies it across rather than rebuilding it.
+    // Three descriptor words, then the argv blob and the environment — the same
+    // encoding _start is entered with, so the kernel copies it across rather
+    // than rebuilding it.
     String payload;
     u8 head[SYS_SPAWN_HEAD * 4];
     sys_put_u32(head, io.in);
     sys_put_u32(head + 4, io.out);
     sys_put_u32(head + 8, io.err);
     usize n = argv_size(v.v.data(), v.size());
+    usize m = env ? argv_size(env->v.data(), env->size()) : 0;
     if (!payload.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) ||
-        !payload.reserve(sizeof(head) + n))
+        !payload.reserve(sizeof(head) + n + m))
         co_return Err(Error::NoMemory);
-    for (usize i = 0; i < n; i++)
+    for (usize i = 0; i < n + m; i++)
         payload.push(0);
-    argv_encode(v.v.data(), v.size(), reinterpret_cast<u8 *>(payload.data()) + sizeof(head));
+    u8 *at = reinterpret_cast<u8 *>(payload.data()) + sizeof(head);
+    argv_encode(v.v.data(), v.size(), at);
+    if (env)
+        argv_encode(env->v.data(), env->size(), at + n);
 
-    Result<SysReply> r = co_await sys_call(Sys::Spawn, 0, payload.str());
+    Result<SysReply> r = co_await sys_call(Sys::Spawn, env ? SYS_SPAWN_ENV : 0, payload.str());
     if (r.is_err())
         co_return Err(r.error());
     co_return u32(r.value().status);

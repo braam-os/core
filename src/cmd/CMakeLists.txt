@@ -6,7 +6,7 @@
 # builds is linked below like any other.
 add_subdirectory(sh)
 
-set(BRAAM_BIN_LIST cat chat clear curl date df echo edit false grep head hog
+set(BRAAM_BIN_LIST cat chat clear curl date df echo edit env false grep head hog
                    import less ls mkdir mount pbcopy pbpaste ps pwd rm save sh sleep spin tail
                    test timeout touch true uname vmstat watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)

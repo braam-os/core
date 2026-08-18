@@ -12,15 +12,19 @@ Task<i32> proc_main(Args)
     constexpr usize CHUNK = 64 * 1024;
     usize taken           = 0;
     void *last            = nullptr;
+    void *prev            = nullptr;
     while (void *p = heap_alloc(CHUNK)) {
+        prev = last;
         last = p;
         taken += CHUNK;
     }
 
-    // The last span goes back, because reporting the answer needs coroutine
-    // frames and there would otherwise be nowhere to put them.
+    // Two spans go back, not one: reporting the answer needs coroutine frames,
+    // and the reply the kernel writes back is a size class of its own, which
+    // needs a span of its own once nothing else is left.
     heap_free(last);
-    taken -= CHUNK;
+    heap_free(prev);
+    taken -= 2 * CHUNK;
 
     u32 pages    = u32(__builtin_wasm_memory_size(0));
     bool refused = __builtin_wasm_memory_grow(0, 1) == usize(-1);

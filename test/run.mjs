@@ -296,7 +296,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 10)
+        if (m[0] !== 0x6d617262 || m[1] !== 11)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         if (m[4] !== 256)
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
@@ -716,10 +716,50 @@ if (mode === "--kernel") {
     if (!rows(vrun("echo $?")).includes("1"))
         fail("$? did not carry the last command's status");
 
-    // An assignment prefix does not stay: a child has no environment to have
-    // seen it either way.
+    // An assignment prefix does not stay. `echo` is a builtin, so the prefix is
+    // applied around it and put back; a program gets it in its environment
+    // instead, which is the block below.
     vrun("x=two echo hi");
     vshows("echo $x", "one");
+
+    // Init's base environment reached the shell's table through _start, which
+    // is what makes a variable nothing here set readable.
+    vshows("echo $HOME", "/home");
+    vshows("echo $SHELL", "/bin/sh");
+
+    // An exported variable crosses a spawn; an unexported one does not.
+    vrun("export ev=yes");
+    vrun("unexp=no");
+    vshows("env", "ev=yes");
+    if (rows(vrun("env")).some((line) => line.startsWith("unexp=")))
+        fail("an unexported variable reached a child");
+
+    // An assignment prefix on a *program* goes into that child's environment
+    // and nowhere else: the shell's own table is untouched.
+    vshows("pfx=1 env", "pfx=1");
+    vshows("echo [$pfx]", "[]");
+
+    // The prefix stands in for an exported variable of the same name rather
+    // than arriving beside it.
+    vshows("ev=other env", "ev=other");
+    if (rows(vrun("ev=other env")).includes("ev=yes"))
+        fail("the exported value survived beside the prefix that replaced it");
+    vshows("echo $ev", "yes");
+
+    // `env` sets one for a command, and -i starts from nothing.
+    vshows("env A=1 env", "A=1");
+    vrun("clear");
+    if (rows(vrun("env -i env")).some((line) => line.includes("=")))
+        fail("env -i handed the child an environment");
+
+    // A nested shell takes the environment into its own table, so an exported
+    // variable survives a /bin/sh in between.
+    vshows("sh -c 'echo $ev'", "yes");
+    vshows("sh -c 'echo $HOME'", "/home");
+
+    // A spawn that names no environment hands the child the caller's, which is
+    // what a program that starts a program gets without doing anything.
+    vshows("timeout 5000 env", "ev=yes");
 
     // A command name and a redirection target out of a variable: the argv
     // words split and the target does not.

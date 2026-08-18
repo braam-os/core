@@ -181,7 +181,8 @@ line does not run either. That is the price of the shell keeping its standard in
 script to read from, which is what lets `while read l; do …; done` inside one work against a pipe.
 
 The rest of what a script can and cannot do — no subshell isolation, no compound command in the
-background, no environment across a spawn — is §4.5's table.
+background — is §4.5's table. `export` does reach a child: an exported variable is copied into
+every command's environment at spawn, and a nested `sh` reads it back into its own table.
 
 ---
 
@@ -246,15 +247,23 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with `.
 | Streams | `write_all(fd, Str)`, `read_chunk(fd)`, `close_fd(fd)` |
 | Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path` |
 | Directory | `cwd_get()`, `cwd_set(path)` — this process's own, inherited from whoever spawned it |
-| Children | `make_pipe()`, `spawn(Args, ChildIo)`, `wait_child(pid)`, `kill_child(pid)`, `set_fg(pid)` |
+| Children | `make_pipe()`, `spawn(Args, ChildIo, const Args *env)`, `wait_child(pid)`, `kill_child(pid)`, `set_fg(pid)` |
 | Terminal | `tty_of(fd)`, `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
 | System | `storage_of()`, `sleep_for(ms)`, `clock_now()`, `proc_pid()`, `proc_now()` |
+| Environment | `proc_env(name)`, `proc_env_count()`, `proc_env_at(i)` — from `proc/rt.h`, and not syscalls |
 | Host services | `fetch_url(url, spec)`, `ws_connect(url)`, `clip_get`, `clip_put`, `pick`, `pick_open`, `save` |
 | Helpers | `errln(who, what, why)`, `Input`, `LineReader`, `next_line`, `next_field` |
 
 Everything that is a stream of bytes comes back as a descriptor, so there is nothing new to
 learn for any of it: a fetched body is read with `read_chunk` until `Err(Closed)` and closed
 with `close_fd`, and a WebSocket is written with `write_all`.
+
+The environment came in with `_start`, so reading it costs nothing: `proc_env("HOME")` reports
+the value or an empty `Str`, and `proc_env_at` walks the lot as `NAME=value` words. It is a copy
+taken at the spawn and **cannot be changed** — there is no `setenv`, and nothing a program does
+reaches its parent or a child already running. What a program *can* choose is what its own
+children get: `spawn(argv, io)` hands them this process's, and `spawn(argv, io, &env)` hands them
+exactly the words named. `/bin/env` is the worked example of both.
 
 `tty_of(SYS_STDOUT)` is how a program lays its output out: it reports whether that descriptor
 is the terminal and, if it is, how wide. The geometry is zero for a pipe or a file, so a

@@ -332,6 +332,50 @@ bool apply_assigns(Run *r, usize i, Vec<Saved> *undo, Str &bad_name)
     return true;
 }
 
+// A program stage's environment: the exported variables, with this stage's
+// assignment prefix over the top. Both Strings own bytes the words view, so
+// neither may be appended to once `words` is built.
+bool stage_env(const Run *r, usize i, String &store, String &pre, Vec<Str> &words)
+{
+    if (!vars_env(store, words))
+        return false;
+
+    Args names = r->t->assigns(r->cmd0 + i);
+    usize at   = r->assign0[i];
+    if (names.size() == 0)
+        return true;
+
+    usize total = 0;
+    for (usize k = 0; k < names.size(); k++)
+        total += names[k].find('=') + 1 + r->avals[at + k].text.size();
+    if (!pre.reserve(total))
+        return false;
+    for (usize k = 0; k < names.size(); k++) {
+        Str w = names[k];
+        if (!pre.append(w.substr(0, w.find('=') + 1)) || !pre.append(r->avals[at + k].text.str()))
+            return false;
+    }
+
+    usize off = 0;
+    for (usize k = 0; k < names.size(); k++) {
+        usize nlen = names[k].find('=') + 1; // the name and its '='
+        usize size = nlen + r->avals[at + k].text.size();
+        Str word   = pre.str().substr(off, size);
+        off += size;
+
+        // The prefix stands in for an exported variable of the same name: a
+        // second word would never be reached, since a lookup takes the first.
+        for (usize j = 0; j < words.size(); j++)
+            if (words[j].size() >= nlen && words[j].substr(0, nlen) == word.substr(0, nlen)) {
+                words.erase(j);
+                break;
+            }
+        if (!words.push(word))
+            return false;
+    }
+    return true;
+}
+
 void undo_assigns(Vec<Saved> &undo)
 {
     while (!undo.empty()) {
@@ -865,9 +909,18 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
                 bad = 1;
                 break;
             }
-        // An assignment prefix has nowhere to go: a child gets three
-        // descriptors, an argv and a cwd, and no environment (§4.3).
-        Task<Result<u32>> t = spawn(r->args(i), ChildIo{ s.in, s.out, s.err });
+        // The exported variables and this stage's assignment prefix, which goes
+        // to the child alone and never into the shell's own table.
+        String store, pre;
+        Vec<Str> env;
+        if (!stage_env(r, i, store, pre, env)) {
+            co_await say(SYS_STDERR, "out of memory");
+            bad = 1;
+            break;
+        }
+        Args ev{ Span<const Str>(env.data(), env.size()) };
+
+        Task<Result<u32>> t = spawn(r->args(i), ChildIo{ s.in, s.out, s.err }, &ev);
         Result<u32> pid     = t ? co_await t : Err(Error::NoMemory);
         if (pid.is_err()) {
             // A stale binary is its own answer: the file is there and is a
@@ -1887,9 +1940,16 @@ Task<i32> sh_exec(Args args, ShIo io)
     if (args.size() > 1) {
         // There is no re-instantiate-in-place and a spawn makes a new pid, so
         // the honest substitute is to run it and leave with its status.
-        Args rest       = args.tail();
+        Args rest = args.tail();
+
+        String store;
+        Vec<Str> env;
+        if (!vars_env(store, env))
+            co_return 1;
+        Args ev{ Span<const Str>(env.data(), env.size()) };
+
         Result<u32> pid = Err(Error::NoMemory);
-        if (Task<Result<u32>> t = spawn(rest, ChildIo{ io.in, io.out, io.err }))
+        if (Task<Result<u32>> t = spawn(rest, ChildIo{ io.in, io.out, io.err }, &ev))
             pid = co_await t;
         if (pid.is_err()) {
             if (Task<void> e = errln("exec", rest[0], pid.error()))

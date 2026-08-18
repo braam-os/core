@@ -1,7 +1,7 @@
 // The shell's variables and positional parameters — this process's own state,
 // which is what makes `set`, `shift`, `unset`, `export` and `readonly`
-// builtins. There is no environment in the wasm ABI (Concept.md §4.3), so
-// nothing here crosses a spawn: `export` records an intent and no more.
+// builtins. An exported one crosses a spawn: vars_env is what a stage hands
+// its child, and var_init takes this shell's own environment back in.
 #pragma once
 
 #include "expand.h"
@@ -50,7 +50,13 @@ Vec<VarEntry *> vars_swap(Vec<VarEntry *> next);
 bool vars_copy(Vec<VarEntry *> &out);
 void vars_drop(Vec<VarEntry *> &v);
 
-// $$ and $0, planted once by the shell: nothing here makes a syscall.
+// The exported variables as NAME=value words, for a spawn. `store` owns the
+// bytes and the words view it, so `store` must outlive them and must not be
+// appended to afterwards. A name marked but never given a value is skipped.
+bool vars_env(String &store, Vec<Str> &words);
+
+// $$ and $0, and this process's environment into the table. Nothing here makes
+// a syscall: the environment came in with _start.
 bool var_init(u32 pid, Str name0);
 
 void var_status(i32 s);    // $?

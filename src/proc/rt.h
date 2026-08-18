@@ -46,6 +46,15 @@ inline u32 proc_now()
     return u32(sys(u32(Sys::Now), 0, 0, 0));
 }
 
+// The environment this process was entered with, as NAME=value words viewing
+// the _start block. Fixed at spawn: a child gets it, or one the spawn names,
+// and there is no setenv. proc_env reports an empty Str for a name with no
+// value and for one that is not set — the shell tells those apart, a program
+// does not.
+usize proc_env_count();
+Str proc_env_at(usize i);
+Str proc_env(Str name);
+
 // One asynchronous syscall's answer: the status the kernel chose, and the
 // bytes it sent, which stay valid until the next syscall.
 struct SysReply {

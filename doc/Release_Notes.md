@@ -7,6 +7,85 @@ of the two needs amending.
 
 ---
 
+## The environment crosses a spawn
+
+`export` set a bit nothing read. §4.5 listed it as one of six things v7 has that this cannot,
+and the reason given was true: `Sys::Spawn` carried three descriptors, an argv and a cwd, and
+there was nowhere to put a variable. Closing that gap cost `PROC_ABI` 10 → 11 and **no new
+operation, no new import or export, and not one line of `web/proc.js`.**
+
+**One encoding, two blobs, no length word.** An environment is a word list in exactly the format
+`argv_encode` already wrote, its words `NAME=value`, so there is one codec rather than two and
+`env` needs no parser of its own. The two blobs sit back to back — in `_start`'s payload and
+after `Sys::Spawn`'s three descriptor words — and the join is found by walking the first
+(`argv_bytes`) rather than by a length word in front. A length word was the obvious alternative
+and is worse: it would sit where `argc` sits, so `argv_count(payload, len)` and the existing
+assertion in `test_sysabi.cpp` would both have had to learn about it. Walking is free where it
+matters, because both readers already walk the argv blob to the end. `argv_bytes` reports 0 for
+anything it cannot walk, and that is unambiguous: the smallest well-formed blob is the four
+bytes of an empty word list, so "malformed" and "empty" are told apart and the kernel refuses
+rather than entering a child with rubbish.
+
+**The kernel holds it, beside the cwd, and inheritance is the default.** The alternative was to
+hold nothing and have `spawn()` re-serialise the caller's environment on every call, which keeps
+the kernel stateless and puts the truth on the wire every time. It was rejected for what it does
+to a program that starts a program: `timeout 5 env` and `watch ls` would each have had to ask
+for their own environment and hand it on, and one that forgot would silently strip it. So `Proc`
+gains a `String env`, `Sys::Spawn`'s op-word argument — unused until now — gains bit 0 meaning
+"an env blob follows", and a spawn that says nothing hands the child the caller's. The common
+case puts zero bytes on the wire. `SYS_ENV_MAX` bounds it, because a child hands its own on and
+an unbounded one would grow down a chain of them.
+
+**There is no `setenv`, and a `Sys::Env` would have failed §4.3's own rule.** Every operation has
+a caller in `src/cmd/`, and this one would have had none: the shell keeps its variable table in
+its own memory and builds the blob afresh at each spawn, so it never needs to ask the kernel to
+change anything. A process's environment is therefore fixed at spawn — stronger than v7, which
+is a fair trade for an operation nothing wanted. It also keeps the synchronous half of the ABI
+closed: `getenv` would have had to be asynchronous, since the sync half is answered inside the
+worker with no kernel to ask, and a `co_await` to read a variable is a bad shape.
+
+**The runtime walks the environment rather than indexing it, and `hog` is why.** The first
+version built a `Vec<Str>` in `_start` beside the argv one. That is one heap block in every
+process that will never use it, and it broke `hog` — which allocates until the heap refuses,
+hands one 64 KiB span back, and reports. The failure was not the sixteen bytes: it was the size
+*class*. `_alloc(4)` for the reply the kernel writes back used to land in the span the argv
+block had already seeded, and a bigger `_start` block moved that block to another class, leaving
+no span able to serve four bytes. Walking on demand removes the allocation, which is the right
+answer anyway — `Rt` holds a pointer and a length, `proc_env` is a linear scan over a handful of
+words, and a program that never asks pays nothing. `hog` now hands back two spans instead of
+one, and says so: reporting needs coroutine frames *and* a reply block, and those are different
+size classes once nothing else is left. That fragility was always there; the environment is only
+what exposed it.
+
+**`x=1 prog` finally goes somewhere.** The note under M9 explains why an assignment prefix on a
+program stage used to be expanded and then dropped — applying it to the shell would have leaked
+it, and there was nowhere else. Now it goes into that child's environment and nowhere else,
+which is v7's semantics exactly. A prefix *replaces* an exported variable of the same name in
+the words handed over rather than arriving beside it, because a lookup takes the first match and
+a second word would never be reached. Prefixes on builtin and function stages keep the
+apply-and-restore they had: those run in the shell's own turn and have no spawn to ride.
+
+**A nested shell reads its environment back into its table.** `var_init` seeds from
+`proc_env_at`, marking each entry exported, so `export a=1; sh -c 'echo $a'` works and the
+environment is not swallowed by the one program most likely to be in the middle of a chain.
+Without it the feature would have reached every program *except* another `/bin/sh`.
+
+**Init gives the shell `HOME` and `SHELL` and nothing else.** `PATH` is absent because there is
+no search path to describe — a command word resolves as function, then builtin, then `/bin` —
+and a `PATH` that did not steer resolution would be a lie a script could believe. `TERM` is
+absent because §2.3's terminal is a cell grid with no escape sequences and no terminfo entry
+that could describe it; `Sys::Tty` is how a program asks about the terminal, and a `COLUMNS`
+would be a copy taken at spawn that the first resize made wrong. `cd` with no argument now reads
+`$HOME`, falling back to the literal `/home`, which is what makes the one variable init plants
+mean something rather than being decoration.
+
+**`/bin/env` is a program, not a builtin.** Neither clause of §4's rule fits it: it does not
+touch the shell's own state, and its whole cost is not the spawn — it *makes* a spawn, which is
+the thing a builtin cannot do. It is the worked example for both halves of the new `spawn`
+signature, and it is what makes the feature testable end to end from `run.mjs`.
+
+---
+
 ## src/sh became src/cmd/sh
 
 The shell is a program (§4), and it was the only program whose code did not live in `src/cmd/`.

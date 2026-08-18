@@ -686,7 +686,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 71 | `Echo` | `SYS_ECHO_SHOW \| FRESH \| END` | `u32 x, y, cur, runs`, then `u32 style, len` each, then the bytes | 0 | `u32 x`, `y`, `on`, `cols`, `rows`, `scrolled` |
 | 72 | `Tty` | fd | — | 0 | `u32 flags`, `u32 cols`, `u32 rows` |
 | 80 | `Pipe` | — | — | 0 | `u32 read fd`, `u32 write fd` |
-| 81 | `Spawn` | — | `u32 fd0, fd1, fd2`, then the argv blob | the child's pid | — |
+| 81 | `Spawn` | `SYS_SPAWN_ENV` | `u32 fd0, fd1, fd2`, the argv blob, then the env blob | the child's pid | — |
 | 82 | `Wait` | a pid, or `SYS_WAIT_ANY` | — | the child's status, 0–255 | `u32 pid` |
 | 83 | `Kill` | the pid | — | 0 | — |
 | 84 | `Fg` | a child's pid, or 0 to take the console back | — | 0 | — |
@@ -703,7 +703,8 @@ makes `>f 2>&1` interleave rather than overwrite — and closing one shuts nothi
 goes. It exists because `Spawn` *moves*: without it `exec >file` would lose the shell's own
 descriptor to the first child that ran.
 
-Adding it moved `PROC_ABI` from 9 to 10 and relaxed one rule in `Spawn`. That operation used to
+Adding it moved `PROC_ABI` from 9 to 10 and relaxed one rule in `Spawn`. (The environment moved
+it from 10 to 11, without adding an operation: the blob rides `Spawn`'s payload and `_start`'s.) That operation used to
 refuse a handle with `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
 *descriptor* raises that count too, so every duplicated fd would have been unspawnable. The test
 is now the `busy_r`/`busy_w` flags, which is what the sentence always meant. Two slots may still
@@ -765,7 +766,8 @@ Concept.md §4.3's "every operation has a caller in `src/cmd/`" bars *growing* t
 guess, and re-adding either later would cost an ABI bump that invalidates every stamped binary.
 
 **`Tty` is the question the terminal being a grid makes unaskable.** There is no escape sequence
-to send and no environment to read, so a program cannot tell its own stdout from a pipe. The
+to send, and a `COLUMNS` in the environment would be a copy taken at spawn that the first resize
+made wrong, so a program cannot tell its own stdout from a pipe. The
 kernel can: `stdio_console()` installs one sink and a pipe or a file installs another, and
 `tty_is_console` (`src/user/tty.h`) is that difference given a name — with `console_is_input`
 (`src/user/console.h`) answering the same for fd 0. `Spawn` bit-copies the parent's `Stream` when
@@ -808,6 +810,14 @@ rather than through a `Source`, so they are not stdio whatever they are pointed 
 not refused here any more, because the kernel has never heard of one: they live inside `/bin/sh`
 and `exec_resolve` looks only in `/bin`, so `spawn("cd")` is an ordinary `Err(NotFound)`.
 
+**`Spawn`'s environment.** With `SYS_SPAWN_ENV` in the op word's argument, an env blob follows
+the argv one and is the child's; without it the child inherits the caller's, which the kernel
+holds on the `Proc` record beside the cwd. Both blobs are the encoding of `src/kernel/sysabi.h`'s
+argv — the env's words being `NAME=value` — and the join is found by walking the first
+(`argv_bytes`), so a malformed blob is `Err(Invalid)` rather than a child entered with rubbish.
+An environment over `SYS_ENV_MAX` is refused the same way. The kernel does not read the words: a
+word with no `=` is the caller's business, exactly as an argv word is.
+
 **Statuses are clamped to 0–255 when recorded.** `Sys::Exit` takes whatever the program passed
 it, and a negative status on this wire is an error code.
 
@@ -829,6 +839,8 @@ the page with it.
 | `SYS_KIND_FILE`/`DIR` | 0, 1 | what `Stat` and `List` report |
 | `SYS_STORE_*` | 1, 2, 4, 8 | OPFS, sync, persisted, and "the host answered at all" |
 | `SYS_SPAWN_HEAD` | 3 | the descriptor words before `Spawn`'s argv blob, in `u32`s |
+| `SYS_SPAWN_ENV` | 1 | `Spawn`'s arg bit: an env blob follows argv, else the child inherits the caller's |
+| `SYS_ENV_MAX` | 8192 | the most an environment may be, and therefore what a chain of children carries |
 | `SYS_ECHO_HEAD` | 4 | `Echo`'s anchor, cursor offset and run count, in `u32`s |
 | `SYS_ECHO_RUN` | 2 | the style and length of one `Echo` run, in `u32`s |
 | `SYS_ECHO_RUNS_MAX` | 8 | runs per `Echo`; a prompt is four |

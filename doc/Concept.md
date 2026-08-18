@@ -544,7 +544,7 @@ process imports:  env.memory                        // the kernel's, so the cap 
                   sys(op, a0, a1, a2) -> i32        // sync ops, immediate result
                   sys_async(op, token, ptr, len)    // async ops, reply via _resume
 
-process exports:  _start(argv_ptr, argv_len) -> i32 // 0 = exited, 1 = suspended
+process exports:  _start(ptr, len) -> i32          // argv then env; 0 = exited, 1 = suspended
                   _resume(token, ptr, len)   -> i32 // the same
                   _alloc(n) -> ptr, _free(ptr, n)
 
@@ -563,6 +563,12 @@ The wire's conventions:
 - **`_start` takes argv rather than argc**, because the host places the blob through `_alloc`
   and `argc` alone cannot say where it put it. The blob is `u32 argc`, then a length and bytes
   per word.
+- **The environment follows argv in that same block, in that same encoding**, its words
+  `NAME=value`. One codec rather than two, and the join is found by walking the first blob
+  (`argv_bytes`) rather than by a length word, so `argv_count` and `argv_at` read the payload
+  unchanged. The block is never freed, so both are spans of views into it and a program may hold
+  them to the end — which is why the runtime walks the environment on demand rather than
+  building a `Vec` every process would pay for.
 - **A reply payload begins with an `i32` status**: `_resume`'s signature has room for a buffer
   and not for an errno, and every asynchronous syscall needs both.
 - **The op word's upper bits are the operation's argument** — a descriptor, the open flags, or
@@ -607,6 +613,15 @@ classic bug where the reader never sees end of input. Moving makes it unrepresen
 holding one pipe end would be a user program reaching a kernel invariant. A descriptor a syscall
 of the parent is parked on cannot be moved at all, and a spawn refused on any slot takes none of
 them. Within a process, a second concurrent use in the same direction is `Err(Perm)`.
+
+**A spawn carries an environment, or says nothing and the child inherits one.** `Sys::Spawn`'s
+op-word argument has a bit for "an env blob follows the argv one"; without it the kernel hands
+the child the caller's, which it already holds on the `Proc` record beside the cwd. So the
+common case puts nothing on the wire, `timeout 5 env` inherits without doing anything, and a
+shell that wants to say exactly what a stage gets says it. A process's environment is **fixed at
+spawn**: there is no `setenv`, because nothing would call one — a shell keeps its own variable
+table and builds the blob afresh at each spawn. It is bounded at `SYS_ENV_MAX`, since a child
+hands its own on and an unbounded one would grow down a chain of them.
 
 **A child is an ordinary scheduler job**, spawned exactly as a pipeline stage is, so `^C`,
 `kill`, `jobs` and `/proc` reach it with nothing added. Its parent's destructor cancels it,
@@ -688,8 +703,8 @@ is the *line* rather than the key: a keystroke is two round trips and Enter to t
 is five, paid once a line, which is why it is affordable.
 
 **The real cost is duplication.** With no dynamic linking, every binary embeds its own copy of
-the allocator, the string types and the coroutine runtime; the staged tree is ~688 KiB over
-thirty-five binaries, and `sh.wasm` is 210 KiB of it — the shell is a language now (§4.5), and
+the allocator, the string types and the coroutine runtime; the staged tree is ~710 KiB over
+thirty-six binaries, and `sh.wasm` is 214 KiB of it — the shell is a language now (§4.5), and
 nearly a third of the tree. Keep the process-side runtime minimal and push anything substantial
 into syscalls, so it lives once in the kernel rather than N times in userland. That *tree*
 carries a size budget and the individual binaries do not, so that number is where the
@@ -747,15 +762,16 @@ expansion output only — a literal byte of the word never goes through it, so `
 typed `a:b` alone and cuts `$path` in two. A redirection target and an assignment value expand as
 exactly one field however they expand, so `> *.txt` writes to the pattern.
 
-**Six things in v7 cannot exist here, and each has a decided substitute rather than a gap.**
+**Five things in v7 cannot exist here, and each has a decided substitute rather than a gap.**
+`export` was a sixth until the environment crossed a spawn (§4.3); what is left of it is that
+an exported variable is a copy taken at spawn and there is no `setenv` to change one after.
 
 | v7 | Why not | What happens instead |
 |---|---|---|
-| `( list )` as a real subshell | There is no `fork`, and spawning a second `/bin/sh` would lose the variable table — there is no environment anywhere in the ABI (§4.3) — and cost a worker against the depth cap. | It runs in this process with the shell's own mutable state saved and put back: cwd, variables, positional parameters, functions, options, traps and the `exec` base. `(cd /x; ls)` and `(set -e; …)` are exact; only memory isolation is lost. |
+| `( list )` as a real subshell | There is no `fork`, and spawning a second `/bin/sh` would lose everything a spawn does not carry — the unexported variables, the functions, the options and the traps — and cost a worker against the depth cap. | It runs in this process with the shell's own mutable state saved and put back: cwd, variables, positional parameters, functions, options, traps and the `exec` base. `(cd /x; ls)` and `(set -e; …)` are exact; only memory isolation is lost. |
 | A compound command in the background | Backgrounding means the shell runs on while the group does, and nothing inside a process can wait for a sibling task (§3.6). | Refused. `cmd &` on a simple pipeline is unaffected. |
 | `exec cmd` replacing the image | A process is an instance in a worker; there is no re-instantiate-in-place and a spawn makes a new pid. | `exec` with no command makes its redirections permanent, which is exact. `exec cmd` spawns, waits, and leaves with the child's status. |
 | `#!` scripts | `exec` requires `\0asm` plus a `braam` section carrying the ABI number, so a text file can never be handed to it. | `sh file` and `sh < file`. There is no `./script.sh` and there will not be. |
-| `export` reaching a child | There is no environment in the wasm ABI: `Sys::Spawn` carries three descriptors, an argv and a cwd. | `export` records an intent this process honours — `.`, `eval` and functions see it — and nothing crosses a spawn. |
 | `trap … <signal>` | There are no signals, and the cancellation flag is sticky: once `^C` sets it every later await answers at once. | `trap … 0` on any normal exit, and `trap … 2` in an interactive shell, where the interrupt went to the stages and this process was never cancelled. `trap '' 2` is refused rather than accepted and dropped. |
 
 **What runs a command word is §4's rule**: a function, then a builtin, then a binary in `/bin` —

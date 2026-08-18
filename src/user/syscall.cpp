@@ -85,6 +85,7 @@ struct Spawned {
     String blob; // the argv bytes, copied out of the staging block
     Vec<Str> words;
     String cwd;
+    String env; // the env blob, the caller's own when the spawn named none
     Handle *moved[3] = {};
     Stdio parent_io; // retained, for the slots that share rather than move
     Stdio io;        // what the child is entered with; io.owner is this
@@ -233,7 +234,7 @@ Task<i32> spawn_run(SpawnRef s)
     } rep{ s->parent, s->pid, &status };
 
     Task<i32> body = exec_process(s->exe, Args{ Span<const Str>(s->words.data(), s->words.size()) },
-                                  s->io, s->cwd.str());
+                                  s->io, s->cwd.str(), s->env.str());
     if (!body)
         co_return status;
     status = co_await body;
@@ -242,7 +243,7 @@ Task<i32> spawn_run(SpawnRef s)
 
 } // namespace
 
-Task<i32> proc_spawn_child(Proc &p, Str payload)
+Task<i32> proc_spawn_child(Proc &p, u32 arg, Str payload)
 {
     if (payload.size() < SYS_SPAWN_HEAD * 4)
         co_return -i32(Error::Invalid);
@@ -269,7 +270,24 @@ Task<i32> proc_spawn_child(Proc &p, Str payload)
     if (p.children.size() >= SYS_CHILD_MAX || p.depth + 1 >= SYS_PROC_DEPTH)
         co_return -i32(Error::NoMemory);
 
-    Str blob   = payload.substr(SYS_SPAWN_HEAD * 4);
+    // The argv blob, then the environment when arg says one follows and the
+    // caller's own when it does not.
+    Str rest       = payload.substr(SYS_SPAWN_HEAD * 4);
+    const u8 *rp   = reinterpret_cast<const u8 *>(rest.data());
+    usize argv_len = argv_bytes(rp, rest.size());
+    if (argv_len == 0)
+        co_return -i32(Error::Invalid);
+
+    Str blob = rest.substr(0, argv_len);
+    Str envb = p.env.str();
+    if (arg & SYS_SPAWN_ENV) {
+        envb = rest.substr(argv_len);
+        if (argv_bytes(rp + argv_len, envb.size()) != envb.size())
+            co_return -i32(Error::Invalid);
+    }
+    if (envb.size() > SYS_ENV_MAX)
+        co_return -i32(Error::Invalid);
+
     usize argc = argv_count(reinterpret_cast<const u8 *>(blob.data()), blob.size());
     if (argc == 0)
         co_return -i32(Error::Invalid);
@@ -287,7 +305,8 @@ Task<i32> proc_spawn_child(Proc &p, Str payload)
     // and the child holds its words until it exits.
     s->parent    = p.pid;
     s->exe.depth = p.depth + 1;
-    if (!s->blob.append(blob) || !s->cwd.assign(p.cwd.str()) || !s->words.reserve(argc))
+    if (!s->blob.append(blob) || !s->env.append(envb) || !s->cwd.assign(p.cwd.str()) ||
+        !s->words.reserve(argc))
         co_return -i32(Error::NoMemory);
     const u8 *b = reinterpret_cast<const u8 *>(s->blob.data());
     for (usize i = 0; i < argc; i++)
@@ -1228,7 +1247,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
 
         case Sys::Spawn: {
             status = -i32(Error::NoMemory);
-            if (Task<i32> t = proc_spawn_child(p, payload))
+            if (Task<i32> t = proc_spawn_child(p, sys_op_arg(c.op), payload))
                 status = co_await t;
             break;
         }

@@ -121,6 +121,40 @@ void test_sysabi()
     CHECK(argv_at(p, 6, 0).empty());
     CHECK_EQ(argv_count(p, 2), 0);
 
+    // argv_bytes is what lets a second blob follow: the extent of this one,
+    // and 0 for anything it could not walk. An empty word list is four bytes,
+    // so 0 is unambiguously "malformed" rather than "empty".
+    CHECK_EQ(argv_bytes(p, n), n);
+    CHECK_EQ(argv_bytes(p, n + 16), n); // trailing bytes are not this blob's
+    CHECK_EQ(argv_bytes(p, n - 1), 0);  // the last word runs past the end
+    CHECK_EQ(argv_bytes(p, 2), 0);
+    CHECK_EQ(argv_bytes(nullptr, 0), 0);
+
+    u8 nowords[4] = { 0, 0, 0, 0 };
+    CHECK_EQ(argv_bytes(nowords, 4), 4);
+    CHECK_EQ(argv_count(nowords, 4), 0);
+
+    // The environment is a word list in the same encoding, so the two sit back
+    // to back and argv_bytes finds the join. This is what _start is entered
+    // with and what Sys::Spawn carries after its descriptor words.
+    Str env[]  = { "HOME=/home", "SHELL=/bin/sh" };
+    usize envn = argv_size(env, 2);
+
+    String pair;
+    CHECK(pair.append(blob.str()));
+    for (usize i = 0; i < envn; i++)
+        CHECK(pair.push(0));
+    argv_encode(env, 2, reinterpret_cast<u8 *>(pair.data()) + n);
+
+    const u8 *pp = reinterpret_cast<const u8 *>(pair.data());
+    usize at     = argv_bytes(pp, pair.size());
+    CHECK_EQ(at, n);
+    CHECK(argv_at(pp, at, 0) == "tail");
+    CHECK_EQ(argv_count(pp + at, pair.size() - at), 2);
+    CHECK(argv_at(pp + at, pair.size() - at, 0) == "HOME=/home");
+    CHECK(argv_at(pp + at, pair.size() - at, 1) == "SHELL=/bin/sh");
+    CHECK_EQ(argv_bytes(pp + at, pair.size() - at), envn);
+
     // Sys::Spawn puts three descriptor words in front of that same blob, so the
     // kernel decodes argv with the encoder _start already uses rather than a
     // second one. The words say which of the caller's streams the child gets:
@@ -139,6 +173,20 @@ void test_sysabi()
     CHECK_EQ(sys_get_u32(q + 8), SYS_STDERR);
     CHECK_EQ(argv_count(q + SYS_SPAWN_HEAD * 4, req.size() - SYS_SPAWN_HEAD * 4), 4);
     CHECK(argv_at(q + SYS_SPAWN_HEAD * 4, req.size() - SYS_SPAWN_HEAD * 4, 0) == "tail");
+
+    // With SYS_SPAWN_ENV the environment follows argv, and the kernel splits
+    // the two the way _start does. Without it the payload ends at argv and the
+    // child inherits the caller's.
+    CHECK(req.append(Str(pair.data() + n, envn)));
+    const u8 *qq = reinterpret_cast<const u8 *>(req.data()) + SYS_SPAWN_HEAD * 4;
+    usize rest   = req.size() - SYS_SPAWN_HEAD * 4;
+    usize alen   = argv_bytes(qq, rest);
+    CHECK_EQ(alen, n);
+    CHECK_EQ(argv_bytes(qq + alen, rest - alen), rest - alen);
+    CHECK(argv_at(qq + alen, rest - alen, 0) == "HOME=/home");
+
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Spawn, SYS_SPAWN_ENV)), SYS_SPAWN_ENV);
+    CHECK(sys_op_code(sys_op(Sys::Spawn, SYS_SPAWN_ENV)) == Sys::Spawn);
 
     // Sys::Echo's payload is the anchor, then a header per run, then the runs'
     // bytes end to end — every header before every byte, so the kernel can
