@@ -26,6 +26,29 @@
 // and the stages are put in front so that ^C reaches them rather than us.
 Task<i32> run_line(Str line, bool interactive);
 
+// Whether the line being run belongs to an interactive shell, which a builtin
+// has no other way to ask. False outside a walk.
+bool sh_interactive();
+
+// `set -e -x -u`. Three letters of this process's own state, so they go back
+// with everything else around a `( … )`.
+constexpr u32 SH_ERREXIT = 1;
+constexpr u32 SH_NOUNSET = 2;
+constexpr u32 SH_XTRACE  = 4;
+
+u32 sh_flags();
+void sh_set_flags(u32 f);
+
+// `trap`. Two signals exist here: 0 is EXIT and anything else is INT, since
+// there are no signals and the builtin refuses every other number.
+bool trap_set(u32 sig, Str action);
+bool trap_get(u32 sig, Str &action);
+void trap_clear(u32 sig);
+
+// Runs a trap's action, having taken it first so the action cannot fire
+// itself. 0 when there is none to run.
+Task<i32> trap_run(u32 sig, bool interactive);
+
 // `break` and `continue`, which ask rather than act for the reason `exit`
 // does: a builtin runs inside a pipeline and the loop that must hear it is up
 // the walk. Outside a loop both are silent no-ops.

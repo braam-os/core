@@ -479,7 +479,7 @@ if (mode === "--kernel") {
         fail(`pasted() gave [${pasted("a\r\nb\tc")}]`);
 
     submit("clear", 1045); // the builtins and the programs need a tall grid
-    addr = instance.exports.resize(100, 60);
+    addr = instance.exports.resize(100, 64);
     if (addr === 0)
         fail("the resize before help failed");
     s = submit("help", 1050);
@@ -492,6 +492,7 @@ if (mode === "--kernel") {
                         "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
+
 
     // A pasted line is longer than the 64-slot key ring, so it is fed at the
     // rate the console drains it: key() says whether it took the keystroke, and
@@ -1809,7 +1810,7 @@ if (mode === "--kernel") {
         fail(`a non-binary left ${row(s, s.cursor_y)}, expected ${prompt(126)}`);
 
     // help lists what is runnable.
-    addr = instance.exports.resize(100, 48);
+    addr = instance.exports.resize(100, 64);
     s = submit("clear", 9040);
     s = submit("help", 9041);
     for (const name of ["echo", "hog", "sleep", "spin", "tail", "wc"])
@@ -2056,23 +2057,34 @@ if (mode === "--kernel") {
     // The builtins are the shell's own state, so they are not files: `cd` is
     // not in /bin and never resolves through it, and `help` prints them ahead
     // of everything else, with the usage line the table carries.
-    addr = instance.exports.resize(100, 60);
+    addr = instance.exports.resize(100, 64);
     s = submit("clear", 9090);
     s = submit("help", 9091);
     const helped = rows(s).filter((line) => line.startsWith("  "));
-    for (const [i, name] of [".", "break", "cd", "continue", "eval", "exec", "exit", "export",
-                             "fg", "help", "jobs", "kill", "readonly", "return", "set", "shift",
-                             "unset"].entries())
+    for (const [i, name] of [".", ":", "[", "break", "cd", "continue", "echo", "eval", "exec",
+                             "exit", "export", "false", "fg", "help", "jobs", "kill", "read",
+                             "readonly", "return", "set", "shift", "test", "trap", "true",
+                             "unset", "wait"].entries())
         if (!helped[i] || !helped[i].startsWith(`  ${name} `))
             fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);
     if (!helped.some((line) => line.startsWith("  wc ") && line.includes("count lines")))
         fail(`help did not carry /share/help's usage for wc: ${JSON.stringify(helped)}`);
+    // Once per name: `echo` is a builtin *and* a file, and the builtin is what
+    // typing the name runs, so that is the line help prints.
+    for (const name of ["echo", "true", "false", "test"])
+        if (helped.filter((line) => line.startsWith(`  ${name} `)).length !== 1)
+            fail(`help listed ${name} more than once: ${JSON.stringify(helped)}`);
     addr = instance.exports.resize(60, 16);
 
     s = submit("clear", 9092);
     s = submit("ls /bin", 9093);
     if (words(s).includes("cd"))
         fail("cd is a builtin and must not be a file in /bin");
+    // The second clause of builtin.h's rule keeps the file: a builtin shadows
+    // the name at a prompt, not everywhere.
+    for (const name of ["echo", "true", "false", "test"])
+        if (!words(s).includes(name))
+            fail(`${name} is a builtin but must still be a file in /bin`);
     if (!words(s).includes("timeout"))
         fail(`ls /bin lost a binary: ${JSON.stringify(output(s))}`);
 
@@ -2524,12 +2536,13 @@ if (mode === "--kernel") {
     // One stage takes the last idle worker and the second has to hire, so the
     // second is the one that gets the broken link — and the shell keeps the
     // good worker it was already holding. The screen is cleared first, since
-    // `clear` is a program too and would otherwise be a third claimant.
+    // `clear` is a program too and would otherwise be a third claimant. Both
+    // stages have to be programs — `echo` is a builtin and takes no worker.
     s = submit("clear", 13086);
     if (net.proc.pooled() !== 1)
         fail(`the pool holds ${net.proc.pooled()} workers, expected one before the break`);
     net.broken = true;
-    s = submit("echo hi | cat", 13087);
+    s = submit("pwd | cat", 13087);
     if (!rows(s).some((line) => line.startsWith("braam: /bin/cat: crashed")))
         fail(`a worker that never loaded printed ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt(132))
@@ -2541,10 +2554,10 @@ if (mode === "--kernel") {
     // latch's absence stated as an assertion: a host whose workers are born
     // broken is asked afresh rather than written off, and the cost of it is one
     // dead worker per hire until it recovers. A pipeline rather than a command,
-    // because `echo` gave its own worker back to the pool when it exited and a
+    // because `pwd` gave its own worker back to the pool when it exited and a
     // single command would take that one and never hire.
     const made = net.links.length;
-    s = submit("echo hi | cat", 13089);
+    s = submit("pwd | cat", 13089);
     if (row(s, s.cursor_y) !== prompt(132))
         fail(`a second pipeline after a broken worker left ${row(s, s.cursor_y)}`);
     if (net.links.length === made)
@@ -2640,7 +2653,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 2,359-byte file: more than the eight writes a pipe
+    // Three copies of a 2,426-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -2669,9 +2682,9 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "braam: nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 7,077 bytes is fourteen chunks against eight
+    // The many-writes case: 7,278 bytes is fifteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "123 1191 7077");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1227 7278");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;
@@ -2783,6 +2796,124 @@ if (mode === "--kernel") {
     rfile("(exec > /home/rd/log; echo one; echo two)", "/home/rd/log", "one|two");
     rshows("(exec > /home/rd/log); echo back", "back");
     submit("rm -r /home/rd", (gt += 0.01));
+
+    // S8. The scripting builtins: `test` and `[`, `:`, `echo`, `true`, `false`,
+    // `read`, `wait`, `trap` and the three option letters. The unit suite has
+    // the expression grammar against a table; what only a real shell shows is
+    // the grammar over a real store, and the options reaching the walk.
+    submit("mkdir /home/s8", (gt += 0.01));
+    const tshows = (line, want) => {
+        submit("clear", (gt += 0.005));
+        const got = output(submit(line, (gt += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    tshows("if [ -f /share/motd ]; then echo yes; fi", "yes");
+    tshows("if [ -d /bin ]; then echo yes; fi", "yes");
+    tshows("[ -f /bin ]; echo $?", "1");
+    tshows("test -d /bin; echo $?", "0");
+    tshows("[ -f /share/motd -a -d /bin ]; echo $?", "0");
+    tshows("[ nope = nope ]; echo $?", "0");
+    tshows("[ 2 -gt 1 ]; echo $?", "0");
+    // Two that answer out of the gaps rather than out of a mode word: `-x` is
+    // a file the kernel would instantiate, and `-w` is a writable mount.
+    tshows("[ -x /bin/true ]; echo $?", "0");
+    tshows("[ -x /share/motd ]; echo $?", "1");
+    tshows("[ -w /share/motd ]; echo $?", "0");
+    tshows("[ -w /proc/uptime ]; echo $?", "1");
+    // Neither true nor false, and said so.
+    tshows("[ -f /bin; echo $?", "test: ] missing|2");
+    tshows("[ -f ]; echo $?", "test: argument expected|2");
+    tshows("test -f; echo $?", "test: argument expected|2");
+    tshows("test; echo $?", "1");
+    // The same expression through the file, which is what a future find would
+    // run: a builtin shadows the name at a prompt, not everywhere.
+    tshows("/bin/test -d /bin; echo $?", "0");
+
+    tshows(":; echo $?", "0");
+    tshows("true; echo $?", "0");
+    tshows("false; echo $?", "1");
+    tshows("echo -n a; echo b", "ab");
+
+    // `while [ … ]` spends no worker per turn, which is the whole of why the
+    // rule grew a second clause.
+    submit("clear", (gt += 0.01));
+    const links0 = net.links.length;
+    submit("for i in 1 2 3 4 5; do [ -f /share/motd ]; done", (gt += 0.01));
+    if (net.links.length !== links0)
+        fail(`a loop of builtins hired ${net.links.length - links0} workers`);
+
+    // `read` fills this shell's own variables, so a pipeline stage is not a
+    // subshell and what it set is still there on the next command.
+    tshows("echo a b c | read x y; echo $y", "b c");
+    tshows("echo one | read v; echo $v", "one");
+    submit("echo one > /home/s8/f", (gt += 0.01));
+    submit("echo two >> /home/s8/f", (gt += 0.01));
+    submit("echo three >> /home/s8/f", (gt += 0.01));
+    // Three lines out of one chunk: Sys::Read carries no length, so this is
+    // the pushback buffer or it is nothing.
+    tshows("while read l; do echo got $l; done < /home/s8/f", "got one|got two|got three");
+    tshows("read a b < /home/s8/f; echo $a", "one");
+
+    // The options, inside `( … )` so the shell survives them and so the
+    // checkpoint is shown to put them back.
+    tshows("(set -e; false; echo never); echo on", "on");
+    tshows("(set -e; if false; then echo x; fi; echo cond)", "cond");
+    tshows("(set -e; false || true; echo or)", "or");
+    tshows("(set -e; ! false; echo not)", "not");
+    tshows("(set -e; while false; do echo x; done; echo loop)", "loop");
+    tshows("(set -eu; echo $-)", "eu");
+    tshows("(set -e); echo -$-", "-");
+    tshows("(set -u; echo $nosuch); echo on", "braam: nosuch: parameter not set|on");
+    tshows("(set -u; echo ${nosuch-ok})", "ok"); // the operators ask first
+    tshows("(set -x; echo hi)", "+ echo hi|hi");
+    tshows("(set -x; x=1 echo hi)", "+ x=1 echo hi|hi");
+    tshows("set -q", "usage: set [-eux] [+eux] [--] [<arg>...]");
+    // `set -x` is not `set --`: the parameters are the operands' to change.
+    tshows("set a b; (set -x; echo $#); set --", "+ echo 2|2");
+
+    // A whole script, where `set -e` means what it says: the shell stops.
+    submit("echo 'set -e' > /home/s8/e.sh", (gt += 0.01));
+    submit("echo false >> /home/s8/e.sh", (gt += 0.01));
+    submit("echo 'echo never' >> /home/s8/e.sh", (gt += 0.01));
+    tshows("sh -s < /home/s8/e.sh; echo done", "done");
+
+    // `trap … 0` fires on the way out, through a nested shell because this
+    // one's exit would end the session.
+    tshows("echo \"trap 'echo bye' 0\" | sh -s", "bye");
+    tshows("trap 'echo x' 0; trap; trap - 0", "trap -- 'echo x' 0");
+    // The one it cannot honour, and the ones that do not exist.
+    tshows("trap '' 2", "trap: cannot ignore an interrupt");
+    tshows("trap 'echo x' 9", "trap: 9: unsupported");
+
+    // `wait` collects a background job without putting a prompt in between.
+    s = submit("clear", (gt += 0.01));
+    s = submit("sleep 5000 & wait; echo waited", (gt += 0.01));
+    if (rows(s).includes("waited"))
+        fail("wait came back before the job did");
+    run(20000);
+    s = descriptor(addr);
+    if (!rows(s).includes("waited"))
+        fail(`wait never came back: ${JSON.stringify(rows(s))}`);
+    // `trap … 2` fires where a ^C becomes a status, which is the only place it
+    // can: the interrupt went to the stage, so this shell was never cancelled.
+    submit("clear", (gt += 0.01));
+    submit("trap 'echo caught' 2", (gt += 0.01));
+    type("sleep 5000");
+    press(KEY.ENTER);
+    run((gt += 0.01));
+    press("c".codePointAt(0), CTRL);
+    run((gt += 0.01));
+    s = descriptor(addr);
+    if (!rows(s).includes("caught"))
+        fail(`a ^C with a trap on 2 printed ${JSON.stringify(rows(s))}`);
+    submit("trap - 2", (gt += 0.01));
+
+    tshows("wait %9", "wait: no such job");
+    tshows("wait; echo $?", "0"); // nothing to wait for
+
+    submit("rm -r /home/s8", (gt += 0.01));
 
     // exit ends the shell, and nothing runs after it — not even the rest of
     // its own line, which is Flow::Exit end to end. Last, for that reason.

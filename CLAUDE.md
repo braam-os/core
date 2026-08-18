@@ -214,10 +214,13 @@ Further constraints, easy to violate by habit:
 Every program is a binary; there is no in-kernel program, no program registry and no way to write
 one (Concept.md §4). Two kinds of thing run a command:
 
-- **Shell builtin** — not a program and not a file: `cd`, `fg`, `jobs`, `kill`, `help`, `exit` in
-  `src/sh/builtin/`, inside `/bin/sh`. What makes one a builtin is that it touches the shell
+- **Shell builtin** — `cd`, `fg`, `jobs`, `kill`, `help`, `exit` and the rest in
+  `src/sh/builtin/`, inside `/bin/sh`. Two clauses make one. Either it touches the shell
   *process's* own state — its cwd, which a typed command inherits at spawn; its job table, which no
-  syscall shows anyone; its loop. It pipes and redirects through descriptors like anything else,
+  syscall shows anyone; its loop — **or its whole cost is the spawn**, which is `test`, `[`, `:`,
+  `echo`, `true` and `false` and nothing else. The first kind has no file and never will; the
+  second keeps its file in `/bin`, since a builtin shadows the name at a prompt and not
+  everywhere. It pipes and redirects through descriptors like anything else,
   but runs **in its turn rather than alongside**, since nothing inside a process can wait for a
   sibling task — so it must buffer its output and write it once, or it fills an eight-slot pipe
   and parks with nobody left to drain it.
@@ -344,9 +347,19 @@ change to argue in Concept.md first.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.
 - **The shell has no `-c` and no scripts beyond `sh -s`.** It has variables, lists, control flow,
-  `case`, globbing, `$( )` and functions now, but **`export` reaches no child**: there is no
-  environment anywhere in the wasm ABI, so it records an intent that only this process can
-  honour. `/bin/export` was renamed `save` to give the builtin its name.
+  `case`, globbing, `$( )`, functions, `test`, `read`, `trap` and `set -e -x -u` now, but
+  **`export` reaches no child**: there is no environment anywhere in the wasm ABI, so it records
+  an intent that only this process can honour. `/bin/export` was renamed `save` to give the
+  builtin its name.
+- **`trap` has two signals and one of them cannot be ignored.** There are none in the system, so
+  `trap … 0` (EXIT) and `trap … 2` (INT) are all there is, and `trap '' 2` is refused rather than
+  accepted and dropped: `CancelState::cancelled` is sticky. A `trap … 2` in a *script* shell can
+  never fire, because the process itself is cancelled and every await after that answers
+  `Err(Cancelled)`.
+- **`read` reads past the line it was asked for.** `Sys::Read` carries no length, so a chunk is
+  whatever the writer wrote; what followed the newline is kept in a pushback buffer keyed by the
+  descriptor. `sh -s` has a `LineReader` of its own, so a `read` inside a script off stdin sees a
+  different position in the same stream.
 - **A function is not a scope.** It runs in the shell's own turn on the caller's `Ctx`, so
   `$1`…`$#` are saved and put back but its variables and cwd are the shell's, and a `break` inside
   one reaches a loop outside it. `f | wc` and `f > log` work: the body inherits the stage's
@@ -375,11 +388,13 @@ change to argue in Concept.md first.
   nothing in a process can wait for a sibling task. **And a compound command cannot be *piped***
   — `{ a; } | wc` — because a `Pipe` node's stages are commands and making them nodes is its own
   change. Redirecting one works: `{ a; } > f` and `for … done > f` ride on `Ctx::base`.
-- **A loop whose body is entirely builtins cannot be interrupted.** The shell arms its *children*
-  with `Sys::Fg` and is never in its own foreground set, so a `^C` has nowhere to go and `rt.h`
-  is explicit that nothing cancels from inside a process. A loop with a program in it — which is
-  every `while true`, since `true` is `/bin/true` — is interrupted in one press. The escape from
-  the other kind is killing the shell, which init then replaces.
+- **A loop whose body is entirely builtins cannot be interrupted, and `while true; do echo …;
+  done` is now one of those.** The shell arms its *children* with `Sys::Fg` and is never in its
+  own foreground set, so a `^C` has nowhere to go and `rt.h` is explicit that nothing cancels from
+  inside a process. Making `true`, `echo` and `test` builtins widened this: the case that used to
+  be interrupted in one press is the case that now cannot be. A loop with a program in it —
+  `while true; do sleep 100; done` — still is. The escape from the other kind is killing the
+  shell, which init then replaces.
 - **Two fidelity losses the worker costs (§4.3):** a binary that will not instantiate reads as a
   crash rather than a refusal, and `Sys::Now` is relative (nothing calls `proc_now()`).
 - **A host that cannot make a nested worker cannot run anything**, and says so once a second rather

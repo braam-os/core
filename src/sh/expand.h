@@ -44,6 +44,11 @@ struct Vars {
     // with Err(Again) rather than guessing: running a command needs a
     // co_await, and nothing in this file may have one.
     bool (*substitute)(void *ctx, usize at, Str command, Str &out) = nullptr;
+
+    // `set -u`: an unset parameter is Err(Invalid) rather than an empty word.
+    // A field and not a callback, because only the walk below knows that
+    // `${x-y}` and `${x+y}` have already asked and are exempt.
+    bool nounset = false;
 };
 
 // Whether the word may become more than one. `One` is an assignment's value or

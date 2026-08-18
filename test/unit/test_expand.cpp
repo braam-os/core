@@ -52,6 +52,9 @@ bool cb_look(void *, Str name, Str &value)
             g_num[0] = char('0' + posn % 10);
             value    = Str(g_num, 1);
             return true;
+        case '-':
+            value = "ex"; // `set`'s option letters
+            return true;
         default:
             break;
         }
@@ -280,8 +283,13 @@ void test_expand()
 
     // A `$` that no parameter can be made of is a `$`.
     CHECK(text("$") == "{$}");
-    CHECK(text("$-") == "{$-}");
     CHECK(text("a$ b") == "{a$ b}");
+
+    // `$-` is `set`'s option letters, which is what makes `-` a parameter and
+    // not a name character.
+    CHECK(text("$-") == "{ex}");
+    CHECK(text("${-}") == "{ex}");
+    CHECK(text("$-x") == "{exx}");
 
     // **The empty quoted word against the empty unquoted one.** Both are a
     // zero-length text beside a zero-length mark, so only the flag tells them

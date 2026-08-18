@@ -23,6 +23,7 @@ void test_channel();
 void test_io();
 void test_screen();
 void test_tty();
+void test_cond();
 void test_console();
 void test_text();
 void test_procfs();
@@ -94,6 +95,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_parse();
     test_expand();
     test_match();
+    test_cond();
     test_opt();
     test_procfs();
 

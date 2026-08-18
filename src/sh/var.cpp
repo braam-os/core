@@ -1,5 +1,6 @@
 #include "var.h"
 
+#include "job.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/host.h"
@@ -88,6 +89,19 @@ bool cb_look(void *, Str name, Str &value)
         case '#':
             value = keep_num(b.put(u32(args_count())).str());
             return true;
+        case '-': {
+            // The option letters, in `set`'s order.
+            u32 f   = sh_flags();
+            usize k = 0;
+            if (f & SH_ERREXIT)
+                g_num[k++] = 'e';
+            if (f & SH_NOUNSET)
+                g_num[k++] = 'u';
+            if (f & SH_XTRACE)
+                g_num[k++] = 'x';
+            value = Str(g_num, k);
+            return true;
+        }
         default:
             break;
         }
@@ -275,9 +289,14 @@ void var_last_bg(u32 pid)
     g_bg = pid;
 }
 
+// Namespace-scope and constant-initialised: no guard, no __cxa_atexit (§C.3).
+// Mutable because `set -u` is a field of it.
+namespace {
+Vars g_shell = { nullptr, cb_look, cb_set, cb_count, cb_at, nullptr, false };
+}
+
 const Vars &shell_vars()
 {
-    // Constant-initialised: no guard variable, no __cxa_atexit (§C.3).
-    static constexpr Vars V = { nullptr, cb_look, cb_set, cb_count, cb_at };
-    return V;
+    g_shell.nounset = (sh_flags() & SH_NOUNSET) != 0;
+    return g_shell;
 }

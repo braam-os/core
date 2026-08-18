@@ -83,6 +83,10 @@ Task<i32> builtin_help(Args args, ShIo io)
         for (const DirEntry &e : bin.value()) {
             if (e.kind != SYS_KIND_FILE)
                 continue;
+            // Once per name: `echo` and `test` are both a builtin and a file,
+            // and the builtin is what typing the name runs.
+            if (builtin_find(e.name.str()))
+                continue;
             Str usage = usage_of(manifest.str(), e.name.str());
             if (usage.empty())
                 usage = "a program in /bin";

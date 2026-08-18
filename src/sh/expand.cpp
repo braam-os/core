@@ -25,7 +25,8 @@ bool is_digit_char(char c)
 // The parameters that are one punctuation character rather than a name.
 bool is_special(char c)
 {
-    return c == '?' || c == '$' || c == '!' || c == '#' || c == '*' || c == '@';
+    // `-` is `set`'s option letters, which is why it is not a name character.
+    return c == '?' || c == '$' || c == '!' || c == '#' || c == '*' || c == '@' || c == '-';
 }
 
 // IFS, copied: `${x=y}` mid-walk may move the table that answered the lookup.
@@ -120,7 +121,8 @@ struct Walk {
     Result<void> dollar(Str s, usize &i, bool in_quotes, u32 depth);
     Result<void> braced(Str body, bool in_quotes, u32 depth);
     Result<void> named(Str name, bool in_quotes);
-    Result<void> positional(usize i, bool in_quotes);
+    Result<void> positional(Str name, usize i, bool in_quotes);
+    Result<void> unset(Str name);
     Result<void> stars(char which, bool in_quotes);
     Result<void> emit(Str name, bool in_quotes);
     Result<void> command(Str body, usize at, bool ticked, bool in_quotes);
@@ -139,18 +141,29 @@ Result<void> to_string(Str w, const Vars &v, Str raw, ExpandErr &err, u32 depth,
     return {};
 }
 
+// `set -u` is checked in these two rather than in emit(): a bare `$x` reaches
+// them straight from dollar(), and `${x-y}` only ever arrives with an answer.
+Result<void> Walk::unset(Str name)
+{
+    err.name    = name;
+    err.message = "parameter not set";
+    return Err(Error::Invalid);
+}
+
 Result<void> Walk::named(Str name, bool in_quotes)
 {
     Str val;
     if (!v.look(v.ctx, name, val))
-        return {};
+        return v.nounset ? unset(name) : Result<void>{};
     if (!put_value(val, in_quotes))
         return Err(Error::NoMemory);
     return {};
 }
 
-Result<void> Walk::positional(usize i, bool in_quotes)
+Result<void> Walk::positional(Str name, usize i, bool in_quotes)
 {
+    if (v.nounset && i && i > v.count(v.ctx))
+        return unset(name);
     if (!put_value(v.at(v.ctx, i), in_quotes))
         return Err(Error::NoMemory);
     return {};
@@ -189,7 +202,7 @@ Result<void> Walk::emit(Str name, bool in_quotes)
     if (name.size() == 1 && (name[0] == '*' || name[0] == '@'))
         return stars(name[0], in_quotes);
     if (name.size() == 1 && is_digit_char(name[0]))
-        return positional(usize(name[0] - '0'), in_quotes);
+        return positional(name, usize(name[0] - '0'), in_quotes);
     return named(name, in_quotes);
 }
 
@@ -318,8 +331,9 @@ Result<void> Walk::dollar(Str s, usize &i, bool in_quotes, u32 depth)
         return named(name, in_quotes);
     }
     if (is_digit_char(c)) {
+        Str name = s.substr(i + 1, 1);
         i += 2;
-        return positional(usize(c - '0'), in_quotes);
+        return positional(name, usize(c - '0'), in_quotes);
     }
     if (c == '*' || c == '@') {
         i += 2;

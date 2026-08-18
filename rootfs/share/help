@@ -32,6 +32,7 @@ sh       [-s] — the shell; -s reads stdin instead of drawing a prompt
 sleep    <ms> — wait, in milliseconds
 spin     [<millions>] — loop without yielding, to be killed
 tail     [-n <count>] [<file>...] — the last lines, ten by default
+test     <expr> — evaluate a condition and report it as a status
 timeout  <ms> <command> [<arg>...] — run a command, killing it after a delay (124)
 touch    <file>... — create empty files
 true     succeed

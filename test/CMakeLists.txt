@@ -3,6 +3,7 @@ add_executable(tests
     unit/harness.cpp
     unit/test_alloc.cpp
     unit/test_channel.cpp
+    unit/test_cond.cpp
     unit/test_console.cpp
     unit/test_coroutine.cpp
     unit/test_fmt.cpp
@@ -32,11 +33,13 @@ add_executable(tests
     unit/test_vec.cpp
     unit/test_vfs.cpp
 
-    # The grammar, the word expander and the pattern matcher are the shell
-    # binary's, and pure: they touch nothing but Str, String and Vec, so they are
-    # compiled in here rather than linked from braam_sh, which would drag the
-    # process runtime's imports in with them. glob.cpp is the walk over the
-    # store and does not belong here.
+    # The grammar, the word expander, the pattern matcher and `test`'s
+    # expression are the shell binary's, and pure: they touch nothing but Str,
+    # String and Vec, so they are compiled in here rather than linked from
+    # braam_sh, which would drag the process runtime's imports in with them.
+    # glob.cpp is the walk over the store and does not belong here, and neither
+    # does condrun.cpp, which is what answers cond.cpp's probes.
+    ../src/sh/cond.cpp
     ../src/sh/expand.cpp
     ../src/sh/match.cpp
     ../src/sh/parse.cpp

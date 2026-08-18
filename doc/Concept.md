@@ -476,14 +476,23 @@ its shell **died** — a trap, a failed step, an instance that would not be made
 deaths in quick succession; a shell *waiting* for a worker is not one, since it has not started.
 A replaced shell is a fresh one: kernel `/home`, empty job table.
 
-**A shell builtin is not a program and has no file in `/bin`**, but it is not kernel code
-either: `cd`, `fg`, `jobs`, `kill`, `help` and `exit` live inside `/bin/sh`, in
-`src/sh/builtin/`. What makes one a builtin is that it touches the shell *process's own* state —
-its working directory, which a typed command inherits at spawn; its job table, which no syscall
-shows anyone; its loop. It pipes and redirects through descriptors like anything else, but runs
-**in its turn rather than alongside**, since nothing inside a process can wait for a sibling
-task. So **a builtin buffers its output and writes it once**: one that wrote a line at a time
-would fill an eight-slot pipe and park with nobody left to drain it.
+**A shell builtin is not kernel code**: `cd`, `fg`, `jobs`, `kill`, `help` and `exit` live
+inside `/bin/sh`, in `src/sh/builtin/`. Two clauses make one. The first is that it touches the
+shell *process's own* state — its working directory, which a typed command inherits at spawn;
+its job table, which no syscall shows anyone; its loop. The second is that **its whole cost is
+the spawn**: a program costs an instantiation and a worker, roughly a millisecond (§4.4), and
+`while [ … ]; do echo …; done` pays it twice a turn, so `test`, `[`, `:`, `echo`, `true` and
+`false` are builtins too — a few lines each, where the spawn *is* the runtime. The clause is
+closed and admits nothing else.
+
+**A builtin of the second kind keeps its file in `/bin`.** The shadowing is at a prompt, not
+everywhere: `/bin/test` is what a future `find -exec` would run, and there is nowhere else to
+put it. One of the first kind has no file and never will — `rm /bin/cd` finds nothing.
+
+Either way a builtin pipes and redirects through descriptors like anything else, but runs **in
+its turn rather than alongside**, since nothing inside a process can wait for a sibling task. So
+**a builtin buffers its output and writes it once**: one that wrote a line at a time would fill
+an eight-slot pipe and park with nobody left to drain it.
 
 ### 4.1 What separate instances buy
 

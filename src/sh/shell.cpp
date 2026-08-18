@@ -186,5 +186,13 @@ Task<i32> shell(bool want_console)
         co_await write_all(SYS_STDERR, "sh: out of memory\n");
         co_return 1;
     }
-    co_return want_console ? co_await interactive() : co_await script();
+    Task<i32> t = want_console ? interactive() : script();
+    i32 status  = t ? co_await t : 1;
+
+    // `trap … 0`, whatever ended the loop. Its own status is not the shell's.
+    Str action;
+    if (trap_get(0, action))
+        if (Task<i32> e = trap_run(0, want_console))
+            co_await e;
+    co_return status;
 }

@@ -1,19 +1,56 @@
 #include "decl.h"
 #include "kernel/string.h"
 #include "kernel/text.h"
+#include "sh/job.h"
 #include "sh/var.h"
 
-// Builtins because the table and the positional parameters are this process's
-// own: a `set` in /bin would fill a child's and exit.
+namespace {
 
-// With no operands, the variables; otherwise the positional parameters. The
-// option letters `-e -x -u` are a later stage's.
+// One option letter, or 0.
+u32 flag_of(char c)
+{
+    if (c == 'e')
+        return SH_ERREXIT;
+    if (c == 'u')
+        return SH_NOUNSET;
+    if (c == 'x')
+        return SH_XTRACE;
+    return 0;
+}
+
+} // namespace
+
+// Builtins because the table, the option letters and the positional parameters
+// are this process's own: a `set` in /bin would fill a child's and exit.
+
+// The options first, then the parameters — which `set -x` must leave alone and
+// `set --` must clear. With nothing at all, the variables.
 Task<i32> builtin_set(Args args, ShIo io)
 {
-    if (args.size() > 1 && args[1].size() > 1 && args[1][0] == '-' && args[1] != "--") {
-        co_await write_all(io.err, "usage: set [--] [<arg>...]\n");
-        co_return 2;
+    usize at   = 1;
+    u32 flags  = sh_flags();
+    bool ended = false;
+    for (; at < args.size(); at++) {
+        Str w = args[at];
+        if (w == "--") {
+            ended = true;
+            at++;
+            break;
+        }
+        if (w.size() < 2 || (w[0] != '-' && w[0] != '+'))
+            break;
+
+        bool on = w[0] == '-';
+        for (usize k = 1; k < w.size(); k++) {
+            u32 bit = flag_of(w[k]);
+            if (!bit) {
+                co_await write_all(io.err, "usage: set [-eux] [+eux] [--] [<arg>...]\n");
+                co_return 2;
+            }
+            flags = on ? (flags | bit) : (flags & ~bit);
+        }
     }
+    sh_set_flags(flags);
 
     if (args.size() == 1) {
         String out;
@@ -31,10 +68,10 @@ Task<i32> builtin_set(Args args, ShIo io)
         co_return 1;
     }
 
-    Args rest = args.tail();
-    if (rest.size() && rest[0] == "--")
-        rest = rest.tail();
-    co_return args_set(rest) ? 0 : 1;
+    // Only when operands were given: `set -x` is not `set --`.
+    if (ended || at < args.size())
+        co_return args_set(Args{ args.v.subspan(at) }) ? 0 : 1;
+    co_return 0;
 }
 
 Task<i32> builtin_shift(Args args, ShIo io)

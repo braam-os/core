@@ -7,6 +7,117 @@ of the two needs amending.
 
 ---
 
+## The rule grew a second clause
+
+Ninth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `test`, `[`, `:`, `read`, `wait`,
+`trap` and `set -e -x -u`, plus `echo`, `true` and `false`, which S8 as written had ruled out.
+`sh.wasm` went from 185,467 to 211,737 bytes and the staging tree from 654,945 to 700,528 against
+an unchanged 1 MiB budget — the extra being `/bin/test`, a new binary at 19,246. **`kernel.wasm`
+did not move**: 148,604 of 262,144, byte for byte what S7 left. The syscall ABI did not change
+either, and `PROC_ABI` is still 10.
+
+**`test` is a builtin, and the reason is not the one TODO.md wrote down.** The plan proposed
+"the shell's own state **or the condition of a loop**", drawn narrowly enough to admit `test`,
+`[` and `:` and to exclude `echo` by name. That wording does not survive the first request to
+add `echo`, and it was never the real criterion: what makes `test` worth having inside the
+process is that a program costs an instantiation and a worker — roughly a millisecond, §4.4 — and
+`test` is two hundred lines of pure logic. The cost of running it *is* the spawn. So the second
+clause is that, and it admits exactly the six commands small enough for the statement to be true:
+`test`, `[`, `:`, `echo`, `true`, `false`. A `while [ … ]; do echo …; done` paid two workers a
+turn and now pays none, which `run.mjs` asserts by counting links across a five-turn loop.
+
+**The file in `/bin` stays, and that is the other half of the amendment.** A builtin of the first
+kind has no file and never will — there is nothing for `/bin/cd` to do. A builtin of the second
+kind is a *shortcut*, so its file is still the thing anything spawning by path gets: `/bin/test`
+now exists for a future `find -exec`, and `/bin/echo`, `/bin/true` and `/bin/false` were not
+deleted. TODO.md argued against shipping `/bin/test` as duplication for nothing; the answer is
+that the duplication is the point, since the alternative is that adding `find` later means adding
+`test` back. `help` prints each name once — the builtin's line, because that is what typing the
+name runs.
+
+**The expression is pure and the probing is not, and they had to be two files.** v7's `test` is
+five mutually recursive functions, and three of its primaries — `-r -w -x -f -d -s -t` — have to
+ask the filesystem. Making the recursion coroutines would have cost a frame per nesting level
+against an allocator whose top size class is 512 bytes. Instead [cond.cpp](../src/sh/cond.cpp)
+walks the expression twice: once naming every file primary, then, with the answers in hand, once
+more evaluating. It works because **v7's `-a` and `-o` are the bitwise `&` and `|`** rather than
+the short-circuiting pair, so both sides of every operator always evaluate and the two walks
+consume the same tokens in the same order. The indices line up by construction, not by agreement
+between two scanners — which is why collecting and evaluating are one function with a flag rather
+than two. `cond.cpp` reaches no syscall, so it joins `parse.cpp` and `expand.cpp` on the purity
+boundary and `test_cond.cpp` checks the whole grammar against a table of answers.
+[condrun.cpp](../src/sh/condrun.cpp) is what goes and looks; it touches no shell state, which is
+what lets `src/cmd/test.cpp` build the binary out of the same two files rather than link
+`braam_sh`.
+
+**Two primaries answer out of the gaps rather than out of a mode word.** There are no file
+permissions and OPFS stores none, so `-r` is "it exists": everything readable that is there. `-w`
+is v7's `tio(a, 1)` unchanged — open it for writing and close it again — which asks the one
+question that has an answer here, since `vfs_open` refuses `O_WRITE` on a read-only mount. It
+also inherits v7's answer for a directory, which is *false*, because opening one for writing
+fails there too. TODO.md proposed deriving it from `/proc/mounts` instead; the open probe is
+shorter, exact, and needs no path normalisation. `-x` is true for a file whose first four bytes
+are `\0asm`, because that is what `exec_meta` requires and therefore what executable means here.
+
+**`read` is where the shell reads past what it was asked for.** `Sys::Read` carries no length —
+the reply is a whole chunk, whatever the writer wrote — so there is no reading a line and leaving
+the rest. A file-scope `String` holds what followed the newline, keyed by the descriptor it came
+off, and a `read` on a different one drops it. Without that, `while read l; do …; done < file`
+would see one line and stop, since a three-line file arrives in a single chunk. The cost is that
+`sh -s` reading a script off stdin has its own `LineReader` buffering separately, so a `read`
+inside such a script sees a different position in the same stream; that is a real fidelity loss
+and it is the price of a length-free read.
+
+Interactively `read` needs nothing at all, which is worth recording because it looks like it
+should. `exec_pipeline` gives the keyboard back before any builtin runs and takes it again after,
+so for exactly the window a builtin is awake the console pump has no raw claimant and is cooking
+lines into this shell's stdin — and doing the echo.
+
+**`wait` puts the job in front, and v7's does not.** There are no signals, so being in the
+foreground set is the only way a `^C` can reach anything; a `wait` that did not would park the
+shell on a job with no way out. That makes `wait %n` the same call `fg %n` makes, minus the echo
+of the command line, and `builtin_fg` is now the thin one.
+
+**`trap` has two signals because there are two things that can happen.** `trap … 0` fires from
+the `shell()` funnel, whatever ended the loop. `trap … 2` fires from the one place a `^C` becomes
+a status — `exec_pipeline`'s epilogue, where 130 already becomes `Flow::Interrupt` — and only in
+an interactive shell, where the interrupt went to the stages and this process was never
+cancelled. In a script the process itself is cancelled and `CancelState::cancelled` is sticky, so
+every await from that point answers `Err(Cancelled)` and a handler could neither spawn nor write.
+It is accepted rather than worked around, and `trap '' 2` is **refused outright** for the same
+reason: nothing can decline a cancellation that has already been delivered, and accepting the
+syntax while ignoring it would be worse than saying so. A trap is *taken* rather than read before
+it runs, so an action cannot fire itself and a `trap` inside one replaces it.
+
+**`set -e` needed a counter, not a flag.** The rule is not "a nonzero status ends the shell" but
+"a nonzero status that nobody asked about ends the shell", and the four places that ask are an
+`if` condition, a loop condition, `!`'s operand and every element of an `&&`/`||` chain but the
+last. `Ctx` gained a `cond` depth incremented around exactly those, and the test itself sits at
+the end of `exec_node`, where every node's status passes through once. It reuses `Flow::Exit`, so
+`set -e` adds no exit path — `exit` already owned that one.
+
+**`set -u` is a field on `Vars`, not a callback.** A lookup cannot tell a bare `$x` from the one
+inside `${x-y}`: only the walk knows that the operators asked first and are exempt. Making it
+data keeps [expand.cpp](../src/sh/expand.cpp) pure, so the rule is checked in `test_expand.cpp`
+with the rest of the expander. The check went into `named` and `positional` rather than `emit`,
+because a bare `$x` reaches those two straight from `dollar()`.
+
+**One gap got wider, and it is the price of the second clause.** `while true; do echo x; done`
+used to be interruptible, because `true` and `echo` were programs and the shell armed them with
+`Sys::Fg`. Both are builtins now, so that loop has no child in the foreground set, no `^C` reaches
+anything, and `rt.h` is explicit that nothing cancels from inside a process. A loop with a program
+still in it — `while true; do sleep 100; done` — is interrupted in one press, and the escape from
+the other kind is still killing the shell, which init replaces. The alternative was leaving `true`
+a binary and paying a worker a turn for the one shape of loop that most needs not to; the gap is
+recorded rather than traded for.
+
+`$-` came with the letters, and cost `-` its place as an ordinary byte: it is a special
+parameter now, so `$-` is the options and no longer a literal `$-`. The flags are one word, which
+is what makes them one more field on `( … )`'s checkpoint — TODO.md's subshell row promised
+`(set -e; …)` isolation and this is what pays it.
+
+---
+
 ## The ABI changed, once
 
 Eighth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): here-documents, `>&`, `exec`

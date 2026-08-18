@@ -86,6 +86,7 @@ struct Ctx {
     u32 breaks       = 0; // levels `break` has left to unwind
     u32 loops        = 0; // how many are running
     u32 frames       = 0; // function calls and sourced files, for `return`
+    u32 cond         = 0; // walks whose status is being tested, for `set -e`
     bool interactive = false;
 
     // Where stdout goes when a `$(…)` is running this walk. Set on the whole
@@ -108,6 +109,19 @@ bool g_break_cont;
 // The same, for `return`.
 bool g_return;
 i32 g_return_status;
+
+// `set -e -x -u`. A word, so the checkpoint a `( … )` takes is one field.
+u32 g_flags;
+
+// The two traps: [0] is EXIT and [1] is INT. Pointers, so the globals stay
+// trivially destructible (CLAUDE.md) — a namespace-scope String would want
+// __cxa_atexit, which nothing provides.
+String *g_trap[2];
+
+usize trap_slot(u32 sig)
+{
+    return sig ? 1 : 0;
+}
 
 // One function, and the tree its body is a node of.
 struct FuncEntry {
@@ -328,6 +342,47 @@ void undo_assigns(Vec<Saved> &undo)
             var_unset(s.name.str());
         undo.pop();
     }
+}
+
+// `set -x`: what a pipeline turned out to be, once every expansion is done and
+// before anything is opened. One line and one write, built the way a builtin
+// builds its output and for the same reason (builtin.h).
+Task<void> trace(const Run *r, usize n, u32 fd)
+{
+    Str ps4;
+    if (!var_get("PS4", ps4))
+        ps4 = "+ ";
+
+    String out;
+    if (!out.assign(ps4))
+        co_return;
+
+    bool first = true;
+    for (usize i = 0; i < n; i++) {
+        if (i && !out.append(" |"))
+            co_return;
+
+        Args names = r->t->assigns(r->cmd0 + i);
+        for (usize k = 0; k < names.size(); k++) {
+            Str w = names[k];
+            if ((!first && !out.push(' ')) || !out.append(w.substr(0, w.find('=') + 1)) ||
+                !out.append(r->avals[r->assign0[i] + k].text.str()))
+                co_return;
+            first = false;
+        }
+
+        Args a = r->args(i);
+        for (usize k = 0; k < a.size(); k++) {
+            if ((!first && !out.push(' ')) || !out.append(a[k]))
+                co_return;
+            first = false;
+        }
+    }
+
+    if (!out.push('\n'))
+        co_return;
+    if (Task<Result<void>> t = write_all(fd, out.str()))
+        co_await t;
 }
 
 // A diagnostic on the shell's own stderr.
@@ -640,6 +695,13 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
         var_status(1);
         co_return 1;
     }
+
+    // The trace goes here, which is the first moment every stage's argv exists
+    // and the last before anything can fail: one site for a builtin, a
+    // function and a binary alike.
+    if ((g_flags & SH_XTRACE) && n)
+        if (Task<void> t = trace(r, n, cx.base.err))
+            co_await t;
 
     // The pipes first, so a redirection can displace one and `2>&1` can name
     // one. Each end is moved into exactly one child, or borrowed by one
@@ -963,6 +1025,15 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
         }
         g_break = 0;
     } else if (!bg && status == 130) {
+        // `trap … 2`, and the only place it can fire. An interactive ^C went
+        // to the stages rather than to us, so this shell was never cancelled
+        // and the action can still spawn and write. In a script the process
+        // itself is cancelled and every await from here on answers
+        // Err(Cancelled), which is why a trap on INT there never runs.
+        Str action;
+        if (cx.interactive && trap_get(2, action))
+            if (Task<i32> t = trap_run(2, true))
+                co_await t;
         cx.flow = Flow::Interrupt;
     }
 
@@ -1053,6 +1124,7 @@ struct Checkpoint {
     Vec<VarEntry *> vars;
     Vec<FuncEntry *> funcs;
     ShIo base;
+    u32 flags = 0;
     bool held = false;
 };
 
@@ -1093,6 +1165,7 @@ Task<Result<void>> checkpoint_take(Checkpoint &c)
     c.funcs = move(funcs());
     funcs() = move(fns);
     c.base  = g_base;
+    c.flags = g_flags;
     c.held  = true;
     co_return {};
 }
@@ -1119,6 +1192,8 @@ Task<void> checkpoint_put(Checkpoint &c)
     for (u32 fd : mine)
         if (fd >= SYS_FD_MIN && fd != c.base.in && fd != c.base.out && fd != c.base.err)
             co_await close_fd(fd);
+
+    g_flags = c.flags;
 
     if (!c.cwd.empty())
         if (Task<Result<String>> t = cwd_set(c.cwd.str()))
@@ -1353,8 +1428,11 @@ Task<i32> exec_if(Ctx &cx, const Tree &tree, u32 n)
 
     bool took = false;
     for (k = 0; k < nd.b && !took; k++) {
+        // Tested, not acted on: `set -e` must not read it as a failure.
+        cx.cond++;
         step   = exec_node(cx, tree, tree.kid(nd.a + 2 * k));
         status = step ? co_await step : 1;
+        cx.cond--;
         if (cx.flow != Flow::Normal)
             co_return status;
         if (status != 0)
@@ -1391,8 +1469,10 @@ Task<i32> exec_loop(Ctx &cx, const Tree &tree, u32 n)
 
     cx.loops++;
     for (;;) {
+        cx.cond++; // tested, not acted on, so `set -e` leaves it alone
         step = exec_node(cx, tree, nd.a);
         cond = step ? co_await step : 1;
+        cx.cond--;
         if (cx.flow != Flow::Normal) {
             loop_step(cx);
             break;
@@ -1631,16 +1711,23 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
             // chain, so `false && a || b` still reaches b.
             if (k && (status == 0) != (tree.op(nd.c + k - 1) == Tree::Op::And))
                 continue;
+            // Only the last one is `set -e`'s: the rest are tested.
+            if (k + 1 < nd.b)
+                cx.cond++;
             step   = exec_node(cx, tree, tree.kid(nd.a + k));
             status = step ? co_await step : 1;
+            if (k + 1 < nd.b)
+                cx.cond--;
             if (cx.flow != Flow::Normal)
                 break;
         }
         break;
 
     case Tree::Kind::Not:
+        cx.cond++; // tested, and its answer is what `set -e` may act on
         step   = exec_node(cx, tree, nd.a);
         status = step ? co_await step : 1;
+        cx.cond--;
         if (cx.flow == Flow::Normal) {
             status = status == 0 ? 1 : 0;
             var_status(status);
@@ -1689,12 +1776,83 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
         break;
     }
 
+    // `set -e`, in the one place every node's status passes through. `exit`
+    // already owns Flow::Exit, so this adds no exit path.
+    if ((g_flags & SH_ERREXIT) && status != 0 && !cx.cond && cx.flow == Flow::Normal) {
+        cx.flow        = Flow::Exit;
+        cx.exit_status = status;
+    }
+
     for (u32 fd : opened)
         co_await close_fd(fd);
     co_return status;
 }
 
 } // namespace
+
+bool sh_interactive()
+{
+    return g_ctx && g_ctx->interactive;
+}
+
+u32 sh_flags()
+{
+    return g_flags;
+}
+
+void sh_set_flags(u32 f)
+{
+    g_flags = f;
+}
+
+bool trap_set(u32 sig, Str action)
+{
+    usize k = trap_slot(sig);
+    if (!g_trap[k]) {
+        g_trap[k] = heap_new<String>();
+        if (!g_trap[k])
+            return false;
+    }
+    return g_trap[k]->assign(action);
+}
+
+bool trap_get(u32 sig, Str &action)
+{
+    usize k = trap_slot(sig);
+    if (!g_trap[k])
+        return false;
+    action = g_trap[k]->str();
+    return true;
+}
+
+void trap_clear(u32 sig)
+{
+    usize k = trap_slot(sig);
+    heap_delete(g_trap[k]);
+    g_trap[k] = nullptr;
+}
+
+Task<i32> trap_run(u32 sig, bool interactive)
+{
+    usize k = trap_slot(sig);
+    if (!g_trap[k])
+        co_return 0;
+
+    // Taken rather than read: the action runs with no trap set, so one that
+    // ends the same way it was reached cannot fire itself. A `trap` inside the
+    // action puts a new one there, and that one is kept.
+    String *action = g_trap[k];
+    g_trap[k]      = nullptr;
+
+    Task<i32> t = run_line(action->str(), interactive);
+    i32 status  = t ? co_await t : 1;
+
+    if (g_trap[k])
+        heap_delete(action);
+    else
+        g_trap[k] = action;
+    co_return status;
+}
 
 void loop_break(u32 levels, bool cont)
 {
