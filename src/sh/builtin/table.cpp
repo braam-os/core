@@ -31,7 +31,7 @@ constexpr Builtin TABLE[] = {
     { "test", "<expr> — evaluate a condition and report it as a status", builtin_test },
     { "trap", "[<action>|-] 0|2 — run an action when the shell ends, or on ^C", builtin_trap },
     { "true", "succeed", builtin_true },
-    { "unset", "<name>... — remove a variable", builtin_unset },
+    { "unset", "[-f] <name>... — remove a variable, or a function with -f", builtin_unset },
     { "wait", "[%n...] — wait for a background job, or for all of them", builtin_wait },
 };
 

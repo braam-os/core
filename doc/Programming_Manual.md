@@ -139,7 +139,53 @@ Write the new one beside the old, or reload.
 
 ---
 
-## 4. The shape of a program
+## 4. Writing a script
+
+**Not every command has to be a binary.** `/bin/sh` is a Bourne shell — variables, `if`, the three
+loops, `case`, functions, globbing, `$( )`, here-documents, `test` and `trap` — so a command whose
+work is running other commands is a text file, and needs no toolchain at all. The grammar is
+Concept.md §4.5.
+
+Write it anywhere the filesystem reaches — `edit` is in `/bin` — and run it by name after `sh`:
+
+```
+$ cat /home/report.sh
+show() {
+  echo "$1: $(wc < $1)"
+}
+trap 'echo done' 0
+for f in /home/*.txt
+do
+  case $f in
+  *draft*) continue ;;
+  esac
+  show $f
+done
+$ sh /home/report.sh
+/home/notes.txt: 12 84 501
+/home/todo.txt: 3 9 46
+done
+```
+
+Arguments after the file are `$1` onwards and the file itself is `$0`, exactly as
+`sh -c 'cmd' name args` takes its own after the command string. `sh -s` reads a script off
+standard input instead, which is what a pipeline into the shell uses. The status the script
+leaves with is the status `sh` exits with, so a script composes into a pipeline like anything
+else.
+
+**Two limits, both deliberate.** There is no `#!` and there never will be: `exec` requires `\0asm`
+plus the `braam` metadata section (§10), so a text file can never be handed to it — `sh file` and
+`sh < file` are the whole of it, and `./script.sh` is not a thing here. And a script is **parsed
+whole before any of it runs**, as `. file` is, so a syntax error on the last line means the first
+line does not run either. That is the price of the shell keeping its standard input free for the
+script to read from, which is what lets `while read l; do …; done` inside one work against a pipe.
+
+The rest of what a script can and cannot do — no subshell isolation, no compound command in the
+background, no environment across a spawn — is §4.5's table.
+
+---
+
+## 5. The shape of a program
 
 `proc_main` is what a program defines, and its return value is the exit status. Everything
 that would block is a `co_await`, because a process is a coroutine and nothing anywhere
@@ -188,7 +234,7 @@ the name the program was invoked by; `args.tail()` is everything after it.
 
 ---
 
-## 5. The API
+## 6. The API
 
 ### `proc/io.h` — one wrapper per syscall
 
@@ -280,7 +326,7 @@ nothing behind them in a program: reaching one is a link error, which is the int
 
 ---
 
-## 6. The rules that bite
+## 7. The rules that bite
 
 These come from Concept.md §2 and §C.3, and each of them is a compile error, a link error or
 a trap rather than a warning:
@@ -304,7 +350,7 @@ a trap rather than a warning:
 
 ---
 
-## 7. The worker
+## 8. The worker
 
 **Your program runs in a Web Worker of its own**, and `braam_add_program` arranges that with
 nothing asked of you. It is what every program in `/bin` gets, `/bin/sh` included. What it buys
@@ -325,7 +371,7 @@ nothing to detect and no degraded mode to write for.
 
 ---
 
-## 8. Versioning
+## 9. Versioning
 
 The stamp carries a process-ABI number, and the kernel checks it before it runs anything.
 `stamp.py` reads that number out of the `kernel/sysabi.h` the SDK shipped, so a binary is
@@ -347,7 +393,7 @@ The ABI changes when the syscall table does, and both are documented in Concept.
 
 ---
 
-## 9. Checking a binary by hand
+## 10. Checking a binary by hand
 
 The build produces a module with an exact surface, and it is worth knowing what it is,
 because a link that accidentally pulled in kernel code shows up here first:
@@ -376,11 +422,12 @@ node test/run.mjs --kernel build/kernel.wasm build/web/rootfs.zip /path/to/hello
 
 ---
 
-## 10. Where to read next
+## 11. Where to read next
 
 - [System_Calls.md](System_Calls.md) — the mechanism end to end: the deferred step, the
   staging protocol, cancellation, the kill, and the whole syscall table in one place.
 - [Concept.md](Concept.md) — the specification. §4.3 is the process ABI, §4.4 is what a
-  process costs, §2 is the three invariants everything else follows from.
+  process costs, §4.5 is the shell's language, §2 is the three invariants everything else
+  follows from.
 - `src/cmd/` in the source tree — thirty-two worked examples, from `true.cpp` at six lines
   to the shell.

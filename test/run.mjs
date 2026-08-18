@@ -2653,7 +2653,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 2,424-byte file: more than the eight writes a pipe
+    // Three copies of a 2,426-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -2682,9 +2682,9 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "braam: nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 7,272 bytes is fifteen chunks against eight
+    // The many-writes case: 7,278 bytes is fifteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1224 7272");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1224 7278");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;
@@ -2966,17 +2966,106 @@ if (mode === "--kernel") {
 
     submit("rm -r /home/s9", (s9t += 0.01));
 
+    // S10: the language all at once. Every block above stays inside one stage;
+    // what is left to check is that they compose, which is what a script does.
+    let s10t = 14300;
+    const ishows = (line, want) => {
+        submit("clear", (s10t += 0.005));
+        const got = output(submit(line, (s10t += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+    // A line the driver types must fit the 64-character key ring, so anything
+    // longer is run out of a file instead — which is what a script is for.
+    const ifile = (line, path, want) => {
+        submit(line, (s10t += 0.005));
+        submit("clear", (s10t += 0.005));
+        const got = output(submit("cat " + path, (s10t += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` left ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    submit("mkdir /home/s10", (s10t += 0.01));
+    plant("/home/s10/a.t", "one\ntwo\n");
+    plant("/home/s10/b.t", "three\n");
+    plant("/home/s10/skip.t", "x\n");
+
+    // A function, an EXIT trap, a glob walked by `for`, a `case` that skips an
+    // arm, a `$( )` with a redirection inside it, a here-doc and a status —
+    // one file, and the first place all of them meet. It is also the example
+    // Programming_Manual.md prints, so it has to work as written.
+    plant("/home/s10/report.sh",
+          'show() {\n' +
+          '  echo "$1: $(wc < $1)"\n' +
+          '}\n' +
+          "trap 'echo bye' 0\n" +
+          "for f in /home/s10/*.t\n" +
+          "do\n" +
+          "  case $f in\n" +
+          "  *skip*) continue ;;\n" +
+          "  esac\n" +
+          "  show $f\n" +
+          "done\n" +
+          "cat <<EOF\n" +
+          "end\n" +
+          "EOF\n" +
+          "exit 3\n");
+
+    ishows("sh /home/s10/report.sh",
+           "/home/s10/a.t: 2 2 8|/home/s10/b.t: 1 1 6|end|bye");
+
+    // …and its status reaches the prompt through the whole of that.
+    s = submit("clear", (s10t += 0.01));
+    s = submit("sh /home/s10/report.sh", (s10t += 0.01));
+    if (!rows(s).includes(prompt(3)))
+        fail(`the script's exit 3 left ${row(s, s.cursor_y)}, expected ${prompt(3)}`);
+
+    // The seams no per-stage block reaches. A function body that globs, with
+    // the *call* redirected: the walk, the loop's Flow and Ctx::base at once.
+    submit("g() { for f in /home/s10/*.t; do echo $f; done; }", (s10t += 0.01));
+    ifile("g > /home/s10/out", "/home/s10/out",
+          "/home/s10/a.t|/home/s10/b.t|/home/s10/skip.t");
+
+    // `case` inside `while` inside a function, with the status carried out.
+    submit("h() { while :; do case a in a) return 7;; esac; done; }", (s10t += 0.01));
+    ishows("h; echo $?", "7");
+
+    // A `for` over a substitution with `set -e` armed, in a subshell so this
+    // shell survives it.
+    ishows("(set -e; for i in $(echo a b); do echo $i; done)", "a|b");
+
+    // A builtin at each end of a pipeline with a program between: `read` fills
+    // this shell's own variable, so a stage is not a subshell.
+    ishows("echo ax | grep a | read v; echo $v", "ax");
+
+    // `set -x` traces the simple commands inside a compound, not the compound.
+    ishows("(set -x; for i in a; do echo $i; done)", "+ echo a|a");
+
+    // A construct through `-c`, which sends the whole string to the parser.
+    ishows("sh -c 'for i in a b; do echo $i; done'", "a|b");
+
+    // What the script costs: a program at a time and not one per turn of the
+    // loop. Three instances at the peak — this shell, the script's own, and
+    // whichever of `wc` and `cat` is running — however many turns it takes.
+    submit("clear", (s10t += 0.01));
+    net.peak = 0;
+    submit("sh /home/s10/report.sh", (s10t += 0.01));
+    if (net.peak !== 3)
+        fail(`the script had ${net.peak} instances alive at once, expected 3`);
+
+    submit("rm -r /home/s10", (s10t += 0.01));
+
     // exit ends the shell, and nothing runs after it — not even the rest of
     // its own line, which is Flow::Exit end to end. Last, for that reason.
-    s = submit("clear", 14097);
-    s = submit("echo before; exit 7; echo never", 14098);
+    s = submit("clear", 14497);
+    s = submit("echo before; exit 7; echo never", 14498);
     if (!rows(s).includes("before"))
         fail(`the list before exit printed ${JSON.stringify(rows(s))}`);
     if (rows(s).includes("never"))
         fail("a command ran after exit on the same line");
     if (!rows(s).some((line) => line.startsWith("braam: the shell exited")))
         fail(`exit said nothing: ${JSON.stringify(rows(s))}`);
-    s = submit("echo after", 14099);
+    s = submit("echo after", 14499);
     if (rows(s).includes("after"))
         fail("a command ran after the shell exited");
 

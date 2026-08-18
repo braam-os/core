@@ -476,11 +476,13 @@ its shell **died** — a trap, a failed step, an instance that would not be made
 deaths in quick succession; a shell *waiting* for a worker is not one, since it has not started.
 A replaced shell is a fresh one: kernel `/home`, empty job table.
 
-**A shell builtin is not kernel code**: `cd`, `fg`, `jobs`, `kill`, `help` and `exit` live
-inside `/bin/sh`, in `src/sh/builtin/`. Two clauses make one. The first is that it touches the
-shell *process's own* state — its working directory, which a typed command inherits at spawn;
-its job table, which no syscall shows anyone; its loop. The second is that **its whole cost is
-the spawn**: a program costs an instantiation and a worker, roughly a millisecond (§4.4), and
+**A shell builtin is not kernel code**: the twenty-six of them live inside `/bin/sh`, in
+`src/sh/builtin/`. Two clauses make one. The first is that it touches the shell *process's own*
+state — its working directory, which a typed command inherits at spawn; its job table, which no
+syscall shows anyone; its variables, its options, its traps, its loop. That is `cd`, `fg`,
+`jobs`, `kill`, `exit`, `set`, `shift`, `read`, `trap`, `wait`, `export`, `readonly`, `unset`,
+`break`, `continue`, `return`, `.`, `eval`, `exec` and `help`. The second is that **its whole cost
+is the spawn**: a program costs an instantiation and a worker, roughly a millisecond (§4.4), and
 `while [ … ]; do echo …; done` pays it twice a turn, so `test`, `[`, `:`, `echo`, `true` and
 `false` are builtins too — a few lines each, where the spawn *is* the runtime. The clause is
 closed and admits nothing else.
@@ -488,6 +490,10 @@ closed and admits nothing else.
 **A builtin of the second kind keeps its file in `/bin`.** The shadowing is at a prompt, not
 everywhere: `/bin/test` is what a future `find -exec` would run, and there is nowhere else to
 put it. One of the first kind has no file and never will — `rm /bin/cd` finds nothing.
+
+**A shell function is looked up first**, ahead of both: it is the same rule named by the user, and
+it runs in the shell's own turn for the same reason a builtin does. So a command word resolves as
+**function, then builtin, then `/bin`**, and only the last of the three costs a process.
 
 Either way a builtin pipes and redirects through descriptors like anything else, but runs **in
 its turn rather than alongside**, since nothing inside a process can wait for a sibling task. So
@@ -682,13 +688,78 @@ is the *line* rather than the key: a keystroke is two round trips and Enter to t
 is five, paid once a line, which is why it is affordable.
 
 **The real cost is duplication.** With no dynamic linking, every binary embeds its own copy of
-the allocator, the string types and the coroutine runtime; the staged tree is ~491 KB and
-`sh.wasm` is 81 KB of it. Keep the process-side runtime minimal and push anything substantial
+the allocator, the string types and the coroutine runtime; the staged tree is ~688 KiB over
+thirty-five binaries, and `sh.wasm` is 210 KiB of it — the shell is a language now (§4.5), and
+nearly a third of the tree. Keep the process-side runtime minimal and push anything substantial
 into syscalls, so it lives once in the kernel rather than N times in userland. That *tree*
 carries a size budget and the individual binaries do not, so that number is where the
 duplication stays visible — `rootfs.zip` is deflated, and its own size would hide it.
 
 Cross-instance data movement is Appendix B.
+
+### 4.5 The shell's language
+
+`/bin/sh` is a Bourne shell, and the reference for every decision below is v7's. It is a program
+under §4 like any other: nothing here is a kernel concept, and the syscall table did not gain an
+operation for any of it.
+
+**The grammar.** A line is a tree of pipelines, and `src/sh/parse.h` is the one statement of it:
+
+```
+line     := list
+list     := and_or (sep and_or)* [sep]
+sep      := ';' | '&' | newline
+and_or   := pipeline (('&&' | '||') pipeline)*
+pipeline := ['!'] (funcdef | compound | simple ('|' simple)*)
+funcdef  := name '(' ')' newline* compound
+compound := group | subshell | if | loop | for | case
+group    := '{' list '}'
+subshell := '(' list ')'
+if       := 'if' list 'then' list ('elif' list 'then' list)* ['else' list] 'fi'
+loop     := ('while' | 'until') list 'do' list 'done'
+for      := 'for' name ['in' word*] sep 'do' list 'done'
+case     := 'case' word 'in' arm* 'esac'
+arm      := ['('] word ('|' word)* ')' list [';;']
+simple   := assign* (word | redirect)+ | assign+ redirect*
+assign   := name '=' word, and only ahead of the first ordinary word
+redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
+          | ('<<' | '<<-') word | ('>&' | '2>&') word
+```
+
+Two bounds sit beside it. A pipeline holds at most **eight stages**, which is what sizes the pipe
+and report tables the job runtime builds off it; a text nests at most **sixteen deep**, which
+bounds a parser that recurses on the wasm stack. The walk in `job.cpp` counts its own depth
+separately, because a tree can be walked more deeply than it was parsed.
+
+**A line that ends inside something is re-parsed, not lexed across a blocking read.** The reader
+accumulates and asks the parser after every line whether the text merely ended early; that answer
+is what draws `PS2`, and it is why there is no lexer state machine spanning input. A here-document
+is the same mechanism — its body is read by the accumulator and handed to the command as a pipe,
+never a file, since one `Sys::Write` carries up to a megabyte into a single pipe slot.
+
+**Expansion is two passes, and quote removal is in the first.** Per stage, every word goes
+through parameter expansion, command substitution, splitting against `IFS` and quote removal in
+one left-to-right walk, and the fields that come out then go through filename generation. POSIX
+words quote removal last; here it cannot be, because the walk is where the quoting is *known*.
+What crosses into globbing instead is a per-byte mark saying which characters were quoted, which
+is exactly what makes `'a*'` match a literal star while `a*` matches files. Splitting applies to
+expansion output only — a literal byte of the word never goes through it, so `IFS=:` leaves a
+typed `a:b` alone and cuts `$path` in two. A redirection target and an assignment value expand as
+exactly one field however they expand, so `> *.txt` writes to the pattern.
+
+**Six things in v7 cannot exist here, and each has a decided substitute rather than a gap.**
+
+| v7 | Why not | What happens instead |
+|---|---|---|
+| `( list )` as a real subshell | There is no `fork`, and spawning a second `/bin/sh` would lose the variable table — there is no environment anywhere in the ABI (§4.3) — and cost a worker against the depth cap. | It runs in this process with the shell's own mutable state saved and put back: cwd, variables, positional parameters, functions, options, traps and the `exec` base. `(cd /x; ls)` and `(set -e; …)` are exact; only memory isolation is lost. |
+| A compound command in the background | Backgrounding means the shell runs on while the group does, and nothing inside a process can wait for a sibling task (§3.6). | Refused. `cmd &` on a simple pipeline is unaffected. |
+| `exec cmd` replacing the image | A process is an instance in a worker; there is no re-instantiate-in-place and a spawn makes a new pid. | `exec` with no command makes its redirections permanent, which is exact. `exec cmd` spawns, waits, and leaves with the child's status. |
+| `#!` scripts | `exec` requires `\0asm` plus a `braam` section carrying the ABI number, so a text file can never be handed to it. | `sh file` and `sh < file`. There is no `./script.sh` and there will not be. |
+| `export` reaching a child | There is no environment in the wasm ABI: `Sys::Spawn` carries three descriptors, an argv and a cwd. | `export` records an intent this process honours — `.`, `eval` and functions see it — and nothing crosses a spawn. |
+| `trap … <signal>` | There are no signals, and the cancellation flag is sticky: once `^C` sets it every later await answers at once. | `trap … 0` on any normal exit, and `trap … 2` in an interactive shell, where the interrupt went to the stages and this process was never cancelled. `trap '' 2` is refused rather than accepted and dropped. |
+
+**What runs a command word is §4's rule**: a function, then a builtin, then a binary in `/bin` —
+and only the third costs an instantiation and a worker.
 
 ---
 
@@ -939,7 +1010,8 @@ src/ui/                 the layout layer over a Grid: Pane, TextBuf, TextView (�
 src/user/               exec and the syscall dispatcher, the console and its pump, the
                         pipes behind a stage's stdio, ProcFs, boot and init
 src/user/tty.h          the terminal claims: KeyInput, FullScreen
-src/sh/                 the shell: grammar, LineEditor, job runtime, builtins
+src/sh/                 the shell (§4.5): grammar, word expander, pattern matcher, condition
+                        evaluator, variables, LineEditor, job runtime, builtins
 src/cmd/sh.cpp          its entry point — /bin/sh is a binary like any other
 rootfs/                 the tree tools/pack.py packs into the root: /bin, /share, /README
 examples/hello/         the SDK's worked example, and an ordinary build target

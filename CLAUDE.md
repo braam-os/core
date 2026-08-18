@@ -9,9 +9,8 @@ filesystem, terminal, and programs, written in freestanding C++20 and compiled t
 deployable as a static site with no server and no special HTTP headers.
 
 It is a working system; the bar for any change is that nothing below regresses. `kernel.wasm` is
-~141 KB against a 256 KiB budget, the boot archive's staging tree ~505 KB, the wasm ABI is six
-imports and nine
-exports, and the three CTest cases pass.
+~145 KiB against a 256 KiB budget, the boot archive's staging tree ~688 KiB against 1 MiB, the
+wasm ABI is six imports and nine exports, and the three CTest cases pass.
 
 ## Documents
 
@@ -212,18 +211,19 @@ Further constraints, easy to violate by habit:
 ## Process model
 
 Every program is a binary; there is no in-kernel program, no program registry and no way to write
-one (Concept.md §4). Two kinds of thing run a command:
+one (Concept.md §4). A command word resolves as **function, then builtin, then `/bin`**, and only
+the last of the three costs a process. Two kinds of thing run a command:
 
-- **Shell builtin** — `cd`, `fg`, `jobs`, `kill`, `help`, `exit` and the rest in
-  `src/sh/builtin/`, inside `/bin/sh`. Two clauses make one. Either it touches the shell
-  *process's* own state — its cwd, which a typed command inherits at spawn; its job table, which no
-  syscall shows anyone; its loop — **or its whole cost is the spawn**, which is `test`, `[`, `:`,
-  `echo`, `true` and `false` and nothing else. The first kind has no file and never will; the
-  second keeps its file in `/bin`, since a builtin shadows the name at a prompt and not
-  everywhere. It pipes and redirects through descriptors like anything else,
-  but runs **in its turn rather than alongside**, since nothing inside a process can wait for a
-  sibling task — so it must buffer its output and write it once, or it fills an eight-slot pipe
-  and parks with nobody left to drain it.
+- **Shell builtin** — the twenty-six in `src/sh/builtin/`, inside `/bin/sh`, plus a shell
+  function, which is the same thing named by the user. Two clauses make one. Either it touches the
+  shell *process's* own state — its cwd, which a typed command inherits at spawn; its job table,
+  which no syscall shows anyone; its variables, its options, its traps, its loop — **or its whole
+  cost is the spawn**, which is `test`, `[`, `:`, `echo`, `true` and `false` and nothing else. The
+  first kind has no file and never will; the second keeps its file in `/bin`, since a builtin
+  shadows the name at a prompt and not everywhere. It pipes and redirects through descriptors like
+  anything else, but runs **in its turn rather than alongside**, since nothing inside a process can
+  wait for a sibling task — so it must buffer its output and write it once, or it fills an
+  eight-slot pipe and parks with nobody left to drain it.
 - **A process in a worker of its own** — address-space, capability, descriptor and memory-cap
   isolation plus a real kill switch, since wasm cannot be preempted. **This is what every program
   gets and the only thing one can get**: `braam_add_program` arranges it unasked, and the binary's
@@ -277,9 +277,11 @@ so neither can drift alone. Load-bearing rules:
 - **The in-wasm unit tests cannot run a program at all**, and the shell is one: stepping an
   instance means returning to the host, and `run_tests()` does that once. `test/unit/` reaches
   everything *below* a program — the console and its claims, the pipes, `/proc`, the VFS, and the
-  grammar (`parse.cpp`/`tokenize.cpp` are pure and compiled straight into the suite rather than
-  linked from `braam_sh`, which would drag the process runtime's imports in). Anything needing the
-  shell or a program to actually run belongs in `test/run.mjs`.
+  language (`parse.cpp`, `tokenize.cpp`, `expand.cpp`, `match.cpp` and `cond.cpp` are pure and
+  compiled straight into the suite rather than linked from `braam_sh`, which would drag the
+  process runtime's imports in — a syscall in any of the five is a link error, and that is what
+  put the directory walk in `glob.cpp` and `test`'s file probes in `condrun.cpp`). Anything
+  needing the shell or a program to actually run belongs in `test/run.mjs`.
 
 A program is an ordinary scheduler job: a proxy task in `src/user/exec.cpp` steps the instance and
 performs its syscalls with its own `CancelToken`, so `^C`, `kill`, `jobs`, `/proc` and the stage
@@ -335,10 +337,11 @@ change to argue in Concept.md first.
   and Enter to the next prompt costs five (`echo`, newline, `cwd_get`, prompt `echo`, `key_read`).
   Both are floors: the cwd is deliberately not cached, since a wrong prompt is believed, and going
   lower means fusing the keyboard into the paint — a worse ABI than it would save.
-- **The boot archive is ~505 KB unpacked** and 215 KB as `rootfs.zip`. §4.4's duplication: every
-  binary carries the allocator, the string types and the coroutine runtime, and `sh.wasm` is 81 KB
-  of it. The staging *tree* carries the size budget and the binaries do not, so that number is
-  where the duplication stays visible — the archive is deflated and would hide it.
+- **The boot archive is ~688 KiB unpacked** and 277 KiB as `rootfs.zip`. §4.4's duplication: every
+  binary carries the allocator, the string types and the coroutine runtime, and `sh.wasm` is
+  210 KiB of it — nearly a third of the tree, since the shell is a language (§4.5). The staging
+  *tree* carries the size budget and the binaries do not, so that number is where the duplication
+  stays visible — the archive is deflated and would hide it.
 - **A soft keyboard has no control keys.** `^C`/`^D`/`^L`, `Esc`, `Tab` and the arrows reach a
   tablet only through the page's key bar (`mount({keys})`); widening it is a page change, not a
   system one. The focus lives on a hidden `<textarea>`, not the canvas — a canvas is focusable but
@@ -346,6 +349,10 @@ change to argue in Concept.md first.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything not a child of the caller.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.
+- **`$$` is not unique per shell.** It is `proc_pid()`, and a top-level `/bin/sh` reports init's,
+  since it is a process inside init's task rather than a job of its own. A nested `sh` gets one of
+  its own. Nothing derives a filename from it, so nothing collides; `$$` is not a temp-file scheme
+  here, because there are no temp files.
 - **`export` reaches no child.** The shell has variables, lists, control flow, `case`, globbing,
   `$( )`, functions, `test`, `read`, `trap`, `set -e -x -u` and, since S9, `sh <file>`, `sh -c`
   and `$0` — but there is no environment anywhere in the wasm ABI, so `export` records an intent
@@ -371,9 +378,12 @@ change to argue in Concept.md first.
   under `Split::One`, one field in and one out, and `> *.txt` writes to the pattern rather than
   silently to whatever it matched. An unterminated `[` matches nothing (v7's answer), and a
   quoted leading dot still counts as one, so `\.*` finds dotfiles where v7 finds none.
-- **`(` and `)` are tokens with no grammar above `case`.** S4 needed `)` to end an arm, so
-  `echo (x)` is `syntax error near '('` rather than a word. `( list )` as a state checkpoint is
-  S7's, and its lexing is already done.
+- **`( … )` isolates state, not memory.** There is no `fork`, so a subshell runs in this process
+  with the shell's own mutable state saved and put back around it (Concept.md §4.5). `(cd /x; ls)`
+  and `(set -e; …)` are exact; a `hog` inside one still spends the shell's 16 MB, and a `$( )`
+  inside one is bounded by the same cap.
+- **`(` and `)` are tokens with no grammar above a subshell and a `case` arm.** `echo (x)` is
+  `syntax error near '('` rather than a word, which is what `)` ending an arm cost.
 - **`exec >file` cannot be undone, and `>&-` cannot be said.** There is no `/dev/tty` and no way
   to name the stream the shell was handed, so a top-level `exec` redirection is permanent; inside
   `( … )` it is checkpointed like everything else. `>&-` would need a closed-descriptor value in
@@ -381,11 +391,11 @@ change to argue in Concept.md first.
 - **`( … )` restores everything but the job table**, which is deliberately shared: its children
   are this same process's and must still be reaped. cwd, variables, positional parameters, the
   function table and the `exec` base all go back.
-- **A `$( )` is not a subshell, because there is no fork.** It runs in the shell, so `$(cd /x)`
-  moves it and `$(y=1)` sets a real variable; `$(exit)` does *not* end the shell, since the
-  command is run against its own `Ctx` rather than through `run_line`. The save-and-restore
-  checkpoint S7 owes `( list )` is what would contain the rest. Its output is bounded only by the
-  process's 16 MB cap — v7's answer too, and truncating would corrupt a value silently.
+- **A `$( )` is not a subshell, and unlike `( … )` it takes no checkpoint.** It runs in the shell,
+  so `$(cd /x)` moves it and `$(y=1)` sets a real variable; `$(exit)` does *not* end the shell,
+  since the command is run against its own `Ctx` rather than through `run_line`. The
+  save-and-restore checkpoint is `( … )`'s alone. Its output is bounded only by the process's
+  16 MB cap — v7's answer too, and truncating would corrupt a value silently.
 - **Only a pipeline may go into the background.** `a && b &`, `{ … ; } &` and `while … done &`
   are refused, because backgrounding means the shell keeps running while the rest goes and
   nothing in a process can wait for a sibling task. **And a compound command cannot be *piped***
@@ -415,8 +425,8 @@ change to argue in Concept.md first.
   `src/ui/` (layout over a `Grid`: `Pane`, `TextBuf`, `TextView`); `src/user/` (`exec` and the
   syscall dispatcher, the console and its pump, the pipes behind a stage's stdio, `ProcFs`, boot
   and init); `src/proc/` (a process binary's runtime, `screen.cpp` included); `src/sh/` (grammar,
-  line editor, job runtime, pattern matching, builtins); `src/cmd/` (one file per program,
-  `sh.cpp` among them);
+  word expander, pattern matcher, condition evaluator, variables, line editor, job runtime,
+  builtins); `src/cmd/` (one file per program, `sh.cpp` among them);
   `test/unit/`; `web/`; `rootfs/`; `examples/`; `tools/`; `cmake/`.
 - `braam_fs` and `braam_svc` are siblings above the kernel and below userland: they must not depend
   upwards or on each other, and anything needing the scheduler or screen belongs in `src/user/`

@@ -7,9 +7,66 @@ of the two needs amending.
 
 ---
 
+## The shell's plan is deleted, and what only it held is here
+
+Last of the stages in `src/sh/TODO.md`, and the one that deletes it. Ten stages had landed and
+each has a note of its own below, so what the plan still held was a to-do list with nothing to do
+plus four things written nowhere else: **the grammar and the expansion order**, **the six
+impossibilities**, **the purity boundary**, and **the size trajectory**. The first two are now
+Concept.md §4.5, which the specification had been missing entirely; the last two are here. **No
+behaviour changed**: `sh.wasm` went 215,238 → 215,270, and all thirty-two of those bytes are one
+usage string — `unset` had taken `-f` since the functions stage and its one-line help had never
+said so. The staging tree is 704,061 of 1,048,576 (67%), 277 KiB as `rootfs.zip`; `kernel.wasm` is
+148,604 of 262,144, byte for byte what S7 left; `PROC_ABI` is still 10.
+
+**Cite the stages by name, not by ordinal.** The ten notes below number themselves *first* to
+*tenth*, and those ordinals are **one ahead of the plan's S-numbers** from the beginning: *"The
+lexer stopped removing quotes"* took a note without taking a stage number, so the plan's S1 is the
+second note, its S7 is *"The ABI changed, once"* and its S9 is *"The shell got a front door"*. The
+S-numbers are kept as citations the way the worker plan's T-numbers were — CLAUDE.md and the
+commit messages say "S7" and mean the `Sys::Dup` stage — but a heading is the unambiguous name and
+this note is the last place the two schemes have to be reconciled.
+
+**The purity boundary is a standing rule, not a stage's tactic.** `parse.cpp`, `tokenize.cpp`,
+`expand.cpp`, `match.cpp` and `cond.cpp` touch nothing but `Str`, `String` and `Vec`, and
+`test/CMakeLists.txt` compiling them into `tests.wasm` **is** the enforcement: a syscall in any of
+the five is a link error, not a review comment. It cost real design twice and both times the
+answer was a second file rather than a weakened rule — the directory walk could not go in
+`expand.cpp` and became `glob.cpp`, and `test`'s file primaries could not go in `cond.cpp` and
+became `condrun.cpp`, which answers the probes the pure evaluator names. That is what lets
+`test_parse.cpp`'s one-string `shape()` compare check a whole parse, and `test_cond.cpp` check a
+whole expression grammar against a table of canned answers, with no kernel in the loop. Anything
+new that reaches `exec_node` goes the same way.
+
+**The trajectory, since it is the only place the arithmetic is recorded.** Per stage, in bytes of
+`sh.wasm`: 20,807, 10,644, 12,678, 14,607, 8,699, 13,897, 20,650, 26,270, 3,501. About twenty
+bytes of wasm per line of C++, which the arena stages came in under and the coroutine ones over,
+and the estimate was calibrated against the binary after S1 rather than guessed per stage — which
+is why nine stages landed inside a budget that never moved. S8 also added `/bin/test`, 19,246 of
+the tree on its own, because a builtin of the second kind keeps its file.
+
+**The integration cases are the last thing the per-stage tests could not do.** Every block in
+`run.mjs` before this one stays inside one stage, so nothing checked that the features *compose*.
+What checks it now is a planted script that does something real — a function, an EXIT trap, a
+glob walked by `for`, a `case` that skips an arm, a `$( )` with a redirection inside it, a
+here-document and a nonzero exit — asserted whole, and it is the same script Programming_Manual.md
+prints, so the manual's example cannot rot. Beside it are the seams: a function body that globs
+with the *call* redirected, `case` inside `while` inside a function, a `for` over a substitution
+under `set -e`, a builtin at each end of a pipeline with a program between, `set -x` tracing
+inside a compound, and a construct through `sh -c`. All of them passed the first time they were
+run, which is the finding — the stages were composable as they landed, and this proves rather
+than fixes it.
+
+**Three instances at the peak, however many turns the loop takes.** The script's cost is asserted
+rather than described: this shell, the script's own, and whichever program is running. A shell
+that leaked an instance per turn, or spawned the loop body in parallel, would fail that line — and
+it is the counterpart to S8's assertion that a loop of builtins hires no worker at all.
+
+---
+
 ## The shell got a front door
 
-Tenth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `sh <file> args`, `sh -c cmd`, `-e -x
+Tenth of the stages in `src/sh/TODO.md`: `sh <file> args`, `sh -c cmd`, `-e -x
 -u` at startup, `$0` and the positional parameters a shell begins with. `sh.wasm` went from
 211,737 to 215,238 bytes and the staging tree from 700,528 to 704,027 against an unchanged 1 MiB
 budget — 3,501 bytes over about 150 lines, the cheapest stage of the ten. **`kernel.wasm` did not
@@ -55,7 +112,7 @@ arrive later.
 
 ## The rule grew a second clause
 
-Ninth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `test`, `[`, `:`, `read`, `wait`,
+Ninth of the stages in `src/sh/TODO.md`: `test`, `[`, `:`, `read`, `wait`,
 `trap` and `set -e -x -u`, plus `echo`, `true` and `false`, which S8 as written had ruled out.
 `sh.wasm` went from 185,467 to 211,737 bytes and the staging tree from 654,945 to 700,528 against
 an unchanged 1 MiB budget — the extra being `/bin/test`, a new binary at 19,246. **`kernel.wasm`
@@ -166,7 +223,7 @@ is what makes them one more field on `( … )`'s checkpoint — TODO.md's subshe
 
 ## The ABI changed, once
 
-Eighth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): here-documents, `>&`, `exec`
+Eighth of the stages in `src/sh/TODO.md`: here-documents, `>&`, `exec`
 redirections, inherited base stdio and `( … )` as a state checkpoint. `sh.wasm` went from 164,817
 to 185,467 bytes and the staging tree from 634,295 to 654,945 against an unchanged 1 MiB budget.
 **`kernel.wasm` moved for the first time in this plan** — 148,483 to 148,604 of 262,144 — because
@@ -267,7 +324,7 @@ and a redefinition.
 
 ## A line could outlive itself
 
-Seventh of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `name() { … }`, `.`, `eval`,
+Seventh of the stages in `src/sh/TODO.md`: `name() { … }`, `.`, `eval`,
 `return` and `unset -f`. `sh.wasm` went from 150,920 to 164,817 bytes and the staging tree from
 620,398 to 634,295 against an unchanged 1 MiB budget. **`kernel.wasm` did not move and the syscall
 ABI did not change.**
@@ -353,7 +410,7 @@ returned.
 
 ## A word could run a command
 
-Sixth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `$( )` and the backtick, the pipe the
+Sixth of the stages in `src/sh/TODO.md`: `$( )` and the backtick, the pipe the
 shell drains itself, and the hook that lets a pure expander reach an impure command. `sh.wasm`
 went from 142,221 to 150,920 bytes and the staging tree from 611,699 to 620,398 against an
 unchanged 1 MiB budget. **`kernel.wasm` did not move and the syscall ABI did not change** —
@@ -443,7 +500,7 @@ newline, and the 7,077-byte drain.
 
 ## A word became a pattern
 
-Fifth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `*`, `?`, `[a-z]` and `[!…]` over the
+Fifth of the stages in `src/sh/TODO.md`: `*`, `?`, `[a-z]` and `[!…]` over the
 real store, and `case`/`esac` with its arms. `sh.wasm` went from 127,614 to 142,221 bytes and the
 staging tree from 597,092 to 611,699 against an unchanged 1 MiB budget — 58% of it. **`kernel.wasm`
 did not move and the syscall ABI did not change**; a directory listing is `Sys::List`, which `ls`
@@ -536,7 +593,7 @@ real body. The glob block sits late in `run.mjs` on purpose: every command spend
 
 ## The tree learned to branch
 
-Fourth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `if`/`elif`/`else`/`fi`, `while`,
+Fourth of the stages in `src/sh/TODO.md`: `if`/`elif`/`else`/`fi`, `while`,
 `until`, `for … in`, `break` and `continue`. `sh.wasm` went from 114,936 to 127,614 bytes and the
 staging tree from 584,414 to 597,092 against an unchanged 1 MiB budget. **`kernel.wasm` did not
 move and the syscall ABI did not change.**
@@ -617,7 +674,7 @@ leaves both loops and nothing else, that `break` outside a loop is silent, and t
 
 ## A line became a tree
 
-Third of the stages in [src/sh/TODO.md](../src/sh/TODO.md), and the one it called the largest.
+Third of the stages in `src/sh/TODO.md`, and the one it called the largest.
 `;`, `&&`, `||`, `&` mid-line, `#` comments, `!`, `{ … ; }`, a newline as a separator, and a
 half-typed construct that asks for another line under `PS2`. `sh.wasm` went from 104,292 to
 114,936 bytes and the staging tree from 588,594 to 599,238 against an unchanged 1 MiB budget.
@@ -724,7 +781,7 @@ the screen and not a prompt, and that `echo before; exit 7; echo never` prints o
 
 ## The shell got variables
 
-Second of the stages in [src/sh/TODO.md](../src/sh/TODO.md). `$x`, `${x}`, the `${x-y}` family,
+Second of the stages in `src/sh/TODO.md`. `$x`, `${x}`, the `${x-y}` family,
 the specials, assignment as a word the parser knows, field splitting against `IFS`, and `set`,
 `shift`, `unset`, `export` and `readonly`. `sh.wasm` went from 83,485 to 104,292 bytes and the
 staging tree from 552,965 to 588,594 against an unchanged 1 MiB budget. **`kernel.wasm` did not
@@ -801,7 +858,7 @@ leaves the shell's x where it was.
 
 ## The lexer stopped removing quotes
 
-First of the stages in [src/sh/TODO.md](../src/sh/TODO.md), which is the plan for making
+First of the stages in `src/sh/TODO.md`, which is the plan for making
 `/bin/sh` a language rather than a prompt. Nothing a user can see changed: the grammar is the
 same one line it was, and the same commands do the same things. What moved is *when* quotes come
 off — out of `Lexer::next`, into a new `expand.cpp` that runs between the parse and the run.

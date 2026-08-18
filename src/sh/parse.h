@@ -6,8 +6,9 @@
 //   and_or   := pipeline (('&&' | '||') pipeline)*
 //   pipeline := ['!'] (funcdef | compound | simple ('|' simple)*)
 //   funcdef  := name '(' ')' newline* compound
-//   compound := group | if | loop | for | case
+//   compound := group | subshell | if | loop | for | case
 //   group    := '{' list '}'
+//   subshell := '(' list ')'
 //   if       := 'if' list 'then' list ('elif' list 'then' list)* ['else' list] 'fi'
 //   loop     := ('while' | 'until') list 'do' list 'done'
 //   for      := 'for' name ['in' word*] sep 'do' list 'done'

@@ -11,9 +11,8 @@ clear    blank the screen
 curl     [-i] [-X <method>] [-H <header>] [-d <data>] <url> — fetch a URL
 date     [-u] — print the date and time
 df       [-h] — report filesystem space, and with -h in scaled units
-echo     [-n] [word...] — write the arguments
+echo     [-n] [<word>...] — write the arguments
 edit     <file> — a full-screen editor; ^S saves, ^Q quits
-save     <file> [<name>] — download a file out of the browser
 false    fail
 grep     [-i] [-v] <text> [<file>...] — pass matching lines
 head     [-n <count>] [<file>...] — the first lines, ten by default
@@ -28,6 +27,7 @@ pbpaste  write the clipboard to the output
 ps       list the tasks the kernel is running, and which hold a worker
 pwd      print the working directory
 rm       [-r] <path>... — remove files, or directories with -r
+save     <file> [<name>] — download a file out of the browser
 sh       [-eux] [-s | -c <command> | <file>] [<arg>...] — the shell
 sleep    <ms> — wait, in milliseconds
 spin     [<millions>] — loop without yielding, to be killed
