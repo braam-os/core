@@ -13,6 +13,9 @@ enum class Tok : u8 {
     Word,      //
     Newline,   // a separator, since one text may be many lines
     Semi,      // ;
+    DSemi,     // ;; — the end of a `case` arm
+    LParen,    // (
+    RParen,    // ) — what closes a `case` arm's patterns
     Amp,       // &
     AndIf,     // &&
     OrIf,      // ||

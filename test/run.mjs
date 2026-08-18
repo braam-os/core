@@ -2599,6 +2599,42 @@ if (mode === "--kernel") {
     if (!rows(s).includes("back"))
         fail(`the shell after a wait printed ${JSON.stringify(rows(s))}`);
 
+    // Globbing over the real store, and `case` beside it: both go through
+    // match.cpp, which is why they land together. The unit suite has the
+    // matcher; what it cannot see is a listing reaching a real argv. Late in
+    // the file, since each of these spends pids the ps cases above count on.
+    submit("mkdir /home/g", 13172);
+    submit("mkdir /home/g/sub", 13172.1);
+    submit("touch /home/g/aaa /home/g/bb", 13172.2);
+    submit("echo x > /home/g/.dot", 13172.3);
+
+    let gt = 13173;
+    const gshows = (line, want) => {
+        submit("clear", (gt += 0.01));
+        const got = output(submit(line, (gt += 0.01))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    gshows("echo /bin/l*", "/bin/less /bin/ls");
+    gshows("echo /home/g/*", "/home/g/aaa /home/g/bb /home/g/sub");
+    gshows("echo /home/g/.*", "/home/g/.dot"); // a leading dot is asked for
+    gshows("echo /home/g/?b", "/home/g/bb");
+    gshows("echo /home/g/[ab]*", "/home/g/aaa /home/g/bb");
+    gshows("echo /home/g/*/", "/home/g/sub/"); // a trailing slash means dirs
+    gshows("echo g*", "g"); // relative: the walk lists the cwd
+    gshows("echo '/bin/l*'", "/bin/l*"); // quoted: the star is itself
+    gshows("echo /bin/nosuch*", "/bin/nosuch*"); // no match: the word as written
+    gshows("for f in /home/g/[ab]*; do echo $f; done", "/home/g/aaa|/home/g/bb");
+    gshows("v=/home/g/b*; echo $v", "/home/g/bb"); // a star out of a variable
+
+    gshows("case hi in h*) echo yes;; *) echo no;; esac", "yes");
+    gshows("case hi in 'h*') echo yes;; *) echo no;; esac", "no"); // quoted pattern
+    gshows("case hi in a|hi) echo two;; esac", "two");
+    gshows("case hi in a) echo no;; esac", ""); // no arm ran
+    gshows("case /home/g/bb in */bb) echo path;; esac", "path");
+    submit("rm -r /home/g", (gt += 0.01));
+
     // exit ends the shell, and nothing runs after it — not even the rest of
     // its own line, which is Flow::Exit end to end. Last, for that reason.
     s = submit("clear", 14097);

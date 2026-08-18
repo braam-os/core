@@ -20,7 +20,9 @@ add_library(braam_sh STATIC
     builtin/unset.cpp
     edit.cpp
     expand.cpp
+    glob.cpp
     job.cpp
+    match.cpp
     parse.cpp
     shell.cpp
     tokenize.cpp

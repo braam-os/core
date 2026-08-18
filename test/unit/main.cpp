@@ -31,6 +31,7 @@ void test_textbuf();
 void test_tokenize();
 void test_parse();
 void test_expand();
+void test_match();
 void test_opt();
 void test_path();
 void test_hostfs();
@@ -92,6 +93,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_tokenize();
     test_parse();
     test_expand();
+    test_match();
     test_opt();
     test_procfs();
 

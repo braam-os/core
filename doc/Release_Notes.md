@@ -7,6 +7,99 @@ of the two needs amending.
 
 ---
 
+## A word became a pattern
+
+Fifth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `*`, `?`, `[a-z]` and `[!…]` over the
+real store, and `case`/`esac` with its arms. `sh.wasm` went from 127,614 to 142,221 bytes and the
+staging tree from 597,092 to 611,699 against an unchanged 1 MiB budget — 58% of it. **`kernel.wasm`
+did not move and the syscall ABI did not change**; a directory listing is `Sys::List`, which `ls`
+has been calling since M5.
+
+The two features ship together because they are one matcher. A `case` pattern *is* a glob pattern,
+and writing the matcher twice is how the two would disagree about what `[a-` means.
+
+**This is the first reader the quoting mask has, and the mask was right.** S1 built `Field::mark`
+one byte per byte with these two consumers named in the header and nothing using it for two
+stages; `test_expand.cpp` has asserted since then that `$star` yields an *unmarked* `*` where
+`'*'`, `"*"` and `\*` yield a marked one. Globbing needed no change to the expander at all —
+`glob_match` takes the mark as its second argument and a marked metacharacter matches itself. The
+alternative, deciding at expansion time whether a word "looks like a pattern", is what shells that
+have no mask do, and it is why they cannot tell `$x` holding a star from a typed one.
+
+**The walk could not go where the plan put it.** TODO.md said the directory walk belongs in
+`expand.cpp`. It cannot: `list_dir` is a coroutine, and `expand.cpp` is compiled into `tests.wasm`
+precisely because it reaches no syscall — the link is what enforces that, not a promise. So the
+matcher is `match.cpp`, pure and in `tests.wasm` beside the parser and the expander, and the walk
+is `glob.cpp`, in `braam_sh` alone. The purity boundary is the thing being protected here, and it
+survived by splitting the file rather than by weakening the rule. S5's `substitute`/`glob` pair
+is the same argument one step further on.
+
+**The matcher does not follow v7's `gmatch`, and the reason is the pattern the tests name.** V7
+recurses once per `*`, and the port this work follows already turned its other three tail calls
+into loop iterations. Both forms are exponential in *time* on `a*a*a*b`: every star re-tries every
+suffix independently. A single `*` class is the whole of this pattern language, so one saved
+backtrack point — the last star and the offset it was tried at — answers it, in a loop, with no
+recursion left to bound. `test_match.cpp` runs `a*a*a*b` against thirty `a`s, which the recursive
+form would not finish.
+
+**Three answers where v7 and POSIX differ, decided the way S3 decided its three.** A leading dot
+must be asked for, and a *quoted* dot counts: `\.*` lists dotfiles here where v7 lists nothing,
+because every shell since has done so and the rule is shorter to state. An unterminated `[`
+matches nothing rather than being taken literally — that is v7's answer, and it costs nothing
+visible, since a word that matches nothing is used as it was written. And a component that is not
+the last must be a directory, so `echo */` lists directories and `a*/b` never tries to descend
+into a file.
+
+**No sort was needed, which the plan did not expect.** `vfs_list` has sorted its entries in
+case-free byte order since M5 — `ls` relies on it and says so. Prefixes are walked in order and
+each listing arrives ordered, so a multi-component glob comes out ordered without a comparison
+anywhere in `glob.cpp`. TODO.md had budgeted an insertion sort for it.
+
+**`(` and `)` became operators, which is S7's lexer work done early.** A `case` arm ends in `)`,
+and until now that was an ordinary word byte — `a)` lexed as one word. The parser could have
+stripped the trailing byte inside `case_clause` and left the lexer alone, but that misreads
+`case x in a\)` and cannot accept POSIX's optional leading `(`. So `is_operator` took both, and
+the price is that `echo (x)` is now `syntax error near '('` instead of printing `(x)`. Every real
+shell says the same thing, and `( list )` — which S7 has to run as a state checkpoint, there being
+no fork — now lexes already. `parse()`'s trailing diagnostic stopped saying "unexpected keyword"
+for a token that is not a word, so `;;` alone reports itself rather than being called a keyword.
+
+**Only argv words are globbed.** An assignment value and a redirection target expand under
+`Split::One` — one field in, one field out by definition — and globbing them would break that
+contract for no gain worth having; `> *.txt` is a refusal to write into a pattern rather than a
+silent single match. `for`'s word list *is* globbed, which cost one call, because S3 put its words
+through the command expander for exactly this.
+
+**`expand_all` became a coroutine, and that is the whole of the cost to the job runtime.** It
+expands a command's raw words into a scratch vector and hands that to `glob_fields`, which appends
+to `Run::words`; `argv0[i]` is still pushed before the command's words, so the slice arithmetic
+nothing else knows about did not change. A `^C` caught mid-listing arrives as `Error::Cancelled`
+out of the expansion, which is the one error that must not print "out of memory" — it reports 130
+and abandons the line, through the path a stage reporting 130 already took.
+
+**`case` is not a loop and must not look like one.** Its arms are a flat run of (patterns, body)
+pairs in the child list, as `if`'s branches are, for the third-and-fourth time the same reason:
+in this executor depth costs coroutine frames. It never touches `cx.loops`, so a `break` in an arm
+belongs to whatever loop is above it, and a `case` that matches no arm reports 0 with an explicit
+`var_status(0)` — the rule `if` needed when it took no branch, since nothing ran and so nothing
+published a status. v7's literal-compare fallback after a failed `gmatch` is not reproduced: a
+marked metacharacter already matches itself, which is what that fallback was for.
+
+**A generated name carries a mask of its own.** `Field` promises one mark byte per text byte, and
+a name off the store has to keep that promise even though nothing reads it again — it is marked
+literal throughout, so no later stage can take a `?` in a filename for a pattern.
+
+**What the tests prove separately.** `test_match.cpp` is the matcher alone against table literals,
+including the quoted star, the quoted `-` inside a live class, the unterminated `[`, and the
+pathological pattern; `test_parse.cpp` renders `case` as one string compare per construct, with
+the empty arm and the arm whose last `;;` is spared; `test/run.mjs` has what neither can reach —
+that `echo /bin/l*` names two real files, that `/home/g/.*` finds the dotfile that `/home/g/*`
+must not, that a star out of a variable globs and a quoted one does not, and that `case` runs a
+real body. The glob block sits late in `run.mjs` on purpose: every command spends pids, and the
+`ps` cases above it assert a column width that a five-digit pid overruns.
+
+---
+
 ## The tree learned to branch
 
 Fourth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `if`/`elif`/`else`/`fi`, `while`,

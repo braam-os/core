@@ -343,10 +343,17 @@ change to argue in Concept.md first.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything not a child of the caller.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.
-- **The shell has no `-c`, no globbing and no scripts beyond `sh -s`.** It has variables, lists
-  and control flow now, but **`export` reaches no child**: there is no environment anywhere in the wasm ABI,
-  so it records an intent that only this process can honour. `/bin/export` was renamed `save` to
-  give the builtin its name.
+- **The shell has no `-c` and no scripts beyond `sh -s`.** It has variables, lists, control flow,
+  `case` and globbing now, but **`export` reaches no child**: there is no environment anywhere in
+  the wasm ABI, so it records an intent that only this process can honour. `/bin/export` was
+  renamed `save` to give the builtin its name.
+- **Globbing is argv words only**, not a redirection target or an assignment value: both expand
+  under `Split::One`, one field in and one out, and `> *.txt` writes to the pattern rather than
+  silently to whatever it matched. An unterminated `[` matches nothing (v7's answer), and a
+  quoted leading dot still counts as one, so `\.*` finds dotfiles where v7 finds none.
+- **`(` and `)` are tokens with no grammar above `case`.** S4 needed `)` to end an arm, so
+  `echo (x)` is `syntax error near '('` rather than a word. `( list )` as a state checkpoint is
+  S7's, and its lexing is already done.
 - **Only a pipeline may go into the background.** `a && b &`, `{ … ; } &` and `while … done &`
   are refused, because backgrounding means the shell keeps running while the rest goes and
   nothing in a process can wait for a sibling task. **And a compound command cannot yet be piped
@@ -374,7 +381,8 @@ change to argue in Concept.md first.
   `src/ui/` (layout over a `Grid`: `Pane`, `TextBuf`, `TextView`); `src/user/` (`exec` and the
   syscall dispatcher, the console and its pump, the pipes behind a stage's stdio, `ProcFs`, boot
   and init); `src/proc/` (a process binary's runtime, `screen.cpp` included); `src/sh/` (grammar,
-  line editor, job runtime, builtins); `src/cmd/` (one file per program, `sh.cpp` among them);
+  line editor, job runtime, pattern matching, builtins); `src/cmd/` (one file per program,
+  `sh.cpp` among them);
   `test/unit/`; `web/`; `rootfs/`; `examples/`; `tools/`; `cmake/`.
 - `braam_fs` and `braam_svc` are siblings above the kernel and below userland: they must not depend
   upwards or on each other, and anything needing the scheduler or screen belongs in `src/user/`

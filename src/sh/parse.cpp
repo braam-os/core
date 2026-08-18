@@ -240,8 +240,9 @@ struct Parser {
 
     bool ends_list() const
     {
-        return tok == Tok::End || reserved("}") || reserved("then") || reserved("elif") ||
-               reserved("else") || reserved("fi") || reserved("do") || reserved("done");
+        return tok == Tok::End || tok == Tok::DSemi || reserved("}") || reserved("then") ||
+               reserved("elif") || reserved("else") || reserved("fi") || reserved("do") ||
+               reserved("done") || reserved("esac");
     }
 
     Result<u32> list(u32 nest);
@@ -251,8 +252,10 @@ struct Parser {
     Result<u32> if_clause(u32 nest);
     Result<u32> loop_clause(u32 nest, bool until);
     Result<u32> for_clause(u32 nest);
+    Result<u32> case_clause(u32 nest);
     Result<void> want(Str w);
     Result<void> skip_seps();
+    Result<void> skip_newlines();
     Result<void> simple();
 };
 
@@ -270,6 +273,12 @@ Str near_of(Tok tok)
         return "syntax error near '&'";
     case Tok::Semi:
         return "syntax error near ';'";
+    case Tok::DSemi:
+        return "syntax error near ';;'";
+    case Tok::LParen:
+        return "syntax error near '('";
+    case Tok::RParen:
+        return "syntax error near ')'";
     default:
         return "syntax error: expected a command";
     }
@@ -325,6 +334,10 @@ Result<void> Parser::want(Str w)
         err.message = "syntax error: expected 'done'";
     else if (w == "fi")
         err.message = "syntax error: expected 'fi'";
+    else if (w == "in")
+        err.message = "syntax error: expected 'in'";
+    else if (w == "esac")
+        err.message = "syntax error: expected 'esac'";
     else
         err.message = "syntax error: expected '}'";
     err.more = tok == Tok::End;
@@ -334,6 +347,14 @@ Result<void> Parser::want(Str w)
 Result<void> Parser::skip_seps()
 {
     while (tok == Tok::Semi || tok == Tok::Newline)
+        TRY_VOID(advance());
+    return {};
+}
+
+// A `case` takes newlines where it takes nothing else, so `;` is not skipped.
+Result<void> Parser::skip_newlines()
+{
+    while (tok == Tok::Newline)
         TRY_VOID(advance());
     return {};
 }
@@ -411,6 +432,65 @@ Result<u32> Parser::for_clause(u32 nest)
     return t.add_node(Tree::Node{ Tree::Kind::For, false, body, cmd, has_in, 0 });
 }
 
+// Arms as a flat run of pairs, as `if`'s branches are. Each arm's patterns are
+// one command, so the command expander serves them; not assignable, since
+// `case x in a=1)` is an ordinary pattern.
+Result<u32> Parser::case_clause(u32 nest)
+{
+    TRY_VOID(advance()); // `case`
+    if (tok != Tok::Word)
+        return Err(fail("syntax error: expected a word after 'case'", tok == Tok::End));
+
+    u32 subject = u32(t.size());
+    if (t.add_word(word, false).is_err() || t.end_command().is_err())
+        return Err(oom());
+    TRY_VOID(advance());
+
+    TRY_VOID(skip_newlines());
+    TRY_VOID(want("in"));
+    TRY_VOID(skip_newlines());
+
+    Vec<u32> kids;
+    while (!reserved("esac")) {
+        if (tok == Tok::End)
+            return Err(fail("syntax error: expected 'esac'", true));
+        if (tok == Tok::LParen)
+            TRY_VOID(advance());
+
+        u32 pats = u32(t.size());
+        for (;;) {
+            if (tok != Tok::Word)
+                return Err(fail("syntax error: expected a pattern", tok == Tok::End));
+            if (t.add_word(word, false).is_err())
+                return Err(oom());
+            TRY_VOID(advance());
+            if (tok != Tok::Pipe)
+                break;
+            TRY_VOID(advance());
+        }
+        if (tok != Tok::RParen)
+            return Err(fail("syntax error: expected ')'", tok == Tok::End));
+        if (t.end_command().is_err())
+            return Err(oom());
+        TRY_VOID(advance());
+
+        // The patterns are ended before the body, since a command is built
+        // through one pair of cursors shared by the whole parse.
+        u32 body = TRY(list(nest + 1));
+        if (!kids.push(pats) || !kids.push(body))
+            return Err(oom());
+
+        if (tok != Tok::DSemi)
+            break;
+        TRY_VOID(advance());
+        TRY_VOID(skip_newlines());
+    }
+    TRY_VOID(want("esac"));
+
+    u32 off = TRY(t.add_kids(kids));
+    return t.add_node(Tree::Node{ Tree::Kind::Case, false, off, u32(kids.size() / 2), subject, 0 });
+}
+
 // A compound command, or 0 with `any` false when the token is not one.
 Result<u32> Parser::compound(u32 nest, bool &any)
 {
@@ -429,6 +509,8 @@ Result<u32> Parser::compound(u32 nest, bool &any)
         return loop_clause(nest, true);
     if (reserved("for"))
         return for_clause(nest);
+    if (reserved("case"))
+        return case_clause(nest);
 
     any = false;
     return u32(0);
@@ -558,8 +640,11 @@ Result<void> parse(Str line, Tree &out, ParseErr &err)
     TRY_VOID(p.advance());
 
     u32 root = TRY(p.list(0));
-    if (p.tok != Tok::End)
-        return Err(p.fail("syntax error: unexpected keyword"));
+    if (p.tok != Tok::End) {
+        if (p.tok == Tok::Word)
+            return Err(p.fail("syntax error: unexpected keyword"));
+        return Err(p.fail(near_of(p.tok)));
+    }
 
     out.set_root(root);
     if (out.freeze().is_err()) {

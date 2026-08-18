@@ -4,9 +4,12 @@
 
 namespace {
 
+// The parentheses are here for `case`'s arms, which is the whole of the
+// grammar that reads them today — so `echo (x)` is a syntax error rather than
+// a word, which is what every shell says.
 bool is_operator(char c)
 {
-    return c == '|' || c == '&' || c == '<' || c == '>' || c == ';';
+    return c == '|' || c == '&' || c == '<' || c == '>' || c == ';' || c == '(' || c == ')';
 }
 
 // Everything is_space takes but a newline, which is a token of its own now
@@ -81,7 +84,19 @@ Result<Tok> Lexer::next(Str &word)
     }
     if (c == ';') {
         i_++;
+        if (i_ < s_.size() && s_[i_] == ';') {
+            i_++;
+            return Tok::DSemi;
+        }
         return Tok::Semi;
+    }
+    if (c == '(') {
+        i_++;
+        return Tok::LParen;
+    }
+    if (c == ')') {
+        i_++;
+        return Tok::RParen;
     }
     if (c == '|') {
         i_++;

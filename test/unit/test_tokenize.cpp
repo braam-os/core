@@ -38,6 +38,15 @@ Str lex(Str line, char *out, usize cap)
         case Tok::Semi:
             put(";");
             break;
+        case Tok::DSemi:
+            put(";;");
+            break;
+        case Tok::LParen:
+            put("(");
+            break;
+        case Tok::RParen:
+            put(")");
+            break;
         case Tok::Amp:
             put("&");
             break;

@@ -27,8 +27,9 @@ Str name_of(Redir r)
 // argv in braces and its redirections as operator plus target; a pipeline is
 // its stages joined by '|', with '&' after it when it is a background one; a
 // list is its members joined by ';', '&&' or '||'; a group is braced; `!` is
-// itself. An error is '!' and its message, and '?' when the text merely ended
-// early.
+// itself; a `case` is its word in parentheses and then an arm's patterns in
+// parentheses and its body in braces. An error is '!' and its message, and '?'
+// when the text merely ended early.
 struct Render {
     const Tree &t;
     usize n = 0;
@@ -142,6 +143,24 @@ struct Render {
             put("}");
             return;
         }
+        case Tree::Kind::Case: {
+            put("case(");
+            put(t.args(nd.c)[0]);
+            put(")");
+            for (u32 k = 0; k < nd.b; k++) {
+                Args p = t.args(t.kid(nd.a + 2 * k));
+                put("(");
+                for (usize w = 0; w < p.size(); w++) {
+                    if (w)
+                        put(" ");
+                    put(p[w]);
+                }
+                put("){");
+                node(t.kid(nd.a + 2 * k + 1));
+                put("}");
+            }
+            return;
+        }
         }
     }
 };
@@ -209,7 +228,7 @@ void test_parse()
     CHECK(shape("a;b;c") == "{a};{b};{c}");
     CHECK(shape("a\nb") == "{a};{b}");
     CHECK(shape("a;") == "{a}");
-    CHECK(shape(";;a") == "{a}");
+    CHECK(shape(";;a") == "!syntax error near ';;'"); // `;;` is a token now
     CHECK(shape("a && b") == "{a}&&{b}");
     CHECK(shape("a || b") == "{a}||{b}");
     CHECK(shape("! a") == "!{a}");
@@ -259,6 +278,18 @@ void test_parse()
     CHECK(shape("for i in; do b; done") == "for(i;){{b}}");        // POSIX, where v7 refuses
     CHECK(shape("for i in x=1; do b; done") == "for(i;x=1){{b}}"); // not an assignment
 
+    CHECK(shape("case x in a) b;; esac") == "case(x)(a){{b}}");
+    CHECK(shape("case x in a|b) c;; *) d;; esac") == "case(x)(a b){{c}}(*){{d}}");
+    CHECK(shape("case x in (a) b;; esac") == "case(x)(a){{b}}"); // POSIX's leading '('
+    CHECK(shape("case x in a) b;; esac") == "case(x)(a){{b}}");
+    CHECK(shape("case x in a) ;; esac") == "case(x)(a){}"); // an empty arm
+    CHECK(shape("case x in a) b; c;; esac") == "case(x)(a){{b};{c}}");
+    CHECK(shape("case x in a) b;; *) c; esac") == "case(x)(a){{b}}(*){{c}}"); // last `;;` spared
+    CHECK(shape("case x in esac") == "case(x)");
+    CHECK(shape("case x in\na) b;;\nesac") == "case(x)(a){{b}}");
+    CHECK(shape("case x in a=1) b;; esac") == "case(x)(a=1){{b}}"); // not an assignment
+    CHECK(shape("case in in in) b;; esac") == "case(in)(in){{b}}"); // reserved by position
+
     // Nesting, and that a construct is a pipeline like any other.
     CHECK(shape("if a; then while b; do c; done; fi") == "if({a}){while({b}){{c}}}");
     CHECK(shape("while a; do if b; then c; fi; done") == "while({a}){if({b}){{c}}}");
@@ -307,6 +338,11 @@ void test_parse()
           "piped or redirected yet");
 
     CHECK(shape("for 1 in a; do b; done") == "!syntax error: expected a name after 'for'");
+    CHECK(shape("case x in a b) c;; esac") == "!syntax error: expected ')'");
+    CHECK(shape("case x do a) b;; esac") == "!syntax error: expected 'in'");
+    CHECK(shape("esac") == "!syntax error: unexpected keyword");
+    CHECK(shape("echo (x)") == "!syntax error near '('"); // parens are operators now
+    CHECK(shape("(a; b)") == "!syntax error near '('");   // a subshell has no grammar yet
     CHECK(shape("do b; done") == "!syntax error: unexpected keyword");
     CHECK(shape("fi") == "!syntax error: unexpected keyword");
 
@@ -325,6 +361,11 @@ void test_parse()
     CHECK(shape("while a; do b") == "?syntax error: expected 'done'");
     CHECK(shape("for i in a b") == "?syntax error: expected 'do'");
     CHECK(shape("for") == "?syntax error: expected a name after 'for'");
+    CHECK(shape("case") == "?syntax error: expected a word after 'case'");
+    CHECK(shape("case x") == "?syntax error: expected 'in'");
+    CHECK(shape("case x in") == "?syntax error: expected 'esac'");
+    CHECK(shape("case x in a) b;;") == "?syntax error: expected 'esac'");
+    CHECK(shape("case x in a") == "?syntax error: expected ')'");
     CHECK(shape("!") == "!syntax error: expected a command");
 
     // Stage boundaries, checked apart from the rendering above.

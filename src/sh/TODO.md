@@ -2,13 +2,14 @@
 
 The plan of record for turning `/bin/sh` from a prompt into a language. **What lands is deleted
 from here** — its reasoning moves to [Release_Notes.md](../../doc/Release_Notes.md), which is
-where the *why* lives once it is code. Four stages have landed, recorded there under *"The lexer
+where the *why* lives once it is code. Five stages have landed, recorded there under *"The lexer
 stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h)),
 *"The shell got variables"* (the `$` walk, `IFS` splitting, and the `Field` flag the mark could
 not carry), *"A line became a tree"* (the node arena in [parse.h](parse.h), `exec_node`/`Flow` in
-[job.cpp](job.cpp), and multi-line input by re-parsing) and *"The tree learned to branch"*
-(`if`, the three loops, and `break`/`continue` as builtins that ask). What remains is numbered
-below, once, in the order it should be done.
+[job.cpp](job.cpp), and multi-line input by re-parsing), *"The tree learned to branch"*
+(`if`, the three loops, and `break`/`continue` as builtins that ask) and *"A word became a
+pattern"* (the pure matcher in [match.h](match.h), the walk in [glob.h](glob.h), and `case`).
+What remains is numbered below, once, in the order it should be done.
 
 Stages are **S1**…**S10**. A number is a name, not a position: when a stage lands its section is
 deleted and its number retires with it, so the rest keep the numbers they have and a commit
@@ -24,22 +25,21 @@ command  := (word | redirect)+
 redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
 ```
 
-There is no globbing — `*` and `?` are ordinary word characters — and no way to run a file of
-commands beyond `sh -s` reading stdin. Release_Notes.md records this as an explicit
-*non-*decision:
+There is no way to run a file of commands beyond `sh -s` reading stdin. Release_Notes.md records
+this as an explicit *non-*decision:
 
 > `/bin/sh` has no variables, no `-c`, no globbing and no scripts beyond `sh -s`. None of that
 > was blocked by the shell being kernel code and none of it is blocked now; they were simply
 > never written.
 
-The target is the full v7 Bourne subset — lists, `if`/`while`/`until`/`for`/`case`, functions,
-the `${x-y}` family, positional parameters, command substitution, here-documents, globbing,
-`trap`, and `test`/`[` as a builtin. The reference is the same author's V7 port at
+The target is the full v7 Bourne subset — functions, positional parameters, command substitution,
+here-documents, `trap`, and `test`/`[` as a builtin, on top of the lists, control flow, `case`,
+`${x-y}` family and globbing that have landed. The reference is the same author's V7 port at
 `/Users/vak/Project/Besm-6/v7besm/cmd/sh/` (≈3,450 lines of code across 29 files).
 
 **Headroom is not the constraint.** `kernel.wasm` does not change — every line of this is in the
-process binary. `sh.wasm` is 127,614 bytes and only `sh` links `src/sh/`; the only budget it
-spends is `rootfs/ = 1048576` against a 597,092-byte tree.
+process binary. `sh.wasm` is 142,221 bytes and only `sh` links `src/sh/`; the only budget it
+spends is `rootfs/ = 1048576` against a 611,699-byte tree.
 
 **And no syscall changes.** Everything scripting needs — pipe, spawn, wait, open, list, stat,
 chdir, getpid — is already in the §4.3 table. That is the concrete proof of the note above.
@@ -52,7 +52,7 @@ Six things in the v7 set do not exist in Braam and must be decided rather than p
 
 | v7 | Why not | Substitute |
 |---|---|---|
-| `( list )` as a real subshell | There is no `fork`. Spawning `/bin/sh` loses the variable table (there is no environment anywhere in the ABI — `Sys::Spawn`'s payload is three fds and an argv blob) and costs a worker against `SYS_PROC_DEPTH = 8`. | Run it in the current process, **saving and restoring the shell's own mutable state** around it: cwd, variables, positional parameters, traps, `$-`. Gets `(cd /x; ls)` and `(set -e; …)` right; loses only memory isolation. |
+| `( list )` as a real subshell (S4 made `(` and `)` tokens for `case`, so only the grammar is missing) | There is no `fork`. Spawning `/bin/sh` loses the variable table (there is no environment anywhere in the ABI — `Sys::Spawn`'s payload is three fds and an argv blob) and costs a worker against `SYS_PROC_DEPTH = 8`. | Run it in the current process, **saving and restoring the shell's own mutable state** around it: cwd, variables, positional parameters, traps, `$-`. Gets `(cd /x; ls)` and `(set -e; …)` right; loses only memory isolation. |
 | A compound command in the background — `( … ) &`, `while … done &` | Backgrounding means the shell keeps running while the group runs, and nothing in a process can wait for a sibling task (`Channel::park_sender` panics rather than lose a wakeup). | **Refuse it**: `cannot run a compound command in the background`. `cmd &` on a simple pipeline is unaffected. |
 | `exec cmd` replacing the image | A process is a wasm instance in a worker; there is no re-instantiate-in-place, and `spawn` makes a new pid. | `exec` with **no** command makes its redirections permanent on the shell — that works exactly, and is half of what `exec` is for. `exec cmd` spawns, waits, and exits with the child's status. |
 | `#!` scripts | `exec_meta` in [../user/exec.cpp](../user/exec.cpp) requires `\0asm` plus a `braam` custom section with `PROC_ABI == 9`. A text file can never be exec'd. | `sh file` and `sh < file` only. No `./script.sh`. |
@@ -72,13 +72,12 @@ v7); `set -o`; `ulimit`, `umask`, `newgrp`, `hash`, `times` (no kernel concept e
 
 ## Stages
 
-Ten, in order. Each builds, passes CTest, and leaves a shell strictly better than the one
+Six left, in order. Each builds, passes CTest, and leaves a shell strictly better than the one
 before. Each carries the invariant it protects — that part is not recoverable from the code, and
 moves to Release_Notes.md when the stage lands and this section is deleted.
 
 | # | Stage | Days |
 |---|---|---|
-| S4 | Globbing and `case` | 2.0 |
 | S5 | Command substitution | 2.0 |
 | S6 | Functions, `.`, `eval`, `return` | 2.0 |
 | S7 | Redirection completion | 2.5 |
@@ -86,37 +85,10 @@ moves to Release_Notes.md when the stage lands and this section is deleted.
 | S9 | Entry points | 1.0 |
 | S10 | Integration, docs, budget | 2.0 |
 
-**13.5 days, call it 16 — three working weeks.** The two places it will go over are the
+**11.5 days, call it 14.** The two places it will go over are the
 capture/deadlock reasoning in S5 and the here-doc/fd bookkeeping in S7. A minimum-credible slice
 (`test` and `[` out of S8, plus `sh file` out of S9) is **~3 days** and is most of the remaining
 utility.
-
-### S4. Globbing and `case`
-
-**Scope.** `*`, `?`, `[a-z]`, `[!…]` over the real store, and `case`/`esac` with its arms. This
-is the first reader the quoting mask has, and what pays for it.
-
-**Globbing splits pure from impure.**
-
-- **`match.cpp` — pure, and added to `tests.wasm`.**
-  `bool glob_match(Str pattern, Span<const u8> mark, Str name)` with `*`, `?`, `[a-z]`, `[!…]`; a
-  marked metacharacter matches itself. v7's `gmatch`, with its tail calls turned into loop
-  iterations (the port's own fix — an unbounded pattern recursed once per character).
-- **The directory walk lives in `expand.cpp`** — split the field on `/`, expand only components
-  holding an unquoted metacharacter, `list_dir` each, sort the survivors, and leave the word alone
-  if nothing matched, which is the Bourne rule. There is no shared sort in the tree (`ls` has its
-  own `sort_block`), so a short insertion sort.
-
-**`case` patterns use the same `glob_match`.** That shared use is what pays for it.
-
-**Files.** new `match.{h,cpp}`; [expand.cpp](expand.cpp) (the walk), [parse.cpp](parse.cpp) and
-[job.cpp](job.cpp) (`case`), [../../test/CMakeLists.txt](../../test/CMakeLists.txt).
-
-**Tests.** new `test_match.cpp` — `*`, `?`, `[a-z]`, `[!…]`, a quoted `*`, a leading dot, the
-pathological `a*a*a*b`. `run.mjs` — `echo /bin/l*` over the real store.
-
-**Done when** `match.cpp` is in `tests.wasm`, a quoted `*` matches itself, and `echo /bin/l*`
-lists real files.
 
 ### S5. Command substitution
 
@@ -148,8 +120,9 @@ That is today's behaviour; do not fix it here.
 
 **Substitution is a hook the expander calls, not a pre-pass** — v7's `copyto`/`skipto` split — so
 that `${x-$(cmd)}` runs the command only when the branch is taken. The pure half of expansion
-takes a `substitute`/`glob` pair alongside its name lookup; the unit tests pass canned ones, so
-it stays testable without reaching a syscall.
+takes a `substitute` callback alongside its name lookup; the unit tests pass a canned one, so it
+stays testable without reaching a syscall. Globbing needed no such hook — S4 made it a pass over
+the finished fields in `glob.cpp` instead.
 
 **Files.** [builtin.h](builtin.h) and every file in `builtin/`, [expand.cpp](expand.cpp),
 [job.cpp](job.cpp), [tokenize.cpp](tokenize.cpp) (the balanced `$(` scan).
@@ -270,18 +243,18 @@ budget change.
 
 ### Size
 
-Calibrated against the binary rather than guessed per stage, and re-measured twice: S1 cost
-20,807 bytes over 1,017 new lines and S2 cost 10,644 over ~450 — ≈20 bytes of wasm per line, and
-S2 came in under that because the node arena replaced code as much as it added. The stages left
-are more coroutine than logic, so budget nearer 40.
+Calibrated against the binary rather than guessed per stage, and re-measured at every stage: S1
+cost 20,807 bytes over 1,017 new lines, S2 10,644 over ~450, S3 12,678 and S4 14,607 — ≈20 bytes
+of wasm per line, which the arena stages came in under and the coroutine ones over. The stages
+left are more coroutine than logic, so budget nearer 40.
 
-- **`sh.wasm`: 114,936 → ~175,000 bytes.**
-- **Staging tree: 599,238 → ~660,000 of 1,048,576 — 63%.** No budget change needed.
+- **`sh.wasm`: 142,221 → ~180,000 bytes.**
+- **Staging tree: 611,699 → ~650,000 of 1,048,576 — 62%.** No budget change needed.
 - **`kernel.wasm` does not move at all.**
 
-~1,500 more lines of shell C++ (`src/sh/` 3,501 → ~5,000), ~700 of `test/unit/`, ~220 of
-`test/run.mjs`, ~340 of documentation. The v7 reference is 3,710 lines of C for the same feature
-set while doing its own memory management, `setjmp` control flow and string library.
+~1,000 more lines of shell C++, ~400 of `test/unit/`, ~150 of `test/run.mjs`, ~250 of
+documentation. The v7 reference is 3,710 lines of C for the same feature set while doing its own
+memory management, `setjmp` control flow and string library.
 
 ---
 
@@ -289,13 +262,13 @@ set while doing its own memory management, `setjmp` control flow and string libr
 
 Each stage lists its own cases above. What follows holds across all of them.
 
-**The purity boundary is what keeps this testable, so hold it.** `parse.cpp`, `tokenize.cpp` and
-the new `match.cpp` touch nothing but `Str`, `String` and `Vec`, and
+**The purity boundary is what keeps this testable, so hold it.** `parse.cpp`, `tokenize.cpp`,
+`expand.cpp` and `match.cpp` touch nothing but `Str`, `String` and `Vec`, and
 [../../test/CMakeLists.txt](../../test/CMakeLists.txt) compiling them into `tests.wasm` **is**
-the check — a syscall in any of them is a link error. `expand.cpp` does not qualify once it can
-call `list_dir` and `exec_node`, so factor its pure part — quote removal, `$` splitting, `${…}`
-operators, field splitting against `IFS` — behind callbacks and test that; the callbacks are
-table literals in the test.
+the check — a syscall in any of them is a link error. S4 is what that rule already cost: the
+directory walk could not go in `expand.cpp` and became [glob.cpp](glob.cpp), which is not in that
+list. Anything reaching `exec_node` goes the same way; the pure part keeps its callbacks and the
+tests fill them with table literals.
 
 **Unit tests are written in `test_parse.cpp`'s string-shape style**, where one rendered string
 compare checks a whole input. `shape()` growing a case per construct is the whole strategy.

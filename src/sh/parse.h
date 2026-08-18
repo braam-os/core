@@ -5,11 +5,13 @@
 //   sep      := ';' | '&' | newline
 //   and_or   := pipeline (('&&' | '||') pipeline)*
 //   pipeline := ['!'] (compound | simple ('|' simple)*)
-//   compound := group | if | loop | for
+//   compound := group | if | loop | for | case
 //   group    := '{' list '}'
 //   if       := 'if' list 'then' list ('elif' list 'then' list)* ['else' list] 'fi'
 //   loop     := ('while' | 'until') list 'do' list 'done'
 //   for      := 'for' name ['in' word*] sep 'do' list 'done'
+//   case     := 'case' word 'in' arm* 'esac'
+//   arm      := ['('] word ('|' word)* ')' list [';;']
 //   simple   := assign* (word | redirect)+ | assign+ redirect*
 //   assign   := name '=' word, and only ahead of the first ordinary word
 //   redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
@@ -76,6 +78,9 @@ struct Tree {
         Until, // the same, run while the condition fails
         For,   // a the body, b the command holding the name then the words,
                // c set when there was an `in`
+        Case,  // a, b: b (patterns, body) pairs in the child list, where a
+               // pair is the command holding that arm's patterns then the
+               // body node; c the command holding the word being matched
     };
 
     enum class Op : u8 { And, Or };

@@ -1,10 +1,12 @@
 #include "job.h"
 
 #include "expand.h"
+#include "glob.h"
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/traits.h"
 #include "kernel/vec.h"
+#include "match.h"
 #include "parse.h"
 #include "shell.h"
 #include "var.h"
@@ -133,41 +135,45 @@ void drop_entry(u32 id)
 }
 
 // Everything the pipeline holds. An assignment value and a redirection target
-// stay one word; only an argv word may become several, or none.
-Result<void> expand_all(Run *r, ExpandErr &err)
+// stay one word; only an argv word may become several, or none — and only an
+// argv word is globbed, since the other two are one field by definition.
+Task<Result<void>> expand_all(Run *r, ExpandErr &err)
 {
     const Vars &v = shell_vars();
     usize n       = r->ncmds;
+    Vec<Field> raw_fields;
 
     for (usize i = 0; i < n; i++) {
         if (!r->assign0.push(r->avals.size()))
-            return Err(Error::NoMemory);
+            co_return Err(Error::NoMemory);
         Args a = r->t->assigns(r->cmd0 + i);
         for (usize k = 0; k < a.size(); k++) {
             Str w = a[k];
-            TRY_VOID(expand_word(w.substr(w.find('=') + 1), v, Split::One, r->avals, err));
+            CO_TRY_VOID(expand_word(w.substr(w.find('=') + 1), v, Split::One, r->avals, err));
         }
     }
 
     for (usize i = 0; i < n; i++) {
         if (!r->argv0.push(r->words.size()))
-            return Err(Error::NoMemory);
+            co_return Err(Error::NoMemory);
         Args raw = r->t->args(r->cmd0 + i);
         for (usize k = 0; k < raw.size(); k++)
-            TRY_VOID(expand_word(raw[k], v, Split::Fields, r->words, err));
+            CO_TRY_VOID(expand_word(raw[k], v, Split::Fields, raw_fields, err));
+        Task<Result<void>> g = glob_fields(raw_fields, r->words);
+        CO_TRY_VOID(g ? co_await g : Err(Error::NoMemory));
     }
 
     usize argvn = r->words.size();
     for (usize i = 0; i < n; i++)
         for (const Redirect &rd : r->t->redirects(r->cmd0 + i))
-            TRY_VOID(expand_word(r->t->target(rd), v, Split::One, r->words, err));
+            CO_TRY_VOID(expand_word(r->t->target(rd), v, Split::One, r->words, err));
 
     // The views come after the last append, as parse.h's freeze() does.
     if (!r->argv.reserve(argvn) || !r->targets.reserve(r->words.size() - argvn))
-        return Err(Error::NoMemory);
+        co_return Err(Error::NoMemory);
     for (usize k = 0; k < r->words.size(); k++)
         (k < argvn ? r->argv : r->targets).push(r->words[k].text.str());
-    return {};
+    co_return {};
 }
 
 // One stage's assignment prefix. With `undo` the displaced values are kept.
@@ -223,6 +229,17 @@ Task<void> say2(u32 fd, Str what, Str why)
         line.push('\n'))
         if (Task<Result<void>> t = write_all(fd, line.str()))
             co_await t;
+}
+
+// What an expansion failure prints, whichever construct asked.
+Task<void> say_expand(Error e, const ExpandErr &err)
+{
+    if (e != Error::Invalid)
+        co_await say(SYS_STDERR, "out of memory");
+    else if (err.name.empty())
+        co_await say(SYS_STDERR, err.message);
+    else
+        co_await say2(SYS_STDERR, err.name, err.message);
 }
 
 u32 open_flags(Redir kind)
@@ -464,7 +481,13 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
 
     // Expansion, before anything is opened or spawned.
     ExpandErr xerr;
-    if (Result<void> e = expand_all(r, xerr); e.is_err()) {
+    Task<Result<void>> xt = expand_all(r, xerr);
+    if (Result<void> e = xt ? co_await xt : Err(Error::NoMemory); e.is_err()) {
+        // A ^C caught mid-glob abandons the line, as a stage reporting 130 does.
+        if (e.error() == Error::Cancelled) {
+            var_status(130);
+            co_return 130;
+        }
         if (e.error() != Error::Invalid)
             co_await say(SYS_STDERR, "out of memory");
         else if (xerr.name.empty())
@@ -793,10 +816,12 @@ Task<i32> exec_for(Ctx &cx, const Tree &tree, u32 n)
     // v7 takes a reference on the parameter block for the same reason.
     Vec<String> items;
     if (nd.c) {
+        Vec<Field> raw_fields;
         Vec<Field> fields;
         ExpandErr err;
         for (usize i = 1; i < names.size(); i++)
-            if (Result<void> e = expand_word(names[i], shell_vars(), Split::Fields, fields, err);
+            if (Result<void> e =
+                    expand_word(names[i], shell_vars(), Split::Fields, raw_fields, err);
                 e.is_err()) {
                 if (e.error() != Error::Invalid)
                     co_await say(SYS_STDERR, "out of memory");
@@ -807,6 +832,15 @@ Task<i32> exec_for(Ctx &cx, const Tree &tree, u32 n)
                 var_status(1);
                 co_return 1;
             }
+        Task<Result<void>> g = glob_fields(raw_fields, fields);
+        if (Result<void> e = g ? co_await g : Err(Error::NoMemory); e.is_err()) {
+            if (e.error() == Error::Cancelled) {
+                var_status(130);
+                co_return 130;
+            }
+            co_await say(SYS_STDERR, "out of memory");
+            co_return 1;
+        }
         if (!items.reserve(fields.size())) {
             co_await say(SYS_STDERR, "out of memory");
             co_return 1;
@@ -850,6 +884,56 @@ Task<i32> exec_for(Ctx &cx, const Tree &tree, u32 n)
     cx.loops--;
     if (!ran)
         var_status(status);
+    co_return status;
+}
+
+// The word and each pattern are one field however they expand, and a pattern
+// keeps its quoting mask — which is what makes `'a*'` match a literal star.
+// Not a loop, so it never touches cx.loops: a `break` in an arm belongs to
+// whatever loop is above.
+Task<i32> exec_case(Ctx &cx, const Tree &tree, u32 n)
+{
+    const Tree::Node &nd = tree.node(n);
+
+    Vec<Field> subject;
+    ExpandErr err;
+    if (Result<void> e = expand_word(tree.args(nd.c)[0], shell_vars(), Split::One, subject, err);
+        e.is_err()) {
+        if (Task<void> t = say_expand(e.error(), err))
+            co_await t;
+        var_status(1);
+        co_return 1;
+    }
+
+    Task<i32> step;
+    i32 status = 0;
+    u32 k      = 0;
+    bool took  = false;
+
+    for (k = 0; k < nd.b; k++) {
+        Args pats = tree.args(tree.kid(nd.a + 2 * k));
+        for (usize p = 0; p < pats.size() && !took; p++) {
+            Vec<Field> pat;
+            if (Result<void> e = expand_word(pats[p], shell_vars(), Split::One, pat, err);
+                e.is_err()) {
+                if (Task<void> t = say_expand(e.error(), err))
+                    co_await t;
+                var_status(1);
+                co_return 1;
+            }
+            took = glob_match(pat[0].text.str(), Bytes(pat[0].mark.data(), pat[0].mark.size()),
+                              subject[0].text.str());
+        }
+        if (!took)
+            continue;
+        step   = exec_node(cx, tree, tree.kid(nd.a + 2 * k + 1));
+        status = step ? co_await step : 1;
+        break;
+    }
+
+    // Nothing ran, so nothing published a status — as `if` with no branch.
+    if (!took)
+        var_status(0);
     co_return status;
 }
 
@@ -936,6 +1020,11 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
 
     case Tree::Kind::For:
         step   = exec_for(cx, tree, n);
+        status = step ? co_await step : 1;
+        break;
+
+    case Tree::Kind::Case:
+        step   = exec_case(cx, tree, n);
         status = step ? co_await step : 1;
         break;
     }

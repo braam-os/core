@@ -10,6 +10,7 @@ add_executable(tests
     unit/test_hostfs.cpp
     unit/test_jsref.cpp
     unit/test_io.cpp
+    unit/test_match.cpp
     unit/test_opt.cpp
     unit/test_pane.cpp
     unit/test_path.cpp
@@ -31,11 +32,13 @@ add_executable(tests
     unit/test_vec.cpp
     unit/test_vfs.cpp
 
-    # The grammar and the word expander are the shell binary's, and pure: they
-    # touch nothing but Str, String and Vec, so they are compiled in here rather
-    # than linked from braam_sh, which would drag the process runtime's imports
-    # in with them.
+    # The grammar, the word expander and the pattern matcher are the shell
+    # binary's, and pure: they touch nothing but Str, String and Vec, so they are
+    # compiled in here rather than linked from braam_sh, which would drag the
+    # process runtime's imports in with them. glob.cpp is the walk over the
+    # store and does not belong here.
     ../src/sh/expand.cpp
+    ../src/sh/match.cpp
     ../src/sh/parse.cpp
     ../src/sh/tokenize.cpp
 
