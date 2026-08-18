@@ -2,7 +2,7 @@
 
 The plan of record for turning `/bin/sh` from a prompt into a language. **What lands is deleted
 from here** — its reasoning moves to [Release_Notes.md](../../doc/Release_Notes.md), which is
-where the *why* lives once it is code. Nine stages have landed, recorded there under *"The lexer
+where the *why* lives once it is code. Ten stages have landed, recorded there under *"The lexer
 stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h)),
 *"The shell got variables"* (the `$` walk, `IFS` splitting, and the `Field` flag the mark could
 not carry), *"A line became a tree"* (the node arena in [parse.h](parse.h), `exec_node`/`Flow` in
@@ -14,8 +14,10 @@ rather than awaiting, and the pipe the shell drains) and *"A line could outlive 
 (functions, the refcounted tree, `.`, `eval` and `return`) and *"The ABI changed, once"*
 (here-documents, `>&`, `exec`, the base stdio on `Ctx`, and `( … )`) and *"The rule grew a
 second clause"* (`test`, `[`, `:`, `echo`, `true`, `false`, `read`, `wait`, `trap` and
-`set -e -x -u`, the pure evaluator in [cond.h](cond.h) and the driver beside it). What remains is
-numbered below, once, in the order it should be done.
+`set -e -x -u`, the pure evaluator in [cond.h](cond.h) and the driver beside it) and *"The shell
+got a front door"* (`sh <file>`, `sh -c`, `$0` and the positional parameters at startup, and the
+policy `${x?}` had been waiting for). What remains is numbered below, once, in the order it
+should be done.
 
 Stages are **S1**…**S10**. A number is a name, not a position: when a stage lands its section is
 deleted and its number retires with it, so the rest keep the numbers they have and a commit
@@ -38,9 +40,9 @@ this as an explicit *non-*decision:
 > was blocked by the shell being kernel code and none of it is blocked now; they were simply
 > never written.
 
-What is left of the target is the entry points — on top of the lists, control flow, `case`, the
-`${x-y}` family, globbing, command substitution, functions, the redirections and the scripting
-builtins that have landed. The reference is the same author's V7 port at
+What is left of the target is the integration pass — on top of the lists, control flow, `case`,
+the `${x-y}` family, globbing, command substitution, functions, the redirections, the scripting
+builtins and the entry points that have landed. The reference is the same author's V7 port at
 `/Users/vak/Project/Besm-6/v7besm/cmd/sh/` (≈3,450 lines of code across 29 files).
 
 **Headroom is not the constraint.** `kernel.wasm` does not change — every line of this is in the
@@ -49,7 +51,7 @@ spends is `rootfs/ = 1048576` against a 654,945-byte tree.
 
 **One syscall change, and only one.** Seven stages needed nothing from the §4.3 table that was
 not in it. S7 needed `Sys::Dup`, because `Spawn` *moves* a descriptor and `exec >file` has to keep
-one; `PROC_ABI` went 9 → 10 and the import surface did not move. S8 asked for nothing, and
+one; `PROC_ABI` went 9 → 10 and the import surface did not move. S8 and S9 asked for nothing, and
 nothing left below asks for another.
 
 ---
@@ -63,14 +65,16 @@ Six things in the v7 set do not exist in Braam and must be decided rather than p
 | `( list )` as a real subshell — **landed at S7** | There is no `fork`. Spawning `/bin/sh` loses the variable table (there is no environment anywhere in the ABI — `Sys::Spawn`'s payload is three fds and an argv blob) and costs a worker against `SYS_PROC_DEPTH = 8`. | Run it in the current process, **saving and restoring the shell's own mutable state** around it: cwd, variables, positional parameters, traps, `$-`. Gets `(cd /x; ls)` and `(set -e; …)` right; loses only memory isolation. |
 | A compound command in the background — `( … ) &`, `while … done &` | Backgrounding means the shell keeps running while the group runs, and nothing in a process can wait for a sibling task (`Channel::park_sender` panics rather than lose a wakeup). | **Refuse it**: `cannot run a compound command in the background`. `cmd &` on a simple pipeline is unaffected. |
 | `exec cmd` replacing the image — **landed at S7** | A process is a wasm instance in a worker; there is no re-instantiate-in-place, and `spawn` makes a new pid. | `exec` with **no** command makes its redirections permanent on the shell — that works exactly, and is half of what `exec` is for. `exec cmd` spawns, waits, and exits with the child's status. |
-| `#!` scripts | `exec_meta` in [../user/exec.cpp](../user/exec.cpp) requires `\0asm` plus a `braam` custom section with `PROC_ABI == 9`. A text file can never be exec'd. | `sh file` and `sh < file` only. No `./script.sh`. |
+| `#!` scripts — **decided at S9** | `exec_meta` in [../user/exec.cpp](../user/exec.cpp) requires `\0asm` plus a `braam` custom section with `PROC_ABI == 10`. A text file can never be exec'd. | `sh file` and `sh < file` only. No `./script.sh`. |
 | `export` reaching a child | There is no environment in the wasm ABI. | `export` records the intent, honoured by `.`, functions and `eval` — same process. Taking the name cost `/bin/export` its own, which is now `save`. Nothing crosses a spawn. The alternative is `PROC_ABI == 10` across `sysabi.h`, `syscall.cpp`, `exec.cpp`, `rt.h`, `web/proc.js`, System_Calls.md and `run.mjs` — a milestone of its own with no consumer, since no program in `/bin` reads an environment and there is no `PATH`, `HOME` or `TERM` to carry. |
 | `trap … <signal>` — **landed at S8** | There are no signals, and `CancelState::cancelled` ([../kernel/sched.h](../kernel/sched.h)) is a **sticky** bool: once ^C sets it, every subsequent await returns `Err(Cancelled)` at once. | `trap … 0` (EXIT) works on any normal exit. `trap … 2` (INT) works in an **interactive** shell, where ^C is an ordinary key and the shell was never cancelled — it fires when a stage reports 130. In a *script* shell the process itself is cancelled, so the handler could neither spawn nor write: accepted, never fires. `trap '' INT` (ignore) is refused outright. |
 
-One further gap this work **creates** and must record:
+Two further gaps this work **creates** and must record:
 
 - **`$$` is not unique per shell.** `/bin/sh` at the top level takes init's pid, since it is a
   process inside init's task (Concept.md §4). A nested `sh` gets its own.
+- **A script file is parsed whole, so a syntax error anywhere runs none of it.** S9 made
+  `sh file` what `. file` already was; v7 executes as it parses.
 
 Left out deliberately: `$((…))` arithmetic, `${x:-y}` colon forms, `${#x}`, `${x#…}` (none are
 v7); `set -o`; `ulimit`, `umask`, `newgrp`, `hash`, `times` (no kernel concept exists); `bg` and
@@ -80,29 +84,13 @@ v7); `set -o`; `ulimit`, `umask`, `newgrp`, `hash`, `times` (no kernel concept e
 
 ## Stages
 
-Two left, in order. Each builds, passes CTest, and leaves a shell strictly better than the one
-before. Each carries the invariant it protects — that part is not recoverable from the code, and
-moves to Release_Notes.md when the stage lands and this section is deleted.
+One left. It builds, passes CTest, and leaves a shell strictly better than the one before. It
+carries the invariant it protects — that part is not recoverable from the code, and moves to
+Release_Notes.md when the stage lands and this section is deleted.
 
 | # | Stage | Days |
 |---|---|---|
-| S9 | Entry points | 1.0 |
 | S10 | Integration, docs, budget | 2.0 |
-
-**3 days, call it 4.** `sh file` out of S9 is most of the remaining utility.
-
-### S9. Entry points
-
-**Scope.** `sh file args`, `sh -c cmd`, `$0`, and the exit-status conventions.
-
-**Files.** [../cmd/sh.cpp](../cmd/sh.cpp), [shell.cpp](shell.cpp), [shell.h](shell.h).
-
-**Tests.** `run.mjs` — plant a script in [../../test/fakefs.mjs](../../test/fakefs.mjs) before
-boot (see Verification below), then `sh /home/t.sh` and assert its rows; `sh -c '…'` needs no
-file at all. `sh -s < file` already works and S8's cases use it.
-
-**Done when** a script file runs to completion and its exit status reaches the parent shell's
-`[n]`.
 
 ### S10. Integration, docs, budget
 
@@ -117,15 +105,15 @@ budget change.
 
 Calibrated against the binary rather than guessed per stage, and re-measured at every stage: S1
 cost 20,807 bytes over 1,017 new lines, S2 10,644 over ~450, S3 12,678, S4 14,607, S5 8,699,
-S6 13,897, S7 20,650 and S8 26,270 over ~1,000 — ≈20 bytes of wasm per line, which the arena
-stages came in under and the coroutine ones over. S8 also added `/bin/test`, 19,246 of the tree
-on its own. What is left is entry points and prose, so budget nearer 25.
+S6 13,897, S7 20,650, S8 26,270 over ~1,000 and S9 3,501 over ~150 — ≈20 bytes of wasm per line,
+which the arena stages came in under and the coroutine ones over. S8 also added `/bin/test`,
+19,246 of the tree on its own. What is left is prose, so budget nothing.
 
-- **`sh.wasm`: 211,737 → ~218,000 bytes.**
-- **Staging tree: 700,528 → ~707,000 of 1,048,576 — 67%.** No budget change needed.
-- **`kernel.wasm` moved once, at S7, and should not again.**
+- **`sh.wasm`: 215,238 bytes, and S10 should not move it.**
+- **Staging tree: 704,027 of 1,048,576 — 67%.** No budget change needed.
+- **`kernel.wasm` moved once, at S7, and has not since.**
 
-~250 more lines of shell C++, ~100 of `test/run.mjs`, ~250 of documentation. The v7 reference is
+~100 more lines of `test/run.mjs`, ~250 of documentation. The v7 reference is
 3,710 lines of C for the same feature set while doing its own memory management, `setjmp` control
 flow and string library.
 

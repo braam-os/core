@@ -4,22 +4,6 @@
 #include "sh/job.h"
 #include "sh/var.h"
 
-namespace {
-
-// One option letter, or 0.
-u32 flag_of(char c)
-{
-    if (c == 'e')
-        return SH_ERREXIT;
-    if (c == 'u')
-        return SH_NOUNSET;
-    if (c == 'x')
-        return SH_XTRACE;
-    return 0;
-}
-
-} // namespace
-
 // Builtins because the table, the option letters and the positional parameters
 // are this process's own: a `set` in /bin would fill a child's and exit.
 
@@ -42,7 +26,7 @@ Task<i32> builtin_set(Args args, ShIo io)
 
         bool on = w[0] == '-';
         for (usize k = 1; k < w.size(); k++) {
-            u32 bit = flag_of(w[k]);
+            u32 bit = sh_flag_of(w[k]);
             if (!bit) {
                 co_await write_all(io.err, "usage: set [-eux] [+eux] [--] [<arg>...]\n");
                 co_return 2;

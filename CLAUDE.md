@@ -346,11 +346,14 @@ change to argue in Concept.md first.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything not a child of the caller.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.
-- **The shell has no `-c` and no scripts beyond `sh -s`.** It has variables, lists, control flow,
-  `case`, globbing, `$( )`, functions, `test`, `read`, `trap` and `set -e -x -u` now, but
-  **`export` reaches no child**: there is no environment anywhere in the wasm ABI, so it records
-  an intent that only this process can honour. `/bin/export` was renamed `save` to give the
-  builtin its name.
+- **`export` reaches no child.** The shell has variables, lists, control flow, `case`, globbing,
+  `$( )`, functions, `test`, `read`, `trap`, `set -e -x -u` and, since S9, `sh <file>`, `sh -c`
+  and `$0` — but there is no environment anywhere in the wasm ABI, so `export` records an intent
+  that only this process can honour. `/bin/export` was renamed `save` to give the builtin its name.
+- **No `#!` scripts, and a script file is parsed whole.** `exec_meta` requires `\0asm` plus a
+  `braam` section, so a text file can never be exec'd: `sh file` and `sh < file` are the whole of
+  it and `./script.sh` will not arrive. `sh file` reads and parses the file at once, as `.` does,
+  so a syntax error anywhere in it means none of it runs — v7 runs everything above the error.
 - **`trap` has two signals and one of them cannot be ignored.** There are none in the system, so
   `trap … 0` (EXIT) and `trap … 2` (INT) are all there is, and `trap '' 2` is refused rather than
   accepted and dropped: `CancelState::cancelled` is sticky. A `trap … 2` in a *script* shell can

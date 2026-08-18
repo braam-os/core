@@ -2653,7 +2653,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 2,426-byte file: more than the eight writes a pipe
+    // Three copies of a 2,424-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -2682,9 +2682,9 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "braam: nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 7,278 bytes is fifteen chunks against eight
+    // The many-writes case: 7,272 bytes is fifteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1227 7278");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1224 7272");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;
@@ -2914,6 +2914,57 @@ if (mode === "--kernel") {
     tshows("wait; echo $?", "0"); // nothing to wait for
 
     submit("rm -r /home/s8", (gt += 0.01));
+
+    // S9: the entry points. The scripts are planted straight into the store,
+    // so each sits next to the assertion and the archive does not grow.
+    let s9t = 14200;
+    const sshows = (line, want) => {
+        submit("clear", (s9t += 0.005));
+        const got = output(submit(line, (s9t += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+    const plant = (path, text) => store.files.set(path, new TextEncoder().encode(text));
+
+    submit("mkdir /home/s9", (s9t += 0.01));
+    plant("/home/s9/loop.sh", "for i in 1 2 3\ndo\n  echo $i\ndone\n");
+    plant("/home/s9/zero.sh", "echo $0\n");
+    plant("/home/s9/pos.sh", "echo $1 $#\n");
+    plant("/home/s9/seven.sh", "echo out\nexit 7\n");
+    plant("/home/s9/err.sh", "false\necho never\n");
+    plant("/home/s9/q.sh", "echo start\necho ${nosuch?is unset}\necho never\n");
+    plant("/home/s9/bad.sh", "echo start\nif true\n");
+
+    sshows("echo $0", "/bin/sh"); // argv[0], which for init's shell is the path
+    sshows("sh /home/s9/loop.sh", "1|2|3");
+    sshows("sh -s < /home/s9/loop.sh", "1|2|3"); // the older mode, still there
+    sshows("sh /home/s9/zero.sh", "/home/s9/zero.sh");
+    sshows("sh /home/s9/pos.sh x y", "x 2");
+    sshows("sh -c 'echo hi'", "hi");
+    // $0 is the word after the command string, which is v7's arithmetic.
+    sshows("sh -c 'echo $0 $1' a b", "a b");
+    sshows("sh -c 'echo $#' a b c", "2");
+    sshows("sh -c 'exit 3'; echo $?", "3");
+    sshows("sh -x -c 'echo hi'", "+ echo hi|hi");
+    sshows("sh -e /home/s9/err.sh", "");
+    sshows("sh /home/nosuch.sh; echo $?", "sh: /home/nosuch.sh: not found|127");
+    sshows("sh -z", "usage: sh [-eux] [-s | -c <command> | <file>] [<arg>...]");
+    sshows("sh -c", "usage: sh [-eux] [-s | -c <command> | <file>] [<arg>...]");
+    // Parsed whole, as `.` is: a syntax error anywhere runs none of it.
+    sshows("sh /home/s9/bad.sh; echo $?", "braam: syntax error: expected 'then'|2");
+    // ${x?} ends a script, which is what S9 decided and v7 does. The line it
+    // is on is the second, so `start` printed and `never` did not.
+    sshows("sh /home/s9/q.sh; echo $?", "start|braam: nosuch: is unset|1");
+
+    // A script's status reaches the parent's prompt as [n].
+    s = submit("clear", (s9t += 0.01));
+    s = submit("sh /home/s9/seven.sh", (s9t += 0.01));
+    if (!rows(s).includes("out"))
+        fail(`the script printed ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes(prompt(7)))
+        fail(`a script's exit 7 left ${row(s, s.cursor_y)}, expected ${prompt(7)}`);
+
+    submit("rm -r /home/s9", (s9t += 0.01));
 
     // exit ends the shell, and nothing runs after it — not even the rest of
     // its own line, which is Flow::Exit end to end. Last, for that reason.

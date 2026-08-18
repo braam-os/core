@@ -39,6 +39,9 @@ constexpr u32 SH_XTRACE  = 4;
 u32 sh_flags();
 void sh_set_flags(u32 f);
 
+// One option letter, or 0. The one table, shared by `set` and by sh's argv.
+u32 sh_flag_of(char c);
+
 // `trap`. Two signals exist here: 0 is EXIT and anything else is INT, since
 // there are no signals and the builtin refuses every other number.
 bool trap_set(u32 sig, Str action);

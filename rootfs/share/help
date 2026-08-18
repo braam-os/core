@@ -28,7 +28,7 @@ pbpaste  write the clipboard to the output
 ps       list the tasks the kernel is running, and which hold a worker
 pwd      print the working directory
 rm       [-r] <path>... — remove files, or directories with -r
-sh       [-s] — the shell; -s reads stdin instead of drawing a prompt
+sh       [-eux] [-s | -c <command> | <file>] [<arg>...] — the shell
 sleep    <ms> — wait, in milliseconds
 spin     [<millions>] — loop without yielding, to be killed
 tail     [-n <count>] [<file>...] — the last lines, ten by default

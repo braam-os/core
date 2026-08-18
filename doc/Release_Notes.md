@@ -7,6 +7,52 @@ of the two needs amending.
 
 ---
 
+## The shell got a front door
+
+Tenth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `sh <file> args`, `sh -c cmd`, `-e -x
+-u` at startup, `$0` and the positional parameters a shell begins with. `sh.wasm` went from
+211,737 to 215,238 bytes and the staging tree from 700,528 to 704,027 against an unchanged 1 MiB
+budget — 3,501 bytes over about 150 lines, the cheapest stage of the ten. **`kernel.wasm` did not
+move**: 148,604 of 262,144, byte for byte what S7 left. The syscall ABI did not change and
+`PROC_ABI` is still 10.
+
+**A script file is read whole and parsed once, because that is what `.` already did.** The
+alternative was the loop `sh -s` runs — a `LineReader` over the file, accumulating until
+`line_incomplete` says the construct closed — and it is what v7 does, executing as it parses. Two
+things decided against it. The smaller is duplication: `sh_source` already reads a file with
+`read_file` and hands the text to one parse, so `sh file` and `. file` are now the same
+mechanism and cannot drift apart. The larger is stdin. A shell reading its script off stdin has
+that stream open for two purposes at once, which is exactly the fidelity loss S8 recorded for
+`read`; a script named on the command line has no such conflict, and `while read l; do …; done`
+inside one reads the shell's actual stdin. The cost is stated rather than hidden: a syntax error
+anywhere in the file means none of the file runs, where v7 would have run everything above it.
+
+**`sh -c cmd name args` names `$0` itself, and the arithmetic is v7's.** It is tempting to make
+every word after the command string a positional parameter and leave `$0` as `sh`, and that is
+wrong in the way that only shows up later: `options()` and `main()` in the v7 port compute
+`cmdadr = dolv[0]` uniformly across all three entry points, so `$0` is the script for a file, the
+first operand for `-c`, and argv[0] otherwise. Following it means `sh -c 'echo $0 $1' a b` prints
+`a b` here as everywhere else, and `sh -s a b` puts `a` at `$1` rather than eating it. The
+implementation is `OptParse` plus nine lines, since `var_init` plants `$0` and `args_set` carries
+it over — the shell's own state was already the right shape and no new storage was added.
+
+**`${x?}` now ends a non-interactive shell, which discharges a deferral.** *"The shell got
+variables"* below records that `${x?}` "aborts the line rather than the shell … because
+script-entry policy belongs to the stage that adds `sh file` and `sh -c`". This is that stage,
+and v7's answer is taken: a script stops where the parameter is missing rather than running on
+past a hole, while at a prompt only the line is abandoned. It reuses `Flow::Exit` and so adds no
+exit path, exactly as `set -e` did. Folding the decision in also collapsed four hand-copied
+expansion-failure epilogues in [job.cpp](../src/sh/job.cpp) into one `expand_failed`, which is
+where the `^C`-is-130 distinction now lives once instead of four times.
+
+**`#!` is settled rather than deferred.** `exec_meta` requires `\0asm` and a `braam` custom
+section carrying `PROC_ABI`, so a text file can never be handed to `Sys::Spawn`; there is no
+place to put an interpreter lookup that would not be the kernel reading file contents to decide
+what a program is. `sh file` and `sh < file` are the whole of it, and `./script.sh` will not
+arrive later.
+
+---
+
 ## The rule grew a second clause
 
 Ninth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `test`, `[`, `:`, `read`, `wait`,

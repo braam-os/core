@@ -414,6 +414,25 @@ Task<void> say_expand(Error e, const ExpandErr &err)
         co_await say2(SYS_STDERR, err.name, err.message);
 }
 
+// What an expansion failure costs. V7 ends a non-interactive shell there and
+// so does this: a script stops rather than running on past a hole, while a
+// prompt abandons only the line. A ^C is not a failure of the expansion.
+Task<i32> expand_failed(Ctx &cx, Error e, const ExpandErr &err)
+{
+    if (e == Error::Cancelled) {
+        var_status(130);
+        co_return 130;
+    }
+    if (Task<void> t = say_expand(e, err))
+        co_await t;
+    if (!cx.interactive) {
+        cx.flow        = Flow::Exit;
+        cx.exit_status = 1;
+    }
+    var_status(1);
+    co_return 1;
+}
+
 u32 open_flags(Redir kind)
 {
     switch (kind) {
@@ -682,18 +701,8 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     Task<Result<void>> xt = expand_all(cx, r, xerr);
     if (Result<void> e = xt ? co_await xt : Err(Error::NoMemory); e.is_err()) {
         // A ^C caught mid-glob abandons the line, as a stage reporting 130 does.
-        if (e.error() == Error::Cancelled) {
-            var_status(130);
-            co_return 130;
-        }
-        if (e.error() != Error::Invalid)
-            co_await say(SYS_STDERR, "out of memory");
-        else if (xerr.name.empty())
-            co_await say(SYS_STDERR, xerr.message);
-        else
-            co_await say2(SYS_STDERR, xerr.name, xerr.message);
-        var_status(1);
-        co_return 1;
+        Task<i32> f = expand_failed(cx, e.error(), xerr);
+        co_return f ? co_await f : 1;
     }
 
     // The trace goes here, which is the first moment every stage's argv exists
@@ -1508,14 +1517,8 @@ Task<i32> exec_for(Ctx &cx, const Tree &tree, u32 n)
         for (usize i = 1; i < names.size(); i++) {
             Task<Result<void>> t = expand_one(cx, names[i], Split::Fields, raw_fields, err);
             if (Result<void> e = t ? co_await t : Err(Error::NoMemory); e.is_err()) {
-                if (e.error() == Error::Cancelled) {
-                    var_status(130);
-                    co_return 130;
-                }
-                if (Task<void> d = say_expand(e.error(), err))
-                    co_await d;
-                var_status(1);
-                co_return 1;
+                Task<i32> f = expand_failed(cx, e.error(), err);
+                co_return f ? co_await f : 1;
             }
         }
         Task<Result<void>> g = glob_fields(raw_fields, fields);
@@ -1585,14 +1588,8 @@ Task<i32> exec_case(Ctx &cx, const Tree &tree, u32 n)
     ExpandErr err;
     Task<Result<void>> st = expand_one(cx, tree.args(nd.c)[0], Split::One, subject, err);
     if (Result<void> e = st ? co_await st : Err(Error::NoMemory); e.is_err()) {
-        if (e.error() == Error::Cancelled) {
-            var_status(130);
-            co_return 130;
-        }
-        if (Task<void> t = say_expand(e.error(), err))
-            co_await t;
-        var_status(1);
-        co_return 1;
+        Task<i32> f = expand_failed(cx, e.error(), err);
+        co_return f ? co_await f : 1;
     }
 
     Task<i32> step;
@@ -1606,14 +1603,8 @@ Task<i32> exec_case(Ctx &cx, const Tree &tree, u32 n)
             Vec<Field> pat;
             Task<Result<void>> pt = expand_one(cx, pats[p], Split::One, pat, err);
             if (Result<void> e = pt ? co_await pt : Err(Error::NoMemory); e.is_err()) {
-                if (e.error() == Error::Cancelled) {
-                    var_status(130);
-                    co_return 130;
-                }
-                if (Task<void> t = say_expand(e.error(), err))
-                    co_await t;
-                var_status(1);
-                co_return 1;
+                Task<i32> f = expand_failed(cx, e.error(), err);
+                co_return f ? co_await f : 1;
             }
             took = glob_match(pat[0].text.str(), Bytes(pat[0].mark.data(), pat[0].mark.size()),
                               subject[0].text.str());
@@ -1803,6 +1794,17 @@ u32 sh_flags()
 void sh_set_flags(u32 f)
 {
     g_flags = f;
+}
+
+u32 sh_flag_of(char c)
+{
+    if (c == 'e')
+        return SH_ERREXIT;
+    if (c == 'u')
+        return SH_NOUNSET;
+    if (c == 'x')
+        return SH_XTRACE;
+    return 0;
 }
 
 bool trap_set(u32 sig, Str action)

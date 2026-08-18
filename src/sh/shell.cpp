@@ -176,23 +176,70 @@ Task<i32> script()
     co_return status;
 }
 
+// A text with no reader behind it: parsed once and run once, which is what `.`
+// does. shell_exit_wanted is what makes an `exit 3` inside it 3.
+Task<i32> run_once(Str text)
+{
+    Task<i32> run = run_line(text, false);
+    i32 status    = run ? co_await run : 1;
+    shell_exit_wanted(status);
+    co_return status;
+}
+
+// `sh <file>`. Read whole rather than a line at a time, so the script's stdin
+// stays the shell's and a `read` in it reads that.
+Task<i32> from_file(Str path)
+{
+    Result<String> text = Err(Error::NoMemory);
+    if (Task<Result<String>> t = read_file(path))
+        text = co_await t;
+    if (text.is_err()) {
+        if (text.error() == Error::Cancelled)
+            co_return 130;
+        if (Task<void> e = errln("sh", path, text.error()))
+            co_await e;
+        co_return text.error() == Error::NotFound ? 127 : 1;
+    }
+
+    Task<i32> t = run_once(text.value().str());
+    co_return t ? co_await t : 1;
+}
+
 } // namespace
 
-Task<i32> shell(bool want_console)
+Task<i32> shell(ShellStart s)
 {
     // Planted here, so var.cpp needs no syscall. $$ is this process's pid, so
-    // a top-level /bin/sh reports init's (Concept.md §4).
-    if (!var_init(proc_pid(), "sh")) {
+    // a top-level /bin/sh reports init's (Concept.md §4). var_init first:
+    // args_set carries $0 over from what is already there.
+    if (!var_init(proc_pid(), s.name0) || !args_set(s.args)) {
         co_await write_all(SYS_STDERR, "sh: out of memory\n");
         co_return 1;
     }
-    Task<i32> t = want_console ? interactive() : script();
-    i32 status  = t ? co_await t : 1;
+    sh_set_flags(s.flags);
+
+    bool console = s.from == ShellIn::Console;
+    Task<i32> t;
+    switch (s.from) {
+    case ShellIn::Console:
+        t = interactive();
+        break;
+    case ShellIn::Stdin:
+        t = script();
+        break;
+    case ShellIn::File:
+        t = from_file(s.text);
+        break;
+    case ShellIn::Command:
+        t = run_once(s.text);
+        break;
+    }
+    i32 status = t ? co_await t : 1;
 
     // `trap … 0`, whatever ended the loop. Its own status is not the shell's.
     Str action;
     if (trap_get(0, action))
-        if (Task<i32> e = trap_run(0, want_console))
+        if (Task<i32> e = trap_run(0, console))
             co_await e;
     co_return status;
 }
