@@ -347,11 +347,10 @@ change to argue in Concept.md first.
   `case`, globbing, `$( )` and functions now, but **`export` reaches no child**: there is no
   environment anywhere in the wasm ABI, so it records an intent that only this process can
   honour. `/bin/export` was renamed `save` to give the builtin its name.
-- **A function is not a scope, and cannot be piped or redirected yet.** It runs in the shell's own
-  turn on the caller's `Ctx`, so `$1`…`$#` are saved and put back but its variables and cwd are
-  the shell's, and a `break` inside one reaches a loop outside it. `f | wc` and `f > log` are
-  refused the way `{ a; } | wc` is: the body would write to the shell's stdout, and threading the
-  base stdio is S7's. `x=$(f)` works, since the capture rides on `Ctx`.
+- **A function is not a scope.** It runs in the shell's own turn on the caller's `Ctx`, so
+  `$1`…`$#` are saved and put back but its variables and cwd are the shell's, and a `break` inside
+  one reaches a loop outside it. `f | wc` and `f > log` work: the body inherits the stage's
+  descriptors through `Ctx::base`.
 - **Globbing is argv words only**, not a redirection target or an assignment value: both expand
   under `Split::One`, one field in and one out, and `> *.txt` writes to the pattern rather than
   silently to whatever it matched. An unterminated `[` matches nothing (v7's answer), and a
@@ -359,6 +358,13 @@ change to argue in Concept.md first.
 - **`(` and `)` are tokens with no grammar above `case`.** S4 needed `)` to end an arm, so
   `echo (x)` is `syntax error near '('` rather than a word. `( list )` as a state checkpoint is
   S7's, and its lexing is already done.
+- **`exec >file` cannot be undone, and `>&-` cannot be said.** There is no `/dev/tty` and no way
+  to name the stream the shell was handed, so a top-level `exec` redirection is permanent; inside
+  `( … )` it is checkpointed like everything else. `>&-` would need a closed-descriptor value in
+  `Sys::Spawn`'s payload and a null *sink* in the kernel, and there is neither.
+- **`( … )` restores everything but the job table**, which is deliberately shared: its children
+  are this same process's and must still be reaped. cwd, variables, positional parameters, the
+  function table and the `exec` base all go back.
 - **A `$( )` is not a subshell, because there is no fork.** It runs in the shell, so `$(cd /x)`
   moves it and `$(y=1)` sets a real variable; `$(exit)` does *not* end the shell, since the
   command is run against its own `Ctx` rather than through `run_line`. The save-and-restore
@@ -366,9 +372,9 @@ change to argue in Concept.md first.
   process's 16 MB cap — v7's answer too, and truncating would corrupt a value silently.
 - **Only a pipeline may go into the background.** `a && b &`, `{ … ; } &` and `while … done &`
   are refused, because backgrounding means the shell keeps running while the rest goes and
-  nothing in a process can wait for a sibling task. **And a compound command cannot yet be piped
-  or redirected** — `{ a; } | wc` and `for … done > f` need the base stdio S7 threads through
-  `Ctx`. V7 does it by forking the compound into a subshell, which there is no fork for here.
+  nothing in a process can wait for a sibling task. **And a compound command cannot be *piped***
+  — `{ a; } | wc` — because a `Pipe` node's stages are commands and making them nodes is its own
+  change. Redirecting one works: `{ a; } > f` and `for … done > f` ride on `Ctx::base`.
 - **A loop whose body is entirely builtins cannot be interrupted.** The shell arms its *children*
   with `Sys::Fg` and is never in its own foreground set, so a `^C` has nowhere to go and `rt.h`
   is explicit that nothing cancels from inside a process. A loop with a program in it — which is

@@ -16,6 +16,7 @@
 //   simple   := assign* (word | redirect)+ | assign+ redirect*
 //   assign   := name '=' word, and only ahead of the first ordinary word
 //   redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
+//             | ('<<' | '<<-') word | ('>&' | '2>&') word
 //
 // Words arrive raw — quotes and backslashes still in them, since expand.h
 // takes those off later — but are owned here, because a parse outlives the
@@ -37,11 +38,15 @@ enum class Redir : u8 {
     Append,    // >> f
     ErrOut,    // 2> f
     ErrAppend, // 2>> f
+    Here,      // << w — the target is the body, already collected
+    OutDup,    // >& n
+    ErrDup,    // 2>& n
 };
 
 struct Redirect {
     Redir kind;
-    usize target; // index into the tree's redirection targets
+    usize target;         // index into the tree's redirection targets
+    bool literal = false; // a here-doc whose delimiter was quoted: no expansion
 };
 
 // Why a parse failed. `more` means the text ended *inside* something, so a
@@ -68,26 +73,28 @@ struct Tree {
     static constexpr u32 MAX_NEST = 16;
 
     enum class Kind : u8 {
-        Nop,     // node 0, so an index of 0 reads as "nothing"
-        Pipe,    // a..b commands, c..d the bytes of the line they came from
-        Seq,     // a, b: an offset and a count into the child list
-        AndOr,   // the same, plus c: an offset into the operator list
-        Not,     // ! a
-        Group,   // { a }
-        If,      // a, b: b (condition, body) pairs in the child list; c the else
-        While,   // a the condition, b the body
-        Until,   // the same, run while the condition fails
-        For,     // a the body, b the command holding the name then the words,
-                 // c set when there was an `in`
-        Case,    // a, b: b (patterns, body) pairs in the child list, where a
-                 // pair is the command holding that arm's patterns then the
-                 // body node; c the command holding the word being matched
-        FuncDef, // a the body node, b the command holding the name
+        Nop,      // node 0, so an index of 0 reads as "nothing"
+        Pipe,     // a..b commands, c..d the bytes of the line they came from
+        Seq,      // a, b: an offset and a count into the child list
+        AndOr,    // the same, plus c: an offset into the operator list
+        Not,      // ! a
+        Group,    // { a }
+        If,       // a, b: b (condition, body) pairs in the child list; c the else
+        While,    // a the condition, b the body
+        Until,    // the same, run while the condition fails
+        For,      // a the body, b the command holding the name then the words,
+                  // c set when there was an `in`
+        Case,     // a, b: b (patterns, body) pairs in the child list, where a
+                  // pair is the command holding that arm's patterns then the
+                  // body node; c the command holding the word being matched
+        FuncDef,  // a the body node, b the command holding the name
+        Subshell, // ( a ), with the shell's own state put back afterwards
     };
 
     enum class Op : u8 { And, Or };
 
-    // Fixed size, no owning members, index links only.
+    // Fixed size, no owning members, index links only. `d` is a compound's own
+    // redirections: the command holding them, plus one, so 0 means none.
     struct Node {
         Kind kind       = Kind::Nop;
         bool background = false;
@@ -100,7 +107,7 @@ struct Tree {
     // command and where a leading `x=1` is an ordinary word.
     Result<void> add_word(Str w, bool assignable = true);
 
-    Result<void> add_redirect(Redir kind, Str target);
+    Result<void> add_redirect(Redir kind, Str target, bool literal = false);
 
     Result<void> end_command();
 
@@ -140,6 +147,9 @@ struct Tree {
     const Node &node(u32 i) const { return nodes_[i]; }
 
     void set_background(u32 i) { nodes_[i].background = true; }
+
+    // A compound's own redirections, as the command holding them.
+    void set_redirs(u32 i, u32 cmd) { nodes_[i].d = cmd + 1; }
 
     u32 kid(u32 i) const { return kids_[i]; }
 

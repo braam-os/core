@@ -192,6 +192,37 @@ bool args_set(Args a)
     return true;
 }
 
+Vec<VarEntry *> vars_swap(Vec<VarEntry *> next)
+{
+    Vec<VarEntry *> &v  = vars();
+    Vec<VarEntry *> old = move(v);
+    v                   = move(next);
+    return old;
+}
+
+bool vars_copy(Vec<VarEntry *> &out)
+{
+    for (VarEntry *e : vars()) {
+        VarEntry *c = heap_new<VarEntry>();
+        if (!c || !c->name.assign(e->name.str()) || !c->value.assign(e->value.str()) ||
+            !out.push(c)) {
+            heap_delete(c);
+            return false;
+        }
+        c->valued   = e->valued;
+        c->exported = e->exported;
+        c->readonly = e->readonly;
+    }
+    return true;
+}
+
+void vars_drop(Vec<VarEntry *> &v)
+{
+    for (VarEntry *e : v)
+        heap_delete(e);
+    v.clear();
+}
+
 Vec<String> args_swap(Vec<String> next)
 {
     Vec<String> &v  = argv();

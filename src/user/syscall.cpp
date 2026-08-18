@@ -324,8 +324,9 @@ Task<i32> proc_spawn_child(Proc &p, Str payload)
             co_return -i32(Error::Perm);
         // Nothing this process is inside a syscall on: moving it would leave a
         // parked reader of the parent's on an end the child now owns, which is
-        // the second receiver the move exists to make unrepresentable.
-        if (h->refs > 1)
+        // the second receiver the move exists to make unrepresentable. The
+        // busy flags say exactly that; refs cannot, since Sys::Dup raises it.
+        if (h->busy_r || h->busy_w)
             co_return -i32(Error::Perm);
         take[i] = h;
     }
@@ -561,10 +562,29 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             // The number is free at once, and what the descriptor is on is shut
             // at once — that is what answers a read parked on it. Only the
             // block, and the externref slot in it, waits for the last call.
+            // A Dup'd descriptor shuts nothing until the last of them goes.
             p.fds[fd - SYS_FD_MIN] = nullptr;
-            h->shut();
+            if (--h->fds == 0)
+                h->shut();
             handle_release(h);
             status = 0;
+            break;
+        }
+
+        case Sys::Dup: {
+            Handle *h = proc_handle(p, fd);
+            if (!h) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            i32 nfd = proc_bind(p, h);
+            if (nfd < 0) {
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            h->refs++;
+            h->fds++;
+            status = nfd;
             break;
         }
 

@@ -237,7 +237,7 @@ how much memory to give it. It lives in a wasm custom section named `braam`, fiv
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 9
+    u32 abi;            // PROC_ABI, currently 10
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -665,6 +665,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 22 | `MkDir` | — | the path | 0 | — |
 | 23 | `Remove` | bit 0 = recursive | the path | 0 | — |
 | 24 | `Chdir` | bit 0 = set, else report | the path, when setting | 0 | the resulting absolute cwd |
+| 25 | `Dup` | fd | — | a second fd for the same thing | — |
 | 32 | `Sleep` | — | `u32 ms` | 0 | — |
 | 48 | `Clock` | — | — | 0 | `u64 epoch_ms`, `i32 tz_min` |
 | 49 | `Storage` | — | — | 0 | `u64 quota`, `u64 usage`, `u32 flags` |
@@ -695,6 +696,18 @@ Every multi-byte field is little-endian, and a `u64` is a low word then a high w
 `Chdir` sits at 24 rather than with the process family because it is the state `Open`, `Stat`,
 `List`, `MkDir` and `Remove` resolve *against* — it belongs with the operations it governs, and a
 program that never spawns anything still uses it. `pwd` is its caller.
+
+**`Dup` is the only way to say `2>&1`, and the only way a shell keeps a descriptor across a
+`Spawn`.** One handle stands behind both numbers, so a file's offset is shared — which is what
+makes `>f 2>&1` interleave rather than overwrite — and closing one shuts nothing until the last
+goes. It exists because `Spawn` *moves*: without it `exec >file` would lose the shell's own
+descriptor to the first child that ran.
+
+Adding it moved `PROC_ABI` from 9 to 10 and relaxed one rule in `Spawn`. That operation used to
+refuse a handle with `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
+*descriptor* raises that count too, so every duplicated fd would have been unspawnable. The test
+is now the `busy_r`/`busy_w` flags, which is what the sentence always meant. Two slots may still
+not name the same number; `2>&1` gives them two numbers over one handle instead.
 
 **`Cursor` is the scrolling screen's, not the alternate one's.** `Write` moves the cursor as a
 side effect — it goes through the same `screen_write` that wraps and scrolls — and reports a byte

@@ -296,7 +296,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 9)
+        if (m[0] !== 0x6d617262 || m[1] !== 10)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         if (m[4] !== 256)
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
@@ -2060,8 +2060,8 @@ if (mode === "--kernel") {
     s = submit("clear", 9090);
     s = submit("help", 9091);
     const helped = rows(s).filter((line) => line.startsWith("  "));
-    for (const [i, name] of [".", "break", "cd", "continue", "eval", "exit", "export", "fg",
-                             "help", "jobs", "kill", "readonly", "return", "set", "shift",
+    for (const [i, name] of [".", "break", "cd", "continue", "eval", "exec", "exit", "export",
+                             "fg", "help", "jobs", "kill", "readonly", "return", "set", "shift",
                              "unset"].entries())
         if (!helped[i] || !helped[i].startsWith(`  ${name} `))
             fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);
@@ -2702,8 +2702,7 @@ if (mode === "--kernel") {
     fshows("f() { while true; do return 7; done; }; f; echo $?", "7");
     fshows("x=1; f() { x=2; }; f; echo $x", "2"); // not a subshell
     fshows("f() { echo hi; }; unset -f f; f", "braam: f: not found");
-    fshows("f() { echo hi; }; f | wc",
-           "braam: f: a function cannot be piped or redirected yet");
+    fshows("f() { echo hi; }; f | wc", "1 1 3"); // S7 lifted the refusal
     fshows("f() { echo body; }; x=$(f); echo $x", "body"); // through a capture
     fshows("f() { echo $1; }; for i in p q; do f $i; done", "p|q");
 
@@ -2716,6 +2715,74 @@ if (mode === "--kernel") {
     fshows(". /home/fn/lib.sh; g there", "sourced there");
     fshows(". /home/fn/nosuch", "braam: /home/fn/nosuch: not found");
     submit("rm -r /home/fn", (gt += 0.01));
+
+    // Redirection completion: here-documents, `>&`, `exec` and the base stdio
+    // a function body and a compound now inherit.
+    submit("mkdir /home/rd", (gt += 0.01));
+    const rshows = (line, want) => {
+        submit("clear", (gt += 0.005));
+        const got = output(submit(line, (gt += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    // A here-doc is several typed lines: the shell accumulates until the
+    // delimiter, which is what line_incomplete's `more` drives.
+    const rlines = (lines, want) => {
+        submit("clear", (gt += 0.005));
+        let s;
+        for (const l of lines)
+            s = submit(l, (gt += 0.005));
+        // The PS2 lines are echoed as they are typed; what the command
+        // printed is what is left.
+        const got = output(s).filter((l) => !l.startsWith("> ")).join("|");
+        if (got !== want)
+            fail(`${JSON.stringify(lines)} printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    rlines(["cat <<EOF", "hi", "EOF"], "hi");
+    rlines(["cat <<EOF", "a", "b", "EOF"], "a|b");
+    rlines(["v=x; cat <<EOF", "$v", "EOF"], "x");
+    rlines(["cat <<'EOF'", "$v", "EOF"], "$v");
+    rlines(["cat <<EOF | wc", "hi", "EOF"], "1 1 3");
+    rshows("f() { echo b; }; f | wc", "1 1 2");
+    // Two steps, because a line longer than the grid wraps and output() would
+    // pick the wrapped tail up as a row of its own.
+    const rfile = (line, path, want) => {
+        submit(line, (gt += 0.005));
+        submit("clear", (gt += 0.005));
+        const got = output(submit("cat " + path, (gt += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` left ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    rfile("f() { echo r; }; f > /home/rd/a", "/home/rd/a", "r");
+
+    // `2>&1` merges, and a real descriptor needs Sys::Dup to be in two slots.
+    rshows("ls /nope 2>&1 | wc", "1 4 21");
+    rfile("ls /nope > /home/rd/b 2>&1", "/home/rd/b", "ls: /nope: not found");
+
+    // A compound may be redirected now, though not yet piped.
+    rfile("{ echo a; echo b; } > /home/rd/c", "/home/rd/c", "a|b");
+    rfile("for i in p q; do echo $i; done > /home/rd/d", "/home/rd/d", "p|q");
+    rshows("{ echo x; } | wc", "braam: syntax error: a compound command cannot be piped yet");
+
+    // `( … )` runs here and puts back what it moved.
+    rshows("(cd /bin; pwd); pwd", "/bin|/home");
+    rshows("s=out; (s=in; echo $s); echo $s", "in|out");
+    rshows("set -- z; (set -- a b; echo $#); echo $#", "2|1");
+    rshows("(q() { echo n; }); q", "braam: q: not found");
+    // A redefinition inside one is put back too, not just a new name.
+    rshows("p() { echo old; }; (p() { echo new; }); p", "old");
+    rshows("(exit 3); echo $?", "3");
+    rfile("(echo sub) > /home/rd/e", "/home/rd/e", "sub");
+
+    // `exec` keeps its redirections, and they outlive the line — inside a
+    // subshell, which is the only way back: there is no /dev/tty and no way
+    // to name the stream this shell was handed.
+    rfile("(exec > /home/rd/log; echo one; echo two)", "/home/rd/log", "one|two");
+    rshows("(exec > /home/rd/log); echo back", "back");
+    submit("rm -r /home/rd", (gt += 0.01));
 
     // exit ends the shell, and nothing runs after it — not even the rest of
     // its own line, which is Flow::Exit end to end. Last, for that reason.

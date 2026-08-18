@@ -9,22 +9,26 @@
 #include "kernel/str.h"
 
 enum class Tok : u8 {
-    End,       // the text is exhausted
-    Word,      //
-    Newline,   // a separator, since one text may be many lines
-    Semi,      // ;
-    DSemi,     // ;; — the end of a `case` arm
-    LParen,    // (
-    RParen,    // ) — what closes a `case` arm's patterns
-    Amp,       // &
-    AndIf,     // &&
-    OrIf,      // ||
-    Pipe,      // |
-    Less,      // <
-    Great,     // >
-    DGreat,    // >>
-    ErrGreat,  // 2>
-    ErrDGreat, // 2>>
+    End,         // the text is exhausted
+    Word,        //
+    Newline,     // a separator, since one text may be many lines
+    Semi,        // ;
+    DSemi,       // ;; — the end of a `case` arm
+    LParen,      // (
+    RParen,      // ) — what closes a `case` arm's patterns
+    Amp,         // &
+    AndIf,       // &&
+    OrIf,        // ||
+    Pipe,        // |
+    Less,        // <
+    DLess,       // << — a here-document
+    DLessDash,   // <<- — the same, with leading tabs stripped
+    Great,       // >
+    DGreat,      // >>
+    GreatAnd,    // >& — a stream onto another
+    ErrGreat,    // 2>
+    ErrDGreat,   // 2>>
+    ErrGreatAnd, // 2>&
 };
 
 // Where the `${…}` beginning at s[at] — which must be the `$` — ends: the index
@@ -54,6 +58,12 @@ struct Lexer {
     usize begin() const { return begin_; }
 
     usize pos() const { return i_; }
+
+    // Resume elsewhere, which a here-doc needs: its body is the lines after
+    // the command, and the parser reads them before the lexer gets there.
+    void seek(usize at) { i_ = at < s_.size() ? at : s_.size(); }
+
+    Str text() const { return s_; }
 
 private:
     Str s_;

@@ -7,6 +7,107 @@ of the two needs amending.
 
 ---
 
+## The ABI changed, once
+
+Eighth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): here-documents, `>&`, `exec`
+redirections, inherited base stdio and `( … )` as a state checkpoint. `sh.wasm` went from 164,817
+to 185,467 bytes and the staging tree from 634,295 to 654,945 against an unchanged 1 MiB budget.
+**`kernel.wasm` moved for the first time in this plan** — 148,483 to 148,604 of 262,144 — because
+this is the stage that had to add an operation.
+
+**`Sys::Dup`, and it was `exec` rather than `2>&1` that forced it.** The plan of record promised
+no syscall changes, and that promise held for seven stages. What breaks it is not the obvious
+thing: `cmd 2>&1` already worked, since `ChildIo{.err = SYS_STDOUT}` is resolved by the kernel
+against the parent's own stream, and a builtin merging two streams is one integer assignment. It
+is `exec >file`. `Spawn` **moves** a descriptor — that is what closes a pipe's write end and gives
+the reader its end of input — so the shell's own base descriptor would be gone into the first
+child that ran. Nothing in a thirty-seven-operation table can stand in for a duplicate.
+
+It cost less than the promise suggested. Ops 25–31 were free before `Sleep = 32`, so `Dup` renumbers
+nothing; a new operation is an enum value on each side rather than a new import, so `smoke`'s
+exact per-binary import surface stayed green untouched, which is the whole point of multiplexing
+`sys_async`. `PROC_ABI` went 9 → 10 and `exec_meta` refuses anything older, so a stale binary is a
+diagnostic.
+
+**One rule had to be relaxed, and it turned out to be a rule that never said what it meant.**
+`Spawn` refused to move a handle with `refs > 1`, and its comment said "nothing this process is
+inside a syscall on". Those are different things the moment a second *descriptor* can exist: every
+dup'd fd would have been unspawnable. The condition it always meant is recorded on the handle as
+`busy_r`/`busy_w`, so the test moved there and the comment finally describes the code. `Handle`
+also gained an `fds` count beside `refs`, because closing one of two descriptors must shut
+nothing.
+
+**The here-doc cliff did not exist.** TODO.md specified a `/tmp` file with a unique name, a path
+tracked on `Run`, a field on `JobEntry` and a reap in `jobs_report`, all to avoid "a hard cliff at
+8 × 512 = 4,096 bytes". That is the `PIPE_SLOTS` misreading corrected at S5, a second time:
+`pipe_write` puts a whole `Str` into **one** slot, and a single `Sys::Write` carries up to
+`SYS_STAGE_MAX` = 1 MB. So a here-doc is a pipe — write the body, close the write end, hand the
+read end over — and every piece of the temp-file machinery was deleted before it was written.
+Two stages in a row have now been simplified by reading `PIPE_SLOTS` correctly; the comment on it
+says "chunks, not bytes" and means writes.
+
+**The body is collected at parse time and nothing else may be.** `line_incomplete` re-parses the
+whole accumulated text on every line the user adds, and `run_line` parses it again — so collection
+has to be a pure function of the text. Creating the pipe in the parser would have made one per
+keystroke line. The body is stored as the redirection's *target*, because `Tree`'s target table is
+an arbitrary byte store rather than a filename table, and the pipe is made where the other
+descriptors are.
+
+Two rules fall out of the accumulator's shape rather than from any specification. The text never
+ends in a newline — `shell.cpp` joins lines with one — so a delimiter at the very end of the text
+must count as terminated, or the prompt asks forever. And an unterminated body has to fail with
+`more` set, which is what puts `PS2` on the screen.
+
+**A here-doc expands but does not unquote**, and that needed no change to the expander. The body
+is escaped — every `'`, `"` and `\` gets a backslash — before `expand_one` sees it, so `$` acts
+and the quotes come back out as themselves. A quoted delimiter skips even that.
+
+**Pipes now run before redirections, and that is a fix, not a rearrangement.** `ls /nope 2>&1 | wc`
+must send stderr into the pipe, and `2>&1` copies whatever `out` holds *at that moment* — which
+was still the terminal, because the pipe was attached afterwards. The order is now pipes,
+redirections, capture. `a > f | b` is unchanged: the redirection displaces the write end and
+closes it, so `b` still gets a clean end of input.
+
+**`ours()` is the whole of what changed for base stdio.** It decided what a stage may close by
+`fd >= SYS_FD_MIN`, and a base descriptor of 7 breaks that assumption everywhere at once — the
+replace-on-second-redirection, the per-builtin close, the final sweep. It takes the base now, and
+the three hard-wired constants in the pipe and capture tests became comparisons against it. That
+is the entire mechanism, and it lifts S6's function refusal for free: `f | wc` and `f > log` work
+because `call_func` already ran the body on the caller's `Ctx`, which now carries the stage's
+descriptors.
+
+**A compound may be redirected but still not piped**, and the split is where the grammar is. A
+compound's own redirections ride on a synthetic `Command` named by the node's spare `d` field, so
+`{ a; } > f` and `for … done > f` needed a parser arm and an `exec_node` prologue. Piping one is a
+different change: a `Pipe` node's stages are *commands*, and making them nodes is its own work.
+The refusal narrowed rather than went.
+
+**`( … )` restores everything but the job table.** cwd through two syscalls, the positional
+parameters through the `args_swap` `call_func` already used, the variables through a new
+`vars_swap`, and the function table through a snapshot that holds each body's tree — a
+redefinition mutates an entry in place rather than growing the vector, so a mark-and-truncate
+would have missed it. `(exit 3)` reports 3 and the shell lives, caught at the boundary the way
+`call_func` catches `Flow::Return`.
+
+The job table is deliberately shared: the children are this same process's and must still be
+reaped, so restoring it would leak kernel child slots and break `jobs_report`. And `exec` *is* in
+the checkpoint, which is not obvious until you look for the way back — there is no `/dev/tty` and
+no way to name the stream the shell was handed, so `exec >file` at the top level is irreversible.
+Inside `( … )` it is not, and that is the only place it can be tested.
+
+**`>&-` is refused rather than faked.** Saying "this stream is closed" needs a value the Spawn
+payload does not have and a null *sink* the kernel does not have — `null_source` exists for input
+only. A gap to record.
+
+**What the tests prove separately.** `test_parse.cpp` renders a here-doc's collected body as one
+string compare, including two on one line taken in order, `<<-`'s tabs, a quoted delimiter, and
+both unterminated forms asking for more. `test/run.mjs` has what the tree cannot show: a here-doc
+typed over three lines with `PS2` on the screen, `2>&1` reaching a pipe and a file, a compound and
+a function redirected, and a subshell putting back a cwd, a variable, the parameters, a function
+and a redefinition.
+
+---
+
 ## A line could outlive itself
 
 Seventh of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `name() { … }`, `.`, `eval`,

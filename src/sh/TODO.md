@@ -2,7 +2,7 @@
 
 The plan of record for turning `/bin/sh` from a prompt into a language. **What lands is deleted
 from here** — its reasoning moves to [Release_Notes.md](../../doc/Release_Notes.md), which is
-where the *why* lives once it is code. Seven stages have landed, recorded there under *"The lexer
+where the *why* lives once it is code. Eight stages have landed, recorded there under *"The lexer
 stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h)),
 *"The shell got variables"* (the `$` walk, `IFS` splitting, and the `Field` flag the mark could
 not carry), *"A line became a tree"* (the node arena in [parse.h](parse.h), `exec_node`/`Flow` in
@@ -11,8 +11,9 @@ not carry), *"A line became a tree"* (the node arena in [parse.h](parse.h), `exe
 pattern"* (the pure matcher in [match.h](match.h), the walk in [glob.h](glob.h), and `case`) and
 *"A word could run a command"* (`$( )` and the backtick, the `substitute` hook that gives up
 rather than awaiting, and the pipe the shell drains) and *"A line could outlive itself"*
-(functions, the refcounted tree, `.`, `eval` and `return`). What remains is numbered below, once,
-in the order it should be done.
+(functions, the refcounted tree, `.`, `eval` and `return`) and *"The ABI changed, once"*
+(here-documents, `>&`, `exec`, the base stdio on `Ctx`, and `( … )`). What remains is numbered
+below, once, in the order it should be done.
 
 Stages are **S1**…**S10**. A number is a name, not a position: when a stage lands its section is
 deleted and its number retires with it, so the rest keep the numbers they have and a commit
@@ -41,11 +42,13 @@ scripting builtins and the entry points — on top of the lists, control flow, `
 `/Users/vak/Project/Besm-6/v7besm/cmd/sh/` (≈3,450 lines of code across 29 files).
 
 **Headroom is not the constraint.** `kernel.wasm` does not change — every line of this is in the
-process binary. `sh.wasm` is 164,817 bytes and only `sh` links `src/sh/`; the only budget it
-spends is `rootfs/ = 1048576` against a 634,295-byte tree.
+process binary. `sh.wasm` is 185,467 bytes and only `sh` links `src/sh/`; the only budget it
+spends is `rootfs/ = 1048576` against a 654,945-byte tree.
 
-**And no syscall changes.** Everything scripting needs — pipe, spawn, wait, open, list, stat,
-chdir, getpid — is already in the §4.3 table. That is the concrete proof of the note above.
+**One syscall change, and only one.** Seven stages needed nothing from the §4.3 table that was
+not in it. S7 needed `Sys::Dup`, because `Spawn` *moves* a descriptor and `exec >file` has to keep
+one; `PROC_ABI` went 9 → 10 and the import surface did not move. Nothing left below asks for
+another.
 
 ---
 
@@ -55,9 +58,9 @@ Six things in the v7 set do not exist in Braam and must be decided rather than p
 
 | v7 | Why not | Substitute |
 |---|---|---|
-| `( list )` as a real subshell (S4 made `(` and `)` tokens for `case`, so only the grammar is missing) | There is no `fork`. Spawning `/bin/sh` loses the variable table (there is no environment anywhere in the ABI — `Sys::Spawn`'s payload is three fds and an argv blob) and costs a worker against `SYS_PROC_DEPTH = 8`. | Run it in the current process, **saving and restoring the shell's own mutable state** around it: cwd, variables, positional parameters, traps, `$-`. Gets `(cd /x; ls)` and `(set -e; …)` right; loses only memory isolation. |
+| `( list )` as a real subshell — **landed at S7** | There is no `fork`. Spawning `/bin/sh` loses the variable table (there is no environment anywhere in the ABI — `Sys::Spawn`'s payload is three fds and an argv blob) and costs a worker against `SYS_PROC_DEPTH = 8`. | Run it in the current process, **saving and restoring the shell's own mutable state** around it: cwd, variables, positional parameters, traps, `$-`. Gets `(cd /x; ls)` and `(set -e; …)` right; loses only memory isolation. |
 | A compound command in the background — `( … ) &`, `while … done &` | Backgrounding means the shell keeps running while the group runs, and nothing in a process can wait for a sibling task (`Channel::park_sender` panics rather than lose a wakeup). | **Refuse it**: `cannot run a compound command in the background`. `cmd &` on a simple pipeline is unaffected. |
-| `exec cmd` replacing the image | A process is a wasm instance in a worker; there is no re-instantiate-in-place, and `spawn` makes a new pid. | `exec` with **no** command makes its redirections permanent on the shell — that works exactly, and is half of what `exec` is for. `exec cmd` spawns, waits, and exits with the child's status. |
+| `exec cmd` replacing the image — **landed at S7** | A process is a wasm instance in a worker; there is no re-instantiate-in-place, and `spawn` makes a new pid. | `exec` with **no** command makes its redirections permanent on the shell — that works exactly, and is half of what `exec` is for. `exec cmd` spawns, waits, and exits with the child's status. |
 | `#!` scripts | `exec_meta` in [../user/exec.cpp](../user/exec.cpp) requires `\0asm` plus a `braam` custom section with `PROC_ABI == 9`. A text file can never be exec'd. | `sh file` and `sh < file` only. No `./script.sh`. |
 | `export` reaching a child | There is no environment in the wasm ABI. | `export` records the intent, honoured by `.`, functions and `eval` — same process. Taking the name cost `/bin/export` its own, which is now `save`. Nothing crosses a spawn. The alternative is `PROC_ABI == 10` across `sysabi.h`, `syscall.cpp`, `exec.cpp`, `rt.h`, `web/proc.js`, System_Calls.md and `run.mjs` — a milestone of its own with no consumer, since no program in `/bin` reads an environment and there is no `PATH`, `HOME` or `TERM` to carry. |
 | `trap … <signal>` | There are no signals, and `CancelState::cancelled` ([../kernel/sched.h](../kernel/sched.h)) is a **sticky** bool: once ^C sets it, every subsequent await returns `Err(Cancelled)` at once. | `trap … 0` (EXIT) works on any normal exit. `trap … 2` (INT) works in an **interactive** shell, where ^C is an ordinary key and the shell was never cancelled — it fires when a stage reports 130. In a *script* shell the process itself is cancelled, so the handler could neither spawn nor write: accepted, never fires. `trap '' INT` (ignore) is impossible outright. |
@@ -75,43 +78,20 @@ v7); `set -o`; `ulimit`, `umask`, `newgrp`, `hash`, `times` (no kernel concept e
 
 ## Stages
 
-Four left, in order. Each builds, passes CTest, and leaves a shell strictly better than the one
+Three left, in order. Each builds, passes CTest, and leaves a shell strictly better than the one
 before. Each carries the invariant it protects — that part is not recoverable from the code, and
 moves to Release_Notes.md when the stage lands and this section is deleted.
 
 | # | Stage | Days |
 |---|---|---|
-| S7 | Redirection completion | 2.5 |
 | S8 | The scripting builtins | 2.0 |
 | S9 | Entry points | 1.0 |
 | S10 | Integration, docs, budget | 2.0 |
 
-**7.5 days, call it 10.** The place it will go over is the here-doc and fd bookkeeping in S7;
+**5 days, call it 7.** The place it will go over is the here-doc and fd bookkeeping in S7;
 S5's capture/deadlock reasoning, the other candidate, came in at its estimate. A minimum-credible slice
 (`test` and `[` out of S8, plus `sh file` out of S9) is **~3 days** and is most of the remaining
 utility.
-
-### S7. Redirection completion
-
-**Scope.** `<<` and `<<-`, `>&`/`2>&1`/`>&-`, `exec` redirections, inherited base stdio, and
-`( … )` as a state checkpoint.
-
-**Here-documents: a `/tmp` file, always, with no size-based mode switch.** A pre-filled pipe has a
-hard cliff at 8 × 512 = 4,096 bytes — the shell fills it and parks with no reader, and it cannot
-start the reader first without giving up the ordering. A here-doc over 4 KB is not exotic.
-`wipe_tmp` in [../user/boot.cpp](../user/boot.cpp) already creates and empties `/tmp` at every
-boot, which is what v7's `settmp`/`rmtemp` want. The temp path is tracked in `Run` and removed in
-the same sweep that closes leftover fds; a background pipeline hangs it on the `JobEntry` and
-`jobs_report` removes it on reap.
-
-**Files.** [job.cpp](job.cpp), [job.h](job.h), [parse.cpp](parse.cpp), [tokenize.cpp](tokenize.cpp).
-
-**Tests.** `test_parse.cpp` — the new redirection forms and a pending here-doc body setting
-`more`. `run.mjs` — `cat <<EOF` / body / `EOF`, then `ls /tmp` showing the temp file gone; a
-here-doc over 4,096 bytes; `2>&1` merging into one stream.
-
-**Done when** a here-doc larger than a pipe's capacity works, `/tmp` is clean after it, and
-`exec >file` at the prompt persists to the next command.
 
 ### S8. The scripting builtins
 
@@ -170,13 +150,13 @@ budget change.
 ### Size
 
 Calibrated against the binary rather than guessed per stage, and re-measured at every stage: S1
-cost 20,807 bytes over 1,017 new lines, S2 10,644 over ~450, S3 12,678, S4 14,607, S5 8,699 and
-S6 13,897 — ≈20 bytes of wasm per line, which the arena stages came in under and the coroutine ones over. The
+cost 20,807 bytes over 1,017 new lines, S2 10,644 over ~450, S3 12,678, S4 14,607, S5 8,699,
+S6 13,897 and S7 20,650 — ≈20 bytes of wasm per line, which the arena stages came in under and the coroutine ones over. The
 stages left are more coroutine than logic, so budget nearer 40.
 
-- **`sh.wasm`: 164,817 → ~195,000 bytes.**
-- **Staging tree: 634,295 → ~665,000 of 1,048,576 — 63%.** No budget change needed.
-- **`kernel.wasm` does not move at all.**
+- **`sh.wasm`: 185,467 → ~205,000 bytes.**
+- **Staging tree: 654,945 → ~675,000 of 1,048,576 — 64%.** No budget change needed.
+- **`kernel.wasm` moved once, at S7, and should not again.**
 
 ~1,000 more lines of shell C++, ~400 of `test/unit/`, ~150 of `test/run.mjs`, ~250 of
 documentation. The v7 reference is 3,710 lines of C for the same feature set while doing its own

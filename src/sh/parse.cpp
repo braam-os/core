@@ -59,10 +59,10 @@ Result<void> Tree::add_word(Str w, bool assignable)
     return {};
 }
 
-Result<void> Tree::add_redirect(Redir kind, Str target)
+Result<void> Tree::add_redirect(Redir kind, Str target, bool literal)
 {
     TRY_VOID(keep(target, targets_));
-    if (!redirs_.push(Redirect{ kind, targets_.size() - 1 }))
+    if (!redirs_.push(Redirect{ kind, targets_.size() - 1, literal }))
         return Err(Error::NoMemory);
     return {};
 }
@@ -197,6 +197,13 @@ Option<Redir> redir_of(Tok t)
         return Redir::ErrOut;
     case Tok::ErrDGreat:
         return Redir::ErrAppend;
+    case Tok::DLess:
+    case Tok::DLessDash:
+        return Redir::Here;
+    case Tok::GreatAnd:
+        return Redir::OutDup;
+    case Tok::ErrGreatAnd:
+        return Redir::ErrDup;
     default:
         return None;
     }
@@ -216,6 +223,11 @@ struct Parser {
     usize begin = 0; // where `tok` starts in the text
     usize prev  = 0; // where the token before it ended
 
+    // Where the lexer resumes once the line ends: a here-doc's body lies
+    // between that newline and its terminator, and this parser has taken it
+    // already. 0 is "nothing pending".
+    usize here_resume = 0;
+
     Result<void> advance()
     {
         prev          = lx.pos();
@@ -229,8 +241,20 @@ struct Parser {
         }
         tok   = r.value();
         begin = lx.begin();
+
+        // The newline that ends the command is delivered; what follows it is
+        // the body, so the lexer starts again past the terminator.
+        if (tok == Tok::Newline && here_resume) {
+            lx.seek(here_resume);
+            here_resume = 0;
+        }
         return {};
     }
+
+    // Takes a here-doc's body out of the text: the lines after the one being
+    // parsed, up to one holding just the delimiter. Pure, because
+    // line_incomplete parses the same text again on every keystroke line.
+    Result<void> here_body(Redir kind, bool trim);
 
     // Both return the Error rather than a Result, so one spelling serves a
     // level that yields a node index and one that yields nothing.
@@ -253,9 +277,9 @@ struct Parser {
 
     bool ends_list() const
     {
-        return tok == Tok::End || tok == Tok::DSemi || reserved("}") || reserved("then") ||
-               reserved("elif") || reserved("else") || reserved("fi") || reserved("do") ||
-               reserved("done") || reserved("esac");
+        return tok == Tok::End || tok == Tok::DSemi || tok == Tok::RParen || reserved("}") ||
+               reserved("then") || reserved("elif") || reserved("else") || reserved("fi") ||
+               reserved("do") || reserved("done") || reserved("esac");
     }
 
     Result<u32> list(u32 nest);
@@ -269,9 +293,28 @@ struct Parser {
     Result<void> want(Str w);
     Result<void> skip_seps();
     Result<void> skip_newlines();
+    Result<void> redirect(bool &took);
     Result<void> simple(Str first, bool have_first);
     Result<u32> func_def(u32 nest, Str name);
 };
+
+// A here-doc's delimiter with its quotes off, and whether it had any — a
+// quoted one means the body is used as written. Not the expander's job: this
+// runs at parse time, where nothing may allocate into the shell.
+bool plain_word(Str w, char *out, usize cap, usize &n)
+{
+    bool quoted = false;
+    n           = 0;
+    for (usize i = 0; i < w.size() && n < cap; i++) {
+        char c = w[i];
+        if (c == '\'' || c == '"' || c == '\\') {
+            quoted = true;
+            continue;
+        }
+        out[n++] = c;
+    }
+    return quoted;
+}
 
 // What a separator or an operator is called in a diagnostic.
 Str near_of(Tok tok)
@@ -298,6 +341,86 @@ Str near_of(Tok tok)
     }
 }
 
+Result<void> Parser::here_body(Redir kind, bool trim)
+{
+    char delim[64];
+    usize dn     = 0;
+    bool literal = plain_word(word, delim, sizeof(delim), dn);
+    Str end(delim, dn);
+
+    Str text = lx.text();
+
+    // After the newline that ends this command, or after the body a here-doc
+    // in front of this one already took.
+    usize at = here_resume;
+    if (!at) {
+        at = text.find('\n', lx.pos());
+        if (at == Str::npos)
+            return Err(fail("syntax error: a here-document needs a body", true));
+        at++;
+    }
+
+    String body;
+    usize i = at;
+    for (;;) {
+        usize nl   = text.find('\n', i);
+        usize stop = nl == Str::npos ? text.size() : nl;
+        Str line   = text.substr(i, stop - i);
+
+        // `<<-` strips leading tabs from the body and from the terminator.
+        Str bare = line;
+        if (trim)
+            while (!bare.empty() && bare[0] == '\t')
+                bare = bare.substr(1);
+
+        if (bare == end) {
+            here_resume = nl == Str::npos ? text.size() : nl + 1;
+            break;
+        }
+        // The text ran out before the terminator, so a prompt asks for more.
+        if (nl == Str::npos)
+            return Err(fail("syntax error: a here-document needs its delimiter", true));
+
+        if (!body.append(bare) || !body.push('\n'))
+            return Err(oom());
+        i = nl + 1;
+    }
+
+    if (t.add_redirect(kind, body.str(), literal).is_err())
+        return Err(oom());
+    return {};
+}
+
+// One redirection, if the token is one. `took` says whether it was.
+Result<void> Parser::redirect(bool &took)
+{
+    Option<Redir> r = redir_of(tok);
+    took            = bool(r);
+    if (!took)
+        return {};
+
+    bool trim = tok == Tok::DLessDash;
+    TRY_VOID(advance());
+    if (tok != Tok::Word)
+        return Err(fail("syntax error: expected a file name"));
+
+    if (r.value() == Redir::Here) {
+        TRY_VOID(here_body(r.value(), trim));
+    } else if (r.value() == Redir::OutDup || r.value() == Redir::ErrDup) {
+        // `>&-` would have to say "this stream is closed", and nothing in the
+        // ABI can: there is no null sink and no closed descriptor.
+        if (word == "-")
+            return Err(fail("syntax error: >&- is not supported"));
+        if (word != "1" && word != "2")
+            return Err(fail("syntax error: >& wants 1 or 2"));
+        if (t.add_redirect(r.value(), word).is_err())
+            return Err(oom());
+    } else if (t.add_redirect(r.value(), word).is_err()) {
+        return Err(oom());
+    }
+    return advance();
+}
+
 // `first` is a name the caller ate to see whether a `(` followed it.
 Result<void> Parser::simple(Str first, bool have_first)
 {
@@ -314,15 +437,10 @@ Result<void> Parser::simple(Str first, bool have_first)
             TRY_VOID(advance());
             continue;
         }
-        Option<Redir> r = redir_of(tok);
-        if (!r)
+        bool took = false;
+        TRY_VOID(redirect(took));
+        if (!took)
             break;
-        TRY_VOID(advance());
-        if (tok != Tok::Word)
-            return Err(fail("syntax error: expected a file name"));
-        if (t.add_redirect(r.value(), word).is_err())
-            return Err(oom());
-        TRY_VOID(advance());
     }
 
     // A redirection alone is not a command: `> f` truncates nothing here.
@@ -556,6 +674,14 @@ Result<u32> Parser::compound(u32 nest, bool &any)
         return for_clause(nest);
     if (reserved("case"))
         return case_clause(nest);
+    if (tok == Tok::LParen) {
+        TRY_VOID(advance());
+        u32 body = TRY(list(nest + 1));
+        if (tok != Tok::RParen)
+            return Err(fail("syntax error: expected ')'", tok == Tok::End));
+        TRY_VOID(advance());
+        return t.add_node(Tree::Node{ Tree::Kind::Subshell, false, body, 0, 0, 0 });
+    }
 
     any = false;
     return u32(0);
@@ -591,12 +717,23 @@ Result<u32> Parser::pipeline(u32 nest)
     }
 
     if (is_compound) {
-        // v7 forks for this; with no fork it needs the base stdio the
-        // redirection stage threads through the walk.
-        if (tok == Tok::Pipe || redir_of(tok))
-            return Err(
-                fail("syntax error: a compound command cannot be piped "
-                     "or redirected yet"));
+        // A pipeline's stages are commands, so a compound cannot be one of
+        // them until they can be nodes. Redirecting it is another matter: the
+        // walk hands its own base down.
+        if (tok == Tok::Pipe)
+            return Err(fail("syntax error: a compound command cannot be piped yet"));
+        if (redir_of(tok)) {
+            u32 cmd = u32(t.size());
+            for (;;) {
+                bool took = false;
+                TRY_VOID(redirect(took));
+                if (!took)
+                    break;
+            }
+            if (t.end_command().is_err())
+                return Err(oom());
+            t.set_redirs(n, cmd);
+        }
     } else {
         u32 first = u32(t.size());
         TRY_VOID(simple(name, named));

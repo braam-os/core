@@ -8,6 +8,7 @@ Task<i32> builtin_cd(Args args, ShIo io);
 Task<i32> builtin_continue(Args args, ShIo io);
 Task<i32> builtin_dot(Args args, ShIo io);
 Task<i32> builtin_eval(Args args, ShIo io);
+Task<i32> builtin_exec(Args args, ShIo io);
 Task<i32> builtin_exit(Args args, ShIo io);
 Task<i32> builtin_export(Args args, ShIo io);
 Task<i32> builtin_fg(Args args, ShIo io);

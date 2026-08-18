@@ -171,6 +171,14 @@ Result<Tok> Lexer::next(Str &word)
     }
     if (c == '<') {
         i_++;
+        if (i_ < s_.size() && s_[i_] == '<') {
+            i_++;
+            if (i_ < s_.size() && s_[i_] == '-') {
+                i_++;
+                return Tok::DLessDash;
+            }
+            return Tok::DLess;
+        }
         return Tok::Less;
     }
     if (c == '>') {
@@ -178,6 +186,10 @@ Result<Tok> Lexer::next(Str &word)
         if (i_ < s_.size() && s_[i_] == '>') {
             i_++;
             return Tok::DGreat;
+        }
+        if (i_ < s_.size() && s_[i_] == '&') {
+            i_++;
+            return Tok::GreatAnd;
         }
         return Tok::Great;
     }
@@ -188,6 +200,10 @@ Result<Tok> Lexer::next(Str &word)
         if (i_ < s_.size() && s_[i_] == '>') {
             i_++;
             return Tok::ErrDGreat;
+        }
+        if (i_ < s_.size() && s_[i_] == '&') {
+            i_++;
+            return Tok::ErrGreatAnd;
         }
         return Tok::ErrGreat;
     }

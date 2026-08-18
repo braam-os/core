@@ -102,6 +102,7 @@ struct Handle {
     bool busy_r = false; // one reader and one writer at a time (HandleBusy)
     bool busy_w = false;
     u32 refs    = 1; // the table's, plus one for each syscall in flight
+    u32 fds     = 1; // descriptors naming it: Sys::Dup makes a second
 
     FileIo file;      // File
     HttpResponse res; // Body

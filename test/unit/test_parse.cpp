@@ -19,6 +19,12 @@ Str name_of(Redir r)
         return "2>";
     case Redir::ErrAppend:
         return "2>>";
+    case Redir::Here:
+        return "<<";
+    case Redir::OutDup:
+        return ">&";
+    case Redir::ErrDup:
+        return "2>&";
     }
     return "?";
 }
@@ -63,6 +69,21 @@ struct Render {
     }
 
     void node(u32 i)
+    {
+        body(i);
+        // A compound's own redirections hang off `d`, which a Pipe spends on
+        // its byte span instead.
+        const Tree::Node &nd = t.node(i);
+        if (nd.kind != Tree::Kind::Pipe && nd.d)
+            for (const Redirect &r : t.redirects(nd.d - 1)) {
+                put(name_of(r.kind));
+                put("{");
+                put(t.target(r));
+                put("}");
+            }
+    }
+
+    void body(u32 i)
     {
         const Tree::Node &nd = t.node(i);
         switch (nd.kind) {
@@ -143,6 +164,11 @@ struct Render {
             put("}");
             return;
         }
+        case Tree::Kind::Subshell:
+            put("sub(");
+            node(nd.a);
+            put(")");
+            return;
         case Tree::Kind::FuncDef:
             put("fn(");
             put(t.args(nd.b)[0]);
@@ -208,6 +234,22 @@ void test_parse()
     CHECK(shape("echo hi >> log") == "{echo}{hi}>>{log}");
     CHECK(shape("cmd 2> err 2>> more") == "{cmd}2>{err}2>>{more}");
     CHECK(shape("a > f | b") == "{a}>{f}|{b}");
+
+    // A here-doc's body is taken out of the text at parse time, which is what
+    // lets the same text be parsed again on every line without side effects.
+    CHECK(shape("cat <<EOF\nhi\nEOF") == "{cat}<<{hi\n}");
+    CHECK(shape("cat <<EOF\na\nb\nEOF") == "{cat}<<{a\nb\n}");
+    CHECK(shape("cat <<EOF\nEOF") == "{cat}<<{}"); // an empty body
+    CHECK(shape("cat <<EOF\nhi\nEOF\necho after") == "{cat}<<{hi\n};{echo}{after}");
+    CHECK(shape("cat <<-EOF\n\thi\n\tEOF") == "{cat}<<{hi\n}"); // tabs stripped
+    CHECK(shape("cat <<'EOF'\nhi\nEOF") == "{cat}<<{hi\n}");    // quoted delimiter
+    CHECK(shape("cat <<EOF | wc\nhi\nEOF") == "{cat}<<{hi\n}|{wc}");
+    CHECK(shape("cat <<A <<B\nx\nA\ny\nB") == "{cat}<<{x\n}<<{y\n}"); // in order
+
+    // `>&` takes a stream, not a name, and `>&-` cannot be said at all.
+    CHECK(shape("cmd 2>&1") == "{cmd}2>&{1}");
+    CHECK(shape("cmd >f 2>&1") == "{cmd}>{f}2>&{1}");
+    CHECK(shape("cmd >&2") == "{cmd}>&{2}");
     CHECK(shape("> f ls") == "{ls}>{f}"); // a redirection may lead
 
     // A word is stored raw: quoting decides where it ends, and what it then
@@ -348,12 +390,13 @@ void test_parse()
 
     // A compound needs the base stdio S7 threads through, so it may not yet be
     // piped or redirected.
-    CHECK(shape("{ a; } | wc") ==
-          "!syntax error: a compound command cannot be piped "
-          "or redirected yet");
-    CHECK(shape("while a; do b; done > f") ==
-          "!syntax error: a compound command cannot be "
-          "piped or redirected yet");
+    CHECK(shape("{ a; } | wc") == "!syntax error: a compound command cannot be piped yet");
+    CHECK(shape("while a; do b; done > f") == "while({a}){{b}}>{f}"); // redirected, now
+    CHECK(shape("{ a; } > f") == "{{a}}>{f}");
+    CHECK(shape("{ a; } > f 2>&1") == "{{a}}>{f}2>&{1}");
+    CHECK(shape("(a; b)") == "sub({a};{b})");
+    CHECK(shape("(a) > f") == "sub({a})>{f}");
+    CHECK(shape("(cd /x; ls)") == "sub({cd}{/x};{ls})");
 
     CHECK(shape("for 1 in a; do b; done") == "!syntax error: expected a name after 'for'");
     CHECK(shape("case x in a b) c;; esac") == "!syntax error: expected ')'");
@@ -361,11 +404,10 @@ void test_parse()
     CHECK(shape("esac") == "!syntax error: unexpected keyword");
     CHECK(shape("echo (x)") == "!syntax error near '('"); // parens are operators now
     CHECK(shape("f() echo hi") == "!syntax error: expected a compound command");
+    CHECK(shape("cmd >&-") == "!syntax error: >&- is not supported");
+    CHECK(shape("cmd >&x") == "!syntax error: >& wants 1 or 2");
     CHECK(shape("2f() { a; }") == "!syntax error near '('"); // not a name
-    CHECK(shape("f() { a; } | wc") ==
-          "!syntax error: a compound command cannot be piped "
-          "or redirected yet");
-    CHECK(shape("(a; b)") == "!syntax error near '('"); // a subshell has no grammar yet
+    CHECK(shape("f() { a; } | wc") == "!syntax error: a compound command cannot be piped yet");
     CHECK(shape("do b; done") == "!syntax error: unexpected keyword");
     CHECK(shape("fi") == "!syntax error: unexpected keyword");
 
@@ -394,6 +436,8 @@ void test_parse()
     CHECK(shape("f() {") == "?syntax error: expected '}'");
     CHECK(shape("f()") == "?syntax error: expected a compound command");
     CHECK(shape("f(") == "?syntax error: expected ')'");
+    CHECK(shape("cat <<EOF") == "?syntax error: a here-document needs a body");
+    CHECK(shape("cat <<EOF\nhi") == "?syntax error: a here-document needs its delimiter");
     CHECK(shape("!") == "!syntax error: expected a command");
 
     // Stage boundaries, checked apart from the rendering above.

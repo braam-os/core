@@ -558,14 +558,17 @@ The wire's conventions:
   is a record with its own staging block and its own scheduler job, so a socket read that never
   completes cannot starve the keystroke behind it.
 
-**The table is thirty-seven operations and `PROC_ABI` is 9**: four synchronous — `exit`,
-`getpid`, `now`, `stage` — and thirty-three asynchronous.
+**The table is thirty-eight operations and `PROC_ABI` is 10**: four synchronous — `exit`,
+`getpid`, `now`, `stage` — and thirty-four asynchronous. `Dup` is the newest, and the only one
+added after the milestones: a shell cannot say `2>&1` without it, and cannot keep a descriptor
+across a `Spawn` — which *moves* one — without it either.
 [System_Calls.md](System_Calls.md) lists them all with what each carries.
 
 Four rules bound the table:
 
 - **Every operation has a caller in `src/cmd/`.** That is a rule against *growing* the table on
-  speculation, not one that retires an operation whose caller is refactored.
+  speculation, not one that retires an operation whose caller is refactored. `Dup`'s caller is
+  `/bin/sh`, which is a program like any other.
 - **The synchronous half is closed at four.** Each is answerable inside the process's own worker
   with no kernel to ask — `getpid` from the closure, `now` from the step message's clock plus
   elapsed time, `exit` buffered onto the step's reply, `stage` refused with the "no room" answer

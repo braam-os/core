@@ -1,6 +1,6 @@
 # The shell, as a library a binary links (Concept.md §4). Every other program in
 # src/cmd/ is one translation unit; this one is a grammar, an expander, a line
-# editor, a job runtime and sixteen builtins, so it is a library and
+# editor, a job runtime and seventeen builtins, so it is a library and
 # src/cmd/sh.cpp is its entry point.
 #
 # expand.cpp, match.cpp, parse.cpp and tokenize.cpp are pure, and test/ compiles
@@ -10,6 +10,7 @@ add_library(braam_sh STATIC
     builtin/cd.cpp
     builtin/dot.cpp
     builtin/eval.cpp
+    builtin/exec.cpp
     builtin/exit.cpp
     builtin/export.cpp
     builtin/fg.cpp

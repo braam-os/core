@@ -62,6 +62,18 @@ Str lex(Str line, char *out, usize cap)
         case Tok::Less:
             put("<");
             break;
+        case Tok::DLess:
+            put("<<");
+            break;
+        case Tok::DLessDash:
+            put("<<-");
+            break;
+        case Tok::GreatAnd:
+            put(">&");
+            break;
+        case Tok::ErrGreatAnd:
+            put("2>&");
+            break;
         case Tok::Great:
             put(">");
             break;

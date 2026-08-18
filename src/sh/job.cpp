@@ -91,7 +91,14 @@ struct Ctx {
     // Where stdout goes when a `$(…)` is running this walk. Set on the whole
     // tree, so every pipeline in `$(a; b)` appends to the same string.
     String *capture = nullptr;
+
+    // What a stage starts from: the three the shell was given, until `exec`
+    // moves one or a compound hands its own down. Never closed by a stage.
+    ShIo base;
 };
+
+// The base `exec` set, which outlives the Ctx of the line that set it.
+ShIo g_base;
 
 // What `break` and `continue` asked for, until the pipeline they ran in picks
 // it up. 0 is "nothing asked".
@@ -248,7 +255,33 @@ Task<Result<void>> expand_all(const Ctx &cx, Run *r, ExpandErr &err)
     usize argvn = r->words.size();
     for (usize i = 0; i < n; i++)
         for (const Redirect &rd : r->t->redirects(r->cmd0 + i)) {
-            Task<Result<void>> t = expand_one(cx, r->t->target(rd), Split::One, r->words, err);
+            Str tgt = r->t->target(rd);
+
+            // A here-doc's body is text, not a name: `$` acts in it but quotes
+            // do not, so the quotes are escaped before the expander sees them
+            // and come back out as themselves. A quoted delimiter means even
+            // that much does not happen.
+            if (rd.kind == Redir::Here) {
+                if (rd.literal) {
+                    Field f;
+                    if (!f.text.assign(tgt) || !r->words.push(move(f)))
+                        co_return Err(Error::NoMemory);
+                    continue;
+                }
+                String armed;
+                for (usize k = 0; k < tgt.size(); k++) {
+                    char c = tgt[k];
+                    if ((c == '\'' || c == '"' || c == '\\') && !armed.push('\\'))
+                        co_return Err(Error::NoMemory);
+                    if (!armed.push(c))
+                        co_return Err(Error::NoMemory);
+                }
+                Task<Result<void>> t = expand_one(cx, armed.str(), Split::One, r->words, err);
+                CO_TRY_VOID(t ? co_await t : Err(Error::NoMemory));
+                continue;
+            }
+
+            Task<Result<void>> t = expand_one(cx, tgt, Split::One, r->words, err);
             CO_TRY_VOID(t ? co_await t : Err(Error::NoMemory));
         }
 
@@ -337,33 +370,59 @@ u32 open_flags(Redir kind)
     case Redir::Append:
     case Redir::ErrAppend:
         return SYS_O_WRITE | SYS_O_CREATE | SYS_O_APPEND;
+    case Redir::Here:
+    case Redir::OutDup:
+    case Redir::ErrDup:
+        break; // opens nothing
     }
     return SYS_O_READ;
 }
 
 // Whether a stage's descriptor is one of ours to close rather than one of the
-// three we were handed.
+// three it started from. A base fd belongs to the shell, not to the stage.
+bool ours(u32 fd, const ShIo &base)
+{
+    return fd >= SYS_FD_MIN && fd != base.in && fd != base.out && fd != base.err;
+}
+
 bool ours(u32 fd)
 {
     return fd >= SYS_FD_MIN;
 }
 
-Task<void> close_ours(u32 fd)
+Task<void> close_ours(u32 fd, const ShIo &base)
 {
-    if (ours(fd))
+    if (ours(fd, base))
         co_await close_fd(fd);
 }
 
 // Every descriptor a stage holds that no child took. A builtin's are closed the
 // moment it finishes, so that whatever reads the other end sees an end of
 // input; a stage that never started leaves its to the sweep at the end.
-Task<void> close_stage(const Stage &s)
+Task<void> close_stage(const Stage &s, const ShIo &base)
 {
-    co_await close_ours(s.in);
+    co_await close_ours(s.in, base);
     if (s.out != s.in)
-        co_await close_ours(s.out);
+        co_await close_ours(s.out, base);
     if (s.err != s.in && s.err != s.out)
-        co_await close_ours(s.err);
+        co_await close_ours(s.err, base);
+}
+
+// A spawn *moves* a descriptor, so one the shell means to keep — anything the
+// base holds — is copied first.
+Task<Result<void>> detach_base(Stage &s, const ShIo &base)
+{
+    u32 *slots[3] = { &s.in, &s.out, &s.err };
+    for (u32 *p : slots) {
+        if (*p < SYS_FD_MIN || (*p != base.in && *p != base.out && *p != base.err))
+            continue;
+        Task<Result<u32>> t = dup_fd(*p);
+        Result<u32> d       = t ? co_await t : Err(Error::NoMemory);
+        if (d.is_err())
+            co_return Err(d.error());
+        *p = d.value();
+    }
+    co_return {};
 }
 
 // Taking the keyboard back, which can in principle be refused. A child's claim
@@ -561,7 +620,7 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
         co_return 1;
     }
     for (usize i = 0; i < n; i++)
-        r->stages.push(Stage{});
+        r->stages.push(Stage{ cx.base.in, cx.base.out, cx.base.err });
 
     // Expansion, before anything is opened or spawned.
     ExpandErr xerr;
@@ -582,36 +641,10 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
         co_return 1;
     }
 
-    // Redirections first. Refusing here rather than at the first write is what
-    // stops a command running and producing side effects before its
-    // redirection turns out to be impossible.
-    i32 bad  = 0;
-    usize at = 0; // the next target, in the order they were expanded above
-    for (usize i = 0; i < n && !bad; i++) {
-        for (const Redirect &rd : r->t->redirects(r->cmd0 + i)) {
-            Str path            = r->targets[at++];
-            Task<Result<i32>> t = open_at(path, open_flags(rd.kind));
-            Result<i32> fd      = t ? co_await t : Err(Error::NoMemory);
-            if (fd.is_err()) {
-                co_await say2(SYS_STDERR, path, error_name(fd.error()));
-                bad = 1;
-                break;
-            }
-
-            // A second redirection of the same stream replaces the first, which
-            // is what `> a > b` means; the earlier file is closed first.
-            u32 *slot = rd.kind == Redir::In ? &r->stages[i].in
-                        : (rd.kind == Redir::ErrOut || rd.kind == Redir::ErrAppend)
-                            ? &r->stages[i].err
-                            : &r->stages[i].out;
-            if (ours(*slot))
-                co_await close_fd(*slot);
-            *slot = u32(fd.value());
-        }
-    }
-
-    // The pipes. Each end is moved into exactly one child, or borrowed by one
+    // The pipes first, so a redirection can displace one and `2>&1` can name
+    // one. Each end is moved into exactly one child, or borrowed by one
     // builtin and closed here — one end, one owner (Concept.md §4.3).
+    i32 bad = 0;
     for (usize i = 0; i + 1 < n && !bad; i++) {
         Task<Result<Piped>> t = make_pipe();
         Result<Piped> p       = t ? co_await t : Err(Error::NoMemory);
@@ -620,17 +653,83 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
             bad = 1;
             break;
         }
-        // A redirection displaces the pipe for that stream, but the pipe is
-        // still made and still closed — so `a > f | b` gives b a clean end of
-        // input rather than a wait that never finishes.
-        if (r->stages[i].out == SYS_STDOUT)
+        if (r->stages[i].out == cx.base.out)
             r->stages[i].out = u32(p.value().w);
         else if (!r->spare.push(u32(p.value().w)))
             bad = 1;
-        if (r->stages[i + 1].in == SYS_STDIN)
+        if (r->stages[i + 1].in == cx.base.in)
             r->stages[i + 1].in = u32(p.value().r);
         else if (!r->spare.push(u32(p.value().r)))
             bad = 1;
+    }
+
+    // Then the redirections, which displace what the pipe just put in — so
+    // `a > f | b` gives b a clean end of input, and `2>&1` before a `|` sees
+    // the pipe rather than the terminal. Refusing here rather than at the
+    // first write stops a command running before its redirection turns out to
+    // be impossible.
+    usize at = 0; // the next target, in the order they were expanded above
+    for (usize i = 0; i < n && !bad; i++) {
+        Stage &s = r->stages[i];
+        for (const Redirect &rd : r->t->redirects(r->cmd0 + i)) {
+            Str path = r->targets[at++];
+
+            // A second redirection of the same stream replaces the first, which
+            // is what `> a > b` means; the earlier file is closed first.
+            u32 *slot = rd.kind == Redir::In || rd.kind == Redir::Here ? &s.in
+                        : (rd.kind == Redir::ErrOut || rd.kind == Redir::ErrAppend ||
+                           rd.kind == Redir::ErrDup)
+                            ? &s.err
+                            : &s.out;
+
+            u32 got = 0;
+            if (rd.kind == Redir::Here) {
+                // The body goes in whole and the write end goes at once, so
+                // the reader sees it all and then an end of input. One write
+                // is one slot however long the body is (../user/io.h).
+                Task<Result<Piped>> pt = make_pipe();
+                Result<Piped> p        = pt ? co_await pt : Err(Error::NoMemory);
+                if (p.is_err()) {
+                    co_await say(SYS_STDERR, "out of memory");
+                    bad = 1;
+                    break;
+                }
+                if (Task<Result<void>> w = write_all(u32(p.value().w), path))
+                    co_await w;
+                co_await close_fd(u32(p.value().w));
+                got = u32(p.value().r);
+            } else if (rd.kind == Redir::OutDup || rd.kind == Redir::ErrDup) {
+                // `2>&1` is the other slot as it stands *now*, which is why
+                // `>f 2>&1` and `2>&1 >f` differ. A descriptor of ours needs a
+                // second number, since a spawn moves one and would take both.
+                u32 from = path == "1" ? s.out : s.err;
+                if (!ours(from)) {
+                    got = from;
+                } else {
+                    Task<Result<u32>> dt = dup_fd(from);
+                    Result<u32> d        = dt ? co_await dt : Err(Error::NoMemory);
+                    if (d.is_err()) {
+                        co_await say(SYS_STDERR, "out of memory");
+                        bad = 1;
+                        break;
+                    }
+                    got = d.value();
+                }
+            } else {
+                Task<Result<i32>> t = open_at(path, open_flags(rd.kind));
+                Result<i32> fd      = t ? co_await t : Err(Error::NoMemory);
+                if (fd.is_err()) {
+                    co_await say2(SYS_STDERR, path, error_name(fd.error()));
+                    bad = 1;
+                    break;
+                }
+                got = u32(fd.value());
+            }
+
+            if (ours(*slot, cx.base))
+                co_await close_fd(*slot);
+            *slot = got;
+        }
     }
 
     // The capture pipe, when a `$(…)` is running this pipeline. Only the last
@@ -638,7 +737,7 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     // nothing is captured, which is what every shell does.
     bool captured = false;
     for (usize i = 0; i < n && cx.capture && !bad; i++) {
-        if (r->stages[i].out != SYS_STDOUT)
+        if (r->stages[i].out != cx.base.out)
             continue;
         Task<Result<Piped>> t = make_pipe();
         Result<Piped> p       = t ? co_await t : Err(Error::NoMemory);
@@ -661,12 +760,6 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
             r->stages[i].fn = func_find(a[0]);
             if (!r->stages[i].fn)
                 r->stages[i].b = builtin_find(a[0]);
-            // Its body runs in this turn with the shell's own stdio, which S7
-            // is what threads through the walk.
-            else if (n > 1 || r->t->redirects(r->cmd0 + i).size()) {
-                co_await say2(SYS_STDERR, a[0], "a function cannot be piped or redirected yet");
-                bad = 1;
-            }
             continue;
         }
         Str who;
@@ -695,6 +788,12 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
         Stage &s = r->stages[i];
         if (s.b || s.fn || !r->args(i).size())
             continue;
+        if (Task<Result<void>> d = detach_base(s, cx.base))
+            if ((co_await d).is_err()) {
+                co_await say(SYS_STDERR, "out of memory");
+                bad = 1;
+                break;
+            }
         // An assignment prefix has nowhere to go: a child gets three
         // descriptors, an argv and a cwd, and no environment (§4.3).
         Task<Result<u32>> t = spawn(r->args(i), ChildIo{ s.in, s.out, s.err });
@@ -743,8 +842,13 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
             co_await say2(SYS_STDERR, who, "cannot be set");
             s.status = 1;
         } else if (s.fn) {
+            // The body runs against this stage's descriptors, which is what a
+            // base on the Ctx is for: `f | wc` and `f > log` need nothing else.
+            ShIo was    = cx.base;
+            cx.base     = ShIo{ s.in, s.out, s.err };
             Task<i32> t = call_func(cx, s.fn, r->args(i));
             s.status    = t ? co_await t : 1;
+            cx.base     = was;
         } else {
             Ctx *outer = g_ctx;
             g_ctx      = &cx;
@@ -757,7 +861,7 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
         undo_assigns(r->saved);
         // Closed the moment it is done, so whatever reads the other end sees
         // an end of input rather than waiting for a writer that has finished.
-        co_await close_stage(s);
+        co_await close_stage(s, cx.base);
         s.in = s.out = s.err = SYS_STDIN;
         if (i + 1 == n)
             status = s.status;
@@ -832,7 +936,7 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     // not have them closed under it.
     for (const Stage &s : r->stages)
         if (!s.moved)
-            co_await close_stage(s);
+            co_await close_stage(s, cx.base);
     for (u32 fd : r->spare)
         co_await close_fd(fd);
 
@@ -885,6 +989,169 @@ bool loop_step(Ctx &cx)
 
 // The walk, which every construct below runs its parts through.
 Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n);
+
+// A compound's own redirections, opened onto a base its body then inherits.
+// The fds are the walk's for the length of it, so `opened` collects what has
+// to go afterwards.
+Task<Result<void>> open_compound(Ctx &cx, const Tree &tree, u32 cmd, ShIo &io, Vec<u32> &opened)
+{
+    ExpandErr err;
+    for (const Redirect &rd : tree.redirects(cmd)) {
+        Vec<Field> got;
+        Task<Result<void>> t = expand_one(cx, tree.target(rd), Split::One, got, err);
+        CO_TRY_VOID(t ? co_await t : Err(Error::NoMemory));
+        Str path = got[0].text.str();
+
+        u32 *slot =
+            rd.kind == Redir::In || rd.kind == Redir::Here ? &io.in
+            : (rd.kind == Redir::ErrOut || rd.kind == Redir::ErrAppend || rd.kind == Redir::ErrDup)
+                ? &io.err
+                : &io.out;
+
+        if (rd.kind == Redir::Here) {
+            Result<Piped> p = Err(Error::NoMemory);
+            if (Task<Result<Piped>> pt = make_pipe())
+                p = co_await pt;
+            CO_TRY_VOID(p.is_err() ? Result<void>(Err(p.error())) : Result<void>());
+            if (Task<Result<void>> w = write_all(u32(p.value().w), path))
+                co_await w;
+            co_await close_fd(u32(p.value().w));
+            *slot = u32(p.value().r);
+        } else if (rd.kind == Redir::OutDup || rd.kind == Redir::ErrDup) {
+            u32 from = path == "1" ? io.out : io.err;
+            if (from < SYS_FD_MIN) {
+                *slot = from;
+                continue;
+            }
+            Result<u32> d = Err(Error::NoMemory);
+            if (Task<Result<u32>> dt = dup_fd(from))
+                d = co_await dt;
+            CO_TRY_VOID(d.is_err() ? Result<void>(Err(d.error())) : Result<void>());
+            *slot = d.value();
+        } else {
+            Result<i32> fd = Err(Error::NoMemory);
+            if (Task<Result<i32>> ot = open_at(path, open_flags(rd.kind)))
+                fd = co_await ot;
+            if (fd.is_err()) {
+                co_await say2(SYS_STDERR, path, error_name(fd.error()));
+                co_return Err(Error::Invalid);
+            }
+            *slot = u32(fd.value());
+        }
+        if (!opened.push(*slot))
+            co_return Err(Error::NoMemory);
+    }
+    co_return {};
+}
+
+// What `( … )` puts back. There is no fork, so the list runs in this shell and
+// the state it may move is taken away and handed back — everything but the job
+// table, whose children are this process's and must still be reaped.
+struct Checkpoint {
+    String cwd;
+    Vec<String> args;
+    Vec<VarEntry *> vars;
+    Vec<FuncEntry *> funcs;
+    ShIo base;
+    bool held = false;
+};
+
+Task<Result<void>> checkpoint_take(Checkpoint &c)
+{
+    if (Task<Result<String>> t = cwd_get())
+        if (Result<String> r = co_await t; r.is_ok())
+            c.cwd = move(r.value());
+
+    Vec<String> args;
+    for (usize i = 0; i <= args_count(); i++) {
+        String s;
+        if (!s.assign(args_at(i)) || !args.push(move(s)))
+            co_return Err(Error::NoMemory);
+    }
+    Vec<VarEntry *> vars;
+    if (!vars_copy(vars)) {
+        vars_drop(vars);
+        co_return Err(Error::NoMemory);
+    }
+    Vec<FuncEntry *> fns;
+    for (FuncEntry *e : funcs()) {
+        FuncEntry *k = heap_new<FuncEntry>();
+        if (!k || !k->name.assign(e->name.str()) || !fns.push(k)) {
+            heap_delete(k);
+            for (FuncEntry *q : fns)
+                heap_delete(q);
+            vars_drop(vars);
+            co_return Err(Error::NoMemory);
+        }
+        tree_hold(e->t);
+        k->t    = e->t;
+        k->body = e->body;
+    }
+
+    c.args  = args_swap(move(args));
+    c.vars  = vars_swap(move(vars));
+    c.funcs = move(funcs());
+    funcs() = move(fns);
+    c.base  = g_base;
+    c.held  = true;
+    co_return {};
+}
+
+Task<void> checkpoint_put(Checkpoint &c)
+{
+    if (!c.held)
+        co_return;
+    args_swap(move(c.args));
+
+    Vec<VarEntry *> spent = vars_swap(move(c.vars));
+    vars_drop(spent);
+
+    Vec<FuncEntry *> gone = move(funcs());
+    funcs()               = move(c.funcs);
+    for (FuncEntry *e : gone) {
+        tree_release(e->t);
+        heap_delete(e);
+    }
+
+    // An `exec` inside it does not escape it, and what that opened goes.
+    u32 mine[3] = { g_base.in, g_base.out, g_base.err };
+    g_base      = c.base;
+    for (u32 fd : mine)
+        if (fd >= SYS_FD_MIN && fd != c.base.in && fd != c.base.out && fd != c.base.err)
+            co_await close_fd(fd);
+
+    if (!c.cwd.empty())
+        if (Task<Result<String>> t = cwd_set(c.cwd.str()))
+            co_await t;
+    c.held = false;
+}
+
+Task<i32> exec_subshell(Ctx &cx, const Tree &tree, u32 n)
+{
+    Checkpoint c;
+    if (Task<Result<void>> t = checkpoint_take(c))
+        if ((co_await t).is_err()) {
+            co_await checkpoint_put(c);
+            co_await say(SYS_STDERR, "out of memory");
+            co_return 1;
+        }
+
+    ShIo was       = cx.base;
+    Task<i32> step = exec_node(cx, tree, tree.node(n).a);
+    i32 status     = step ? co_await step : 1;
+    cx.base        = was;
+
+    // `(exit 3)` reports 3 and leaves the shell standing, which is the one
+    // thing a subshell is for that survives having no fork.
+    if (cx.flow == Flow::Exit) {
+        cx.flow = Flow::Normal;
+        status  = cx.exit_status;
+        var_status(status);
+    }
+
+    co_await checkpoint_put(c);
+    co_return status;
+}
 
 // One substitution's output, remembered under where it began in the word so a
 // retry finds it rather than running the command twice.
@@ -949,6 +1216,7 @@ Task<Result<void>> run_capture(const Ctx &cx, Str command, bool ticked, ExpandEr
     own.cx->line        = text.str();
     own.cx->interactive = cx.interactive;
     own.cx->depth       = cx.depth; // so `$($($(…)))` is bounded like any nest
+    own.cx->base        = cx.base;
     own.cx->capture     = &out;
 
     if (Task<i32> t = exec_node(*own.cx, *own.t, own.t->root()))
@@ -1307,6 +1575,37 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
     i32 status = 0;
     u32 k      = 0;
 
+    // A compound's own redirections become the base its body starts from, and
+    // go back when it ends. A Pipe spends `d` on its byte span instead.
+    ShIo was = cx.base;
+    Vec<u32> opened;
+    struct Undo {
+        ~Undo()
+        {
+            if (on)
+                cx.base = was;
+        }
+
+        Ctx &cx;
+        const ShIo &was;
+        bool on;
+    } undo{ cx, was, nd.kind != Tree::Kind::Pipe && nd.d != 0 };
+
+    if (undo.on) {
+        ShIo io = cx.base;
+        if (Task<Result<void>> t = open_compound(cx, tree, nd.d - 1, io, opened)) {
+            if (Result<void> e = co_await t; e.is_err()) {
+                for (u32 fd : opened)
+                    co_await close_fd(fd);
+                if (e.error() != Error::Invalid)
+                    co_await say(SYS_STDERR, "out of memory");
+                var_status(1);
+                co_return 1;
+            }
+        }
+        cx.base = io;
+    }
+
     switch (nd.kind) {
     case Tree::Kind::Nop:
         break;
@@ -1374,6 +1673,11 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
         status = step ? co_await step : 1;
         break;
 
+    case Tree::Kind::Subshell:
+        step   = exec_subshell(cx, tree, n);
+        status = step ? co_await step : 1;
+        break;
+
     case Tree::Kind::FuncDef:
         // The tree the body is a node of takes a reference here, which is what
         // lets the definition outlive the line.
@@ -1384,6 +1688,9 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
         var_status(status);
         break;
     }
+
+    for (u32 fd : opened)
+        co_await close_fd(fd);
     co_return status;
 }
 
@@ -1413,6 +1720,42 @@ bool func_unset(Str name)
         return true;
     }
     return false;
+}
+
+Task<i32> sh_exec(Args args, ShIo io)
+{
+    if (args.size() > 1) {
+        // There is no re-instantiate-in-place and a spawn makes a new pid, so
+        // the honest substitute is to run it and leave with its status.
+        Args rest       = args.tail();
+        Result<u32> pid = Err(Error::NoMemory);
+        if (Task<Result<u32>> t = spawn(rest, ChildIo{ io.in, io.out, io.err }))
+            pid = co_await t;
+        if (pid.is_err()) {
+            if (Task<void> e = errln("exec", rest[0], pid.error()))
+                co_await e;
+            co_return pid.error() == Error::NotFound ? 127 : 126;
+        }
+        Result<Exited> done = Err(Error::NoMemory);
+        if (Task<Result<Exited>> t = wait_child(pid.value()))
+            done = co_await t;
+        i32 status = done.is_ok() ? done.value().status : 1;
+        shell_exit(status);
+        co_return status;
+    }
+
+    // The stage's descriptors become the shell's, and the walk in progress is
+    // told so its sweep leaves them alone.
+    ShIo was = g_base;
+    g_base   = io;
+    if (g_ctx)
+        g_ctx->base = io;
+
+    u32 old[3] = { was.in, was.out, was.err };
+    for (u32 fd : old)
+        if (fd >= SYS_FD_MIN && fd != io.in && fd != io.out && fd != io.err)
+            co_await close_fd(fd);
+    co_return 0;
 }
 
 Task<i32> sh_source(Str path, ShIo io)
@@ -1498,6 +1841,7 @@ Task<i32> run_line(Str line, bool interactive)
 
     own.cx->line        = line;
     own.cx->interactive = interactive;
+    own.cx->base        = g_base;
 
     Task<i32> t = exec_node(*own.cx, *own.t, own.t->root());
     i32 status  = t ? co_await t : 1;

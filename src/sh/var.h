@@ -41,6 +41,15 @@ Str args_at(usize i);
 // what a function call does around its own. $0 is index 0 and rides with it.
 Vec<String> args_swap(Vec<String> next);
 
+// The variable table, the same way, for `( … )`. Restoring through var_set
+// would trip the readonly refusal, and copying every entry costs a pair of
+// Strings each; the caller hands back what it took.
+Vec<VarEntry *> vars_swap(Vec<VarEntry *> next);
+
+// A copy of the table deep enough to put back, and the release for one.
+bool vars_copy(Vec<VarEntry *> &out);
+void vars_drop(Vec<VarEntry *> &v);
+
 // $$ and $0, planted once by the shell: nothing here makes a syscall.
 bool var_init(u32 pid, Str name0);
 

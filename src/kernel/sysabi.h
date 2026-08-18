@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 9;
+constexpr u32 PROC_ABI       = 10;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -85,6 +85,12 @@ enum class Sys : u32 {
     // process family because it is the state those operations read, and a
     // program that never spawns still moves it.
     Chdir, // arg bit 0 = set, else just report; payload = the path; data = the cwd
+
+    // A second descriptor for one open thing, which is the only way to say
+    // `2>&1` and the only way a shell's `exec >file` survives a Spawn — that
+    // moves a descriptor rather than copying it. One handle behind both, so a
+    // file's offset is shared and the two streams interleave.
+    Dup, // arg = fd;  status = the new fd
 
     // Time. The timer queue is the kernel's, and Sys::Now is monotonic and
     // says nothing about a day, so both of these have to be asked for.

@@ -42,6 +42,10 @@ Task<i32> sh_eval(Args args, ShIo io);
 // `unset -f`. False when there is no such function.
 bool func_unset(Str name);
 
+// `exec`: with no command its redirections become the shell's own and outlive
+// the line; with one it spawns, waits, and ends the shell with that status.
+Task<i32> sh_exec(Args args, ShIo io);
+
 // Whether the text ended *inside* something — a quote, a `${`, a trailing
 // `&&`, an unclosed `{` — so a reader should take another line before running
 // it. A parse of its own, which is what makes the accumulation re-parsing

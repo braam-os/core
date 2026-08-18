@@ -2,7 +2,7 @@
 
 namespace {
 
-// Sorted, because `help` prints it in order and a linear search over sixteen
+// Sorted, because `help` prints it in order and a linear search over seventeen
 // entries is not worth an index.
 constexpr Builtin TABLE[] = {
     { ".", "<file> — run a file's commands in this shell", builtin_dot },
@@ -10,6 +10,7 @@ constexpr Builtin TABLE[] = {
     { "cd", "[<dir>] — change the working directory, /home by default", builtin_cd },
     { "continue", "[<n>] — start a loop's next turn", builtin_continue },
     { "eval", "[<arg>...] — join the arguments and run them as a command", builtin_eval },
+    { "exec", "[<command>] — keep its redirections, or run it and leave", builtin_exec },
     { "exit", "[<status>] — end the shell", builtin_exit },
     { "export", "[<name>[=<value>]...] — mark a variable, which no child can see", builtin_export },
     { "fg", "[%n] — wait for a background job in the foreground", builtin_fg },

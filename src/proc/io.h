@@ -37,6 +37,10 @@ Str next_field(Str &line);
 
 Task<void> close_fd(u32 fd);
 
+// A second descriptor for the same open thing. One handle behind both, so a
+// file's offset is shared and closing one shuts nothing.
+Task<Result<u32>> dup_fd(u32 fd);
+
 // What Sys::Stat answers with, and one entry of what Sys::List answers with.
 // `kind` is SYS_KIND_FILE or SYS_KIND_DIR.
 struct FileInfo {

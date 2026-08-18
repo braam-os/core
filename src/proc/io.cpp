@@ -46,6 +46,14 @@ Task<void> close_fd(u32 fd)
     co_await sys_call(Sys::Close, fd);
 }
 
+Task<Result<u32>> dup_fd(u32 fd)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Dup, fd);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return u32(r.value().status);
+}
+
 Task<Result<String>> read_file(Str path)
 {
     Task<Result<i32>> o = open_read(path);
