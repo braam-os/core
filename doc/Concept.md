@@ -477,7 +477,7 @@ deaths in quick succession; a shell *waiting* for a worker is not one, since it 
 A replaced shell is a fresh one: kernel `/home`, empty job table.
 
 **A shell builtin is not kernel code**: the twenty-six of them live inside `/bin/sh`, in
-`src/sh/builtin/`. Two clauses make one. The first is that it touches the shell *process's own*
+`src/cmd/sh/builtin/`. Two clauses make one. The first is that it touches the shell *process's own*
 state — its working directory, which a typed command inherits at spawn; its job table, which no
 syscall shows anyone; its variables, its options, its traps, its loop. That is `cd`, `fg`,
 `jobs`, `kill`, `exit`, `set`, `shift`, `read`, `trap`, `wait`, `export`, `readonly`, `unset`,
@@ -703,7 +703,7 @@ Cross-instance data movement is Appendix B.
 under §4 like any other: nothing here is a kernel concept, and the syscall table did not gain an
 operation for any of it.
 
-**The grammar.** A line is a tree of pipelines, and `src/sh/parse.h` is the one statement of it:
+**The grammar.** A line is a tree of pipelines, and `src/cmd/sh/parse.h` is the one statement of it:
 
 ```
 line     := list
@@ -1004,15 +1004,15 @@ src/kernel/jsref.h      the externref table and JsRef (§3.7)
 src/kernel/sysabi.h     the kernel↔process wire, included by both sides (§4.3)
 src/proc/               a process binary's whole runtime: _start, syscalls, stdio
 src/cmd/                one file per program; every program is a binary of its own
+src/cmd/sh/             the shell (§4.5): grammar, word expander, pattern matcher, condition
+                        evaluator, variables, LineEditor, job runtime, builtins, and the
+                        main.cpp that makes them a binary like any other
 src/fs/                 Fs interface, path, VFS, OpfsFs, storage ABI
 src/svc/                fetch, WebSocket, clipboard, file transfer, clock, processes (§6)
 src/ui/                 the layout layer over a Grid: Pane, TextBuf, TextView (§3.5)
 src/user/               exec and the syscall dispatcher, the console and its pump, the
                         pipes behind a stage's stdio, ProcFs, boot and init
 src/user/tty.h          the terminal claims: KeyInput, FullScreen
-src/sh/                 the shell (§4.5): grammar, word expander, pattern matcher, condition
-                        evaluator, variables, LineEditor, job runtime, builtins
-src/cmd/sh.cpp          its entry point — /bin/sh is a binary like any other
 rootfs/                 the tree tools/pack.py packs into the root: /bin, /share, /README
 examples/hello/         the SDK's worked example, and an ordinary build target
 test/                   in-wasm unit tests, the Node driver, and the fakes: storage,

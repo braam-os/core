@@ -1,5 +1,5 @@
+#include "cmd/sh/condrun.h"
 #include "proc/io.h"
-#include "sh/condrun.h"
 
 // The same expression `/bin/sh`'s builtin evaluates, over the same two files.
 // The builtin shadows the name at a prompt; this is what anything spawning by

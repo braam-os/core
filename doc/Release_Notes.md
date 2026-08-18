@@ -7,6 +7,33 @@ of the two needs amending.
 
 ---
 
+## src/sh became src/cmd/sh
+
+The shell is a program (§4), and it was the only program whose code did not live in `src/cmd/`.
+`src/sh/` was a top-level tree beside `src/fs/`, `src/svc/` and `src/user/` — the layers *below*
+userland — and being there said the shell was one of those, which stopped being true when it
+became a binary. It is `src/cmd/sh/` now, a directory beside the thirty-four one-file programs,
+and its entry point is `main.cpp` inside it rather than `src/cmd/sh.cpp` outside. Nothing else in
+the tree gains a directory by doing this: a program that needs one is what the shell is, and
+`braam_add_program` already takes a source path rather than assuming `<name>.cpp`.
+
+**The build got shorter, not longer.** `add_subdirectory(src/sh)` left the top-level
+`CMakeLists.txt` and became `add_subdirectory(sh)` at the top of `src/cmd/`'s own, so the shell's
+library is declared where its binary is. `/bin/test` names `sh/cond.cpp sh/condrun.cpp` instead of
+`../sh/cond.cpp` — the same two files, no longer reached for through a parent.
+
+**`#include "sh/x.h"` became `#include "cmd/sh/x.h"`**, which is the only cost. Includes are
+root-relative from `src/`, so the builtins and `src/cmd/test.cpp` and the five unit tests that
+reach into the shell all name a directory deeper than before. Sibling includes inside the shell
+are unchanged, because a quoted include finds a sibling first — which is why `main.cpp` says
+`"shell.h"` where `src/cmd/sh.cpp` had said `"sh/shell.h"`.
+
+`sh.wasm` is 215,270 bytes before and after, to the byte, and the three CTest cases pass
+unchanged. Notes above this one name the old paths where they are describing what happened at the
+time; their file *links* were repointed, so none is dead.
+
+---
+
 ## The shell's plan is deleted, and what only it held is here
 
 Last of the stages in `src/sh/TODO.md`, and the one that deletes it. Ten stages had landed and
@@ -99,7 +126,7 @@ script-entry policy belongs to the stage that adds `sh file` and `sh -c`". This 
 and v7's answer is taken: a script stops where the parameter is missing rather than running on
 past a hole, while at a prompt only the line is abandoned. It reuses `Flow::Exit` and so adds no
 exit path, exactly as `set -e` did. Folding the decision in also collapsed four hand-copied
-expansion-failure epilogues in [job.cpp](../src/sh/job.cpp) into one `expand_failed`, which is
+expansion-failure epilogues in [job.cpp](../src/cmd/sh/job.cpp) into one `expand_failed`, which is
 where the `^C`-is-130 distinction now lives once instead of four times.
 
 **`#!` is settled rather than deferred.** `exec_meta` requires `\0asm` and a `braam` custom
@@ -141,7 +168,7 @@ name runs.
 **The expression is pure and the probing is not, and they had to be two files.** v7's `test` is
 five mutually recursive functions, and three of its primaries — `-r -w -x -f -d -s -t` — have to
 ask the filesystem. Making the recursion coroutines would have cost a frame per nesting level
-against an allocator whose top size class is 512 bytes. Instead [cond.cpp](../src/sh/cond.cpp)
+against an allocator whose top size class is 512 bytes. Instead [cond.cpp](../src/cmd/sh/cond.cpp)
 walks the expression twice: once naming every file primary, then, with the answers in hand, once
 more evaluating. It works because **v7's `-a` and `-o` are the bitwise `&` and `|`** rather than
 the short-circuiting pair, so both sides of every operator always evaluate and the two walks
@@ -149,7 +176,7 @@ consume the same tokens in the same order. The indices line up by construction, 
 between two scanners — which is why collecting and evaluating are one function with a flag rather
 than two. `cond.cpp` reaches no syscall, so it joins `parse.cpp` and `expand.cpp` on the purity
 boundary and `test_cond.cpp` checks the whole grammar against a table of answers.
-[condrun.cpp](../src/sh/condrun.cpp) is what goes and looks; it touches no shell state, which is
+[condrun.cpp](../src/cmd/sh/condrun.cpp) is what goes and looks; it touches no shell state, which is
 what lets `src/cmd/test.cpp` build the binary out of the same two files rather than link
 `braam_sh`.
 
@@ -201,7 +228,7 @@ the end of `exec_node`, where every node's status passes through once. It reuses
 
 **`set -u` is a field on `Vars`, not a callback.** A lookup cannot tell a bare `$x` from the one
 inside `${x-y}`: only the walk knows that the operators asked first and are exempt. Making it
-data keeps [expand.cpp](../src/sh/expand.cpp) pure, so the rule is checked in `test_expand.cpp`
+data keeps [expand.cpp](../src/cmd/sh/expand.cpp) pure, so the rule is checked in `test_expand.cpp`
 with the rest of the expander. The check went into `named` and `positional` rather than `emit`,
 because a bare `$x` reaches those two straight from `dollar()`.
 

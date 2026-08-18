@@ -1,7 +1,7 @@
 // One declaration per builtin, so table.cpp names them without a header each.
 #pragma once
 
-#include "sh/builtin.h"
+#include "cmd/sh/builtin.h"
 
 Task<i32> builtin_bracket(Args args, ShIo io);
 Task<i32> builtin_break(Args args, ShIo io);

@@ -134,8 +134,8 @@ ordinary filesystem, so you can bring the file in with the browser's file picker
 | [src/ui/](src/ui/) | the layout layer over the grid of cells |
 | [src/user/](src/user/) | starting programs, the system calls, the console, pipes, `/proc`, boot |
 | [src/proc/](src/proc/) | the runtime that every program carries |
-| [src/sh/](src/sh/) | the shell |
 | [src/cmd/](src/cmd/) | one file per program, `sh` among them |
+| [src/cmd/sh/](src/cmd/sh/) | the shell |
 | [web/](web/) | the page, the workers, the renderer, the browser side of every interface |
 | [test/](test/) | the tests, and a simulated browser to run them against |
 

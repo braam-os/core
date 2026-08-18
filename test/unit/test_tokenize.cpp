@@ -1,6 +1,6 @@
+#include "cmd/sh/tokenize.h"
 #include "harness.h"
 #include "kernel/str.h"
-#include "sh/tokenize.h"
 
 namespace {
 

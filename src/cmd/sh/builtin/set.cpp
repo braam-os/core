@@ -1,8 +1,8 @@
+#include "cmd/sh/job.h"
+#include "cmd/sh/var.h"
 #include "decl.h"
 #include "kernel/string.h"
 #include "kernel/text.h"
-#include "sh/job.h"
-#include "sh/var.h"
 
 // Builtins because the table, the option letters and the positional parameters
 // are this process's own: a `set` in /bin would fill a child's and exit.

@@ -1,6 +1,6 @@
+#include "cmd/sh/match.h"
 #include "harness.h"
 #include "kernel/str.h"
-#include "sh/match.h"
 
 namespace {
 

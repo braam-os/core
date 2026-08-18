@@ -1,7 +1,7 @@
+#include "cmd/sh/job.h"
 #include "decl.h"
 #include "kernel/fmt.h"
 #include "kernel/string.h"
-#include "sh/job.h"
 
 // A builtin because the job table is the shell's own memory, and no syscall
 // shows one process another's.

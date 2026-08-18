@@ -1,6 +1,11 @@
 # One binary per program, each its own wasm module (Concept.md §4.1). The recipe
 # itself is cmake/BraamProgram.cmake, which the SDK installs — so a program built
 # out of tree is built the way these are.
+
+# The shell is the one program with a directory of its own, and the library it
+# builds is linked below like any other.
+add_subdirectory(sh)
+
 set(BRAAM_BIN_LIST cat chat clear curl date df echo edit false grep head hog
                    import less ls mkdir mount pbcopy pbpaste ps pwd rm save sh sleep spin tail
                    test timeout touch true uname vmstat watch wc)
@@ -10,13 +15,15 @@ set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 # nothing to ask for: it is what a program is (Concept.md §4).
 
 # A program that is more than one translation unit names the library that holds
-# the rest of it. Only the shell is.
+# the rest of it, and where its own source is when that is not <name>.cpp. Only
+# the shell is either.
 set(BRAAM_BIN_LIB_sh braam_sh)
+set(BRAAM_BIN_SRC_sh sh/main.cpp)
 
 # ...or names the extra sources outright. /bin/test is the shell's expression
 # evaluator over a proc_main, and linking braam_sh for it would drag the whole
 # shell in for two files.
-set(BRAAM_BIN_SRC_test test.cpp ../sh/cond.cpp ../sh/condrun.cpp)
+set(BRAAM_BIN_SRC_test test.cpp sh/cond.cpp sh/condrun.cpp)
 
 # An undefined LIBS expands to nothing, which is the recipe's default.
 foreach(prog IN LISTS BRAAM_BIN_LIST)

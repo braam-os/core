@@ -1,7 +1,7 @@
+#include "cmd/sh/job.h"
+#include "cmd/sh/var.h"
 #include "decl.h"
 #include "kernel/string.h"
-#include "sh/job.h"
-#include "sh/var.h"
 
 Task<i32> builtin_unset(Args args, ShIo io)
 {

@@ -1,7 +1,7 @@
+#include "cmd/sh/job.h"
 #include "decl.h"
 #include "kernel/text.h"
 #include "kernel/vec.h"
-#include "sh/job.h"
 
 // A builtin because the job table is the shell's own memory, as `jobs` and
 // `kill` are. It puts the job in front while it waits, which v7's `wait` does

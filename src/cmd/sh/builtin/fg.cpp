@@ -5,10 +5,10 @@
 // Both halves are jobs_wait's, because both are syscalls the shell makes on its
 // own behalf — Sys::Fg for each of the job's stages, then giving the keyboard
 // back so that a job which wants raw keys can claim them.
+#include "cmd/sh/job.h"
 #include "decl.h"
 #include "kernel/string.h"
 #include "kernel/text.h"
-#include "sh/job.h"
 
 Task<i32> builtin_fg(Args args, ShIo io)
 {

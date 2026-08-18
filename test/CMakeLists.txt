@@ -39,11 +39,11 @@ add_executable(tests
     # braam_sh, which would drag the process runtime's imports in with them.
     # glob.cpp is the walk over the store and does not belong here, and neither
     # does condrun.cpp, which is what answers cond.cpp's probes.
-    ../src/sh/cond.cpp
-    ../src/sh/expand.cpp
-    ../src/sh/match.cpp
-    ../src/sh/parse.cpp
-    ../src/sh/tokenize.cpp
+    ../src/cmd/sh/cond.cpp
+    ../src/cmd/sh/expand.cpp
+    ../src/cmd/sh/match.cpp
+    ../src/cmd/sh/parse.cpp
+    ../src/cmd/sh/tokenize.cpp
 
     # The option parser is the process runtime's, and pure for the same reason:
     # Args, Str and Result and nothing else. braam_proc is not linked here.

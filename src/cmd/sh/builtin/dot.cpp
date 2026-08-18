@@ -1,5 +1,5 @@
+#include "cmd/sh/job.h"
 #include "decl.h"
-#include "sh/job.h"
 
 // A builtin because a sourced file sets this shell's variables and defines its
 // functions: a child would fill its own and exit.

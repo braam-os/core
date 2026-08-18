@@ -1,6 +1,6 @@
+#include "cmd/sh/parse.h"
 #include "harness.h"
 #include "kernel/str.h"
-#include "sh/parse.h"
 
 namespace {
 

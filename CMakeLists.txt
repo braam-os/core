@@ -80,7 +80,6 @@ add_subdirectory(src/svc)
 add_subdirectory(src/ui)
 add_subdirectory(src/user)
 add_subdirectory(src/proc)
-add_subdirectory(src/sh)
 
 # The program recipe, shared with the SDK: it names the targets a consumer
 # imports, so this tree aliases them to the same names.

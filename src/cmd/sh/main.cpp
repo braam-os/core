@@ -1,8 +1,8 @@
+#include "job.h"
 #include "kernel/text.h"
 #include "proc/io.h"
 #include "proc/opt.h"
-#include "sh/job.h"
-#include "sh/shell.h"
+#include "shell.h"
 
 // The shell, as a program like any other (Concept.md §4). There is no in-kernel
 // shell left to be §4's exception: what a prompt needs — a pipeline, a
@@ -10,8 +10,8 @@
 // what the §4.3 syscall table is.
 //
 // Four ways in, and the argument arithmetic that picks $0 out of them is v7's
-// (cmd/sh/args.c, cmd/sh/main.c): `sh -c cmd name args...` names $0 itself, a
-// script file is its own $0, and otherwise $0 is argv[0].
+// (v7's own sh/args.c and sh/main.c): `sh -c cmd name args...` names $0 itself,
+// a script file is its own $0, and otherwise $0 is argv[0].
 namespace {
 
 constexpr Str USAGE = "usage: sh [-eux] [-s | -c <command> | <file>] [<arg>...]\n";

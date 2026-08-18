@@ -1,7 +1,7 @@
+#include "cmd/sh/cond.h"
 #include "harness.h"
 #include "kernel/str.h"
 #include "kernel/vec.h"
-#include "sh/cond.h"
 
 namespace {
 

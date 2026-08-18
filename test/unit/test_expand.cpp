@@ -1,7 +1,7 @@
+#include "cmd/sh/expand.h"
 #include "harness.h"
 #include "kernel/fmt.h"
 #include "kernel/str.h"
-#include "sh/expand.h"
 
 namespace {
 

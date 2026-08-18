@@ -1,5 +1,5 @@
+#include "cmd/sh/condrun.h"
 #include "decl.h"
-#include "sh/condrun.h"
 
 // Not the shell's own state: builtin.h's second clause. The expression itself
 // is ../cond.cpp, and /bin/test runs the same two files.

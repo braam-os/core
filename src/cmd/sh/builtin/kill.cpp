@@ -7,10 +7,10 @@
 // (Concept.md §4.3), and a bare pid the shell did not start is exactly that —
 // so `kill 12` is gone, and the authority it needed was never the shell's to
 // have once the shell became a process.
+#include "cmd/sh/job.h"
 #include "decl.h"
 #include "kernel/string.h"
 #include "kernel/text.h"
-#include "sh/job.h"
 
 Task<i32> builtin_kill(Args args, ShIo io)
 {

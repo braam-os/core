@@ -1,5 +1,5 @@
+#include "cmd/sh/job.h"
 #include "decl.h"
-#include "sh/job.h"
 
 // A builtin because the descriptors it keeps are this shell's own: a child
 // would take them and exit.

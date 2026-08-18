@@ -1,6 +1,6 @@
+#include "cmd/sh/job.h"
 #include "decl.h"
 #include "kernel/text.h"
-#include "sh/job.h"
 
 namespace {
 

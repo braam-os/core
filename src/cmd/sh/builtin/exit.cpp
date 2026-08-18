@@ -1,6 +1,6 @@
+#include "cmd/sh/shell.h"
 #include "decl.h"
 #include "kernel/text.h"
-#include "sh/shell.h"
 
 // Asks rather than acts. A builtin runs with the shell in the middle of a line,
 // so returning from here returns into run_line and not out of the shell; the

@@ -1,6 +1,6 @@
+#include "cmd/sh/var.h"
 #include "decl.h"
 #include "kernel/string.h"
-#include "sh/var.h"
 
 namespace {
 

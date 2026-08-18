@@ -1,7 +1,7 @@
-# The shell, as a library a binary links (Concept.md §4). Every other program in
-# src/cmd/ is one translation unit; this one is a grammar, an expander, a line
-# editor, a job runtime and twenty-six builtins, so it is a library and
-# src/cmd/sh.cpp is its entry point.
+# The shell, as a library its binary links (Concept.md §4). Every other program
+# in src/cmd/ is one translation unit; this one is a grammar, an expander, a line
+# editor, a job runtime and twenty-six builtins, so it is a directory of its own
+# beside them and main.cpp is its entry point.
 #
 # cond.cpp, expand.cpp, match.cpp, parse.cpp and tokenize.cpp are pure, and
 # test/ compiles them into tests.wasm directly rather than linking this.

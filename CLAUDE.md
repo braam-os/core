@@ -214,7 +214,7 @@ Every program is a binary; there is no in-kernel program, no program registry an
 one (Concept.md §4). A command word resolves as **function, then builtin, then `/bin`**, and only
 the last of the three costs a process. Two kinds of thing run a command:
 
-- **Shell builtin** — the twenty-six in `src/sh/builtin/`, inside `/bin/sh`, plus a shell
+- **Shell builtin** — the twenty-six in `src/cmd/sh/builtin/`, inside `/bin/sh`, plus a shell
   function, which is the same thing named by the user. Two clauses make one. Either it touches the
   shell *process's* own state — its cwd, which a typed command inherits at spawn; its job table,
   which no syscall shows anyone; its variables, its options, its traps, its loop — **or its whole
@@ -424,9 +424,10 @@ change to argue in Concept.md first.
   `src/svc/` (fetch, WebSocket, clipboard, file transfer, wall clock, process operations);
   `src/ui/` (layout over a `Grid`: `Pane`, `TextBuf`, `TextView`); `src/user/` (`exec` and the
   syscall dispatcher, the console and its pump, the pipes behind a stage's stdio, `ProcFs`, boot
-  and init); `src/proc/` (a process binary's runtime, `screen.cpp` included); `src/sh/` (grammar,
-  word expander, pattern matcher, condition evaluator, variables, line editor, job runtime,
-  builtins); `src/cmd/` (one file per program, `sh.cpp` among them);
+  and init); `src/proc/` (a process binary's runtime, `screen.cpp` included); `src/cmd/` (one file
+  per program) and `src/cmd/sh/` (the one program that needs a directory: grammar, word expander,
+  pattern matcher, condition evaluator, variables, line editor, job runtime, builtins, and the
+  `main.cpp` that makes them a binary);
   `test/unit/`; `web/`; `rootfs/`; `examples/`; `tools/`; `cmake/`.
 - `braam_fs` and `braam_svc` are siblings above the kernel and below userland: they must not depend
   upwards or on each other, and anything needing the scheduler or screen belongs in `src/user/`

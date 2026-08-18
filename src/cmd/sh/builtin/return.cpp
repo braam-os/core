@@ -1,6 +1,6 @@
+#include "cmd/sh/job.h"
 #include "decl.h"
 #include "kernel/text.h"
-#include "sh/job.h"
 
 // Asks rather than acts, as `break` and `exit` do: the function call that must
 // hear it is up the walk. Outside one it is a no-op.
