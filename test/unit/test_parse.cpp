@@ -353,8 +353,10 @@ void test_parse()
     CHECK(shape("a ||") == "?syntax error: expected a command");
     CHECK(shape("{ a;") == "?syntax error: expected '}'");
     CHECK(shape("{ a; b") == "?syntax error: expected '}'");
-    CHECK(shape("echo 'a") == "?unterminated quote or ${");
-    CHECK(shape("echo ${x") == "?unterminated quote or ${");
+    CHECK(shape("echo 'a") == "?unterminated quote, ${ or $(");
+    CHECK(shape("echo ${x") == "?unterminated quote, ${ or $(");
+    CHECK(shape("echo $(a") == "?unterminated quote, ${ or $(");
+    CHECK(shape("echo `a") == "?unterminated quote, ${ or $(");
     CHECK(shape("if a") == "?syntax error: expected 'then'");
     CHECK(shape("if a; then b") == "?syntax error: expected 'fi'");
     CHECK(shape("while a") == "?syntax error: expected 'do'");

@@ -2635,6 +2635,44 @@ if (mode === "--kernel") {
     gshows("case /home/g/bb in */bb) echo path;; esac", "path");
     submit("rm -r /home/g", (gt += 0.01));
 
+    // Command substitution: a pipe the shell drains itself. The unit suite has
+    // the hook against a canned callback; what it cannot reach is a real
+    // command writing down a real pipe.
+    submit("mkdir /home/c", (gt += 0.01));
+    // Three copies of a 2,359-byte file: more than the eight writes a pipe
+    // holds, so the drain has to be running before the wait or this hangs.
+    submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
+
+    const cshows = (line, want) => {
+        submit("clear", (gt += 0.005));
+        const got = output(submit(line, (gt += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    cshows("echo $(echo hi)", "hi");
+    cshows("echo `echo tick`", "tick"); // the backtick form
+    cshows("echo a$(echo b)c", "abc");
+    cshows("echo $(echo a b)", "a b"); // splits, then echo rejoins
+    // A `$(…)` inside quotes quotes independently, and the captured spacing
+    // survives because the field is not split.
+    cshows("echo \"$(echo 'a   b')\"", "a   b");
+    cshows("echo $(echo 'a   b')", "a b"); // unquoted: split, then rejoined
+    cshows("echo '$(echo no)'", "$(echo no)"); // single quotes: as typed
+    cshows("echo $(echo one; echo two)", "one two"); // a list, in order
+    cshows("echo $(echo $(echo deep))", "deep"); // nested
+    cshows("x=$(ls /bin | grep less); echo $x", "less"); // through a real pipeline
+    cshows("echo $(echo hi | wc)", "1 1 3");
+    cshows("echo $(pwd)/x", "/home/x"); // no trailing newline in the value
+    cshows("echo $(jobs)done", "done"); // a builtin down the same pipe
+    cshows("echo $(nosuchcmd) after", "braam: nosuchcmd: not found|after");
+    cshows("for f in $(echo p q); do echo $f; done", "p|q");
+    cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
+    // The many-writes case: 7,077 bytes is fourteen chunks against eight
+    // slots, so without drain-before-wait this one hangs rather than fails.
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "123 1191 7077");
+    submit("rm -r /home/c", (gt += 0.01));
+
     // exit ends the shell, and nothing runs after it — not even the rest of
     // its own line, which is Flow::Exit end to end. Last, for that reason.
     s = submit("clear", 14097);

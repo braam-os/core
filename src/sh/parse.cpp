@@ -208,9 +208,9 @@ struct Parser {
         prev          = lx.pos();
         Result<Tok> r = lx.next(word);
         if (r.is_err()) {
-            // The lexer refuses only an unclosed quote or `${`, which is
-            // exactly the case a prompt should keep reading.
-            err.message = "unterminated quote or ${";
+            // The lexer refuses only something left unclosed, which is exactly
+            // the case a prompt should keep reading.
+            err.message = "unterminated quote, ${ or $(";
             err.more    = true;
             return Err(Error::Invalid);
         }

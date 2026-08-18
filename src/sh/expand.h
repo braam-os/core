@@ -21,7 +21,7 @@ struct Field {
 };
 
 // What a `$` needs from the shell. Function pointers, so the unit tests pass
-// literals and this file stays clear of every syscall. All four are required.
+// literals and this file stays clear of every syscall. All five are required.
 struct Vars {
     void *ctx = nullptr;
 
@@ -38,20 +38,35 @@ struct Vars {
     // past `count` is empty.
     usize (*count)(void *ctx)     = nullptr;
     Str (*at)(void *ctx, usize i) = nullptr;
+
+    // What the `$(…)` or backtick beginning at byte `at` of the raw word
+    // printed. False when it has not been run yet, which abandons the word
+    // with Err(Again) rather than guessing: running a command needs a
+    // co_await, and nothing in this file may have one.
+    bool (*substitute)(void *ctx, usize at, Str command, Str &out) = nullptr;
 };
 
 // Whether the word may become more than one. `One` is an assignment's value or
 // a redirection target: exactly one field, however it expands.
 enum class Split : u8 { Fields, One };
 
-// Why Err(Invalid). `name` is set only by `${x?…}`; both are views into the
-// word or into a literal, so neither outlives the call.
+// Why Err(Invalid), and what Err(Again) is waiting for. `name` is set only by
+// `${x?…}`; every view here is into the word or into a literal, so none
+// outlives the call.
 struct ExpandErr {
     Str name;
     Str message;
+
+    // Err(Again): the substitution to run before this word can expand.
+    usize at = 0; // where it begins in the raw word, which keys the memo
+    Str command;  // the text inside it
+    bool ticked = false;
 };
 
 // Appends the fields `raw` yields — none, one, or several. Err(Invalid) is a
 // quote or a `${` the lexer would have refused, an expansion nested too deep,
 // a malformed `${…}`, or `${x?…}` on an unset variable; `err` says which.
+// Err(Again) is a substitution whose output `substitute` did not have: run it,
+// remember it under `err.at`, and call again. Nothing is appended in that
+// case, so a caller retrying must expand into a vector it can clear.
 Result<void> expand_word(Str raw, const Vars &v, Split split, Vec<Field> &out, ExpandErr &err);

@@ -354,6 +354,11 @@ change to argue in Concept.md first.
 - **`(` and `)` are tokens with no grammar above `case`.** S4 needed `)` to end an arm, so
   `echo (x)` is `syntax error near '('` rather than a word. `( list )` as a state checkpoint is
   S7's, and its lexing is already done.
+- **A `$( )` is not a subshell, because there is no fork.** It runs in the shell, so `$(cd /x)`
+  moves it and `$(y=1)` sets a real variable; `$(exit)` does *not* end the shell, since the
+  command is run against its own `Ctx` rather than through `run_line`. The save-and-restore
+  checkpoint S7 owes `( list )` is what would contain the rest. Its output is bounded only by the
+  process's 16 MB cap — v7's answer too, and truncating would corrupt a value silently.
 - **Only a pipeline may go into the background.** `a && b &`, `{ … ; } &` and `while … done &`
   are refused, because backgrounding means the shell keeps running while the rest goes and
   nothing in a process can wait for a sibling task. **And a compound command cannot yet be piped

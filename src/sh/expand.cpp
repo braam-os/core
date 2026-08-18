@@ -53,14 +53,20 @@ struct Ifs {
 };
 
 struct Walk {
-    Walk(const Vars &vars, Split sp, Vec<Field> &o, ExpandErr &e)
-        : v(vars), split(sp), out(o), err(e)
+    Walk(const Vars &vars, Split sp, Str word, Vec<Field> &o, ExpandErr &e)
+        : v(vars), split(sp), raw(word), out(o), err(e)
     {
         ifs.load(vars);
     }
 
+    // Where a substitution begins in `raw`. Every recursion below is over a
+    // substring of it, so the difference of the pointers is the offset and no
+    // base has to be threaded through the walk.
+    usize offset(Str s, usize i) const { return usize(s.data() + i - raw.data()); }
+
     const Vars &v;
     Split split;
+    Str raw;
     Vec<Field> &out;
     ExpandErr &err;
     Ifs ifs;
@@ -117,14 +123,15 @@ struct Walk {
     Result<void> positional(usize i, bool in_quotes);
     Result<void> stars(char which, bool in_quotes);
     Result<void> emit(Str name, bool in_quotes);
+    Result<void> command(Str body, usize at, bool ticked, bool in_quotes);
     bool is_set(Str name);
 };
 
 // A nested expansion as text rather than fields: what `${x=y}` stores.
-Result<void> to_string(Str w, const Vars &v, ExpandErr &err, u32 depth, String &into)
+Result<void> to_string(Str w, const Vars &v, Str raw, ExpandErr &err, u32 depth, String &into)
 {
     Vec<Field> tmp;
-    Walk sub(v, Split::One, tmp, err);
+    Walk sub(v, Split::One, raw, tmp, err);
     TRY_VOID(sub.run(w, false, false, depth));
     if (!sub.finish())
         return Err(Error::NoMemory);
@@ -247,13 +254,35 @@ Result<void> Walk::braced(Str body, bool in_quotes, u32 depth)
         return fail("cannot assign to this parameter");
 
     String val;
-    TRY_VOID(to_string(word, v, err, depth + 1, val));
+    TRY_VOID(to_string(word, v, raw, err, depth + 1, val));
     if (!v.set(v.ctx, name, val.str())) {
         err.name    = name;
         err.message = "cannot be set";
         return Err(Error::Invalid);
     }
     if (!put_value(val.str(), in_quotes))
+        return Err(Error::NoMemory);
+    return {};
+}
+
+// `$(…)` and the backtick, which differ only in how they were written. The
+// output splits and is left unmarked when it is unquoted, so a `*` out of one
+// globs exactly as one out of a variable does.
+Result<void> Walk::command(Str body, usize at, bool ticked, bool in_quotes)
+{
+    Str got;
+    if (!v.substitute || !v.substitute(v.ctx, at, body, got)) {
+        err.at      = at;
+        err.command = body;
+        err.ticked  = ticked;
+        return Err(Error::Again);
+    }
+
+    // Trailing newlines go, so `x=$(pwd)` puts none in x.
+    while (!got.empty() && got[got.size() - 1] == '\n')
+        got = got.substr(0, got.size() - 1);
+
+    if (!put_value(got, in_quotes))
         return Err(Error::NoMemory);
     return {};
 }
@@ -270,6 +299,15 @@ Result<void> Walk::dollar(Str s, usize &i, bool in_quotes, u32 depth)
         Str body = s.substr(i + 2, end - (i + 2));
         i        = end + 1;
         return braced(body, in_quotes, depth);
+    }
+    if (c == '(') {
+        usize end = paren_end(s, i);
+        if (end == Str::npos)
+            return fail("unterminated $(");
+        Str body = s.substr(i + 2, end - (i + 2));
+        usize at = offset(s, i);
+        i        = end + 1;
+        return command(body, at, false, in_quotes);
     }
     if (is_name_start(c)) {
         usize j = i + 1;
@@ -324,12 +362,21 @@ Result<void> Walk::run(Str s, bool in_quotes, bool literal, u32 depth)
 
         if (!in_quotes && c == '"') {
             usize j = i + 1;
-            for (; j < s.size() && s[j] != '"'; j++)
+            for (; j < s.size() && s[j] != '"'; j++) {
+                // A `$(…)` in here quotes independently. Identical to the
+                // lexer's scan, which is what ends the word.
+                if (s[j] == '$' && j + 1 < s.size() && s[j + 1] == '(') {
+                    usize end = paren_end(s, j);
+                    if (end == Str::npos)
+                        return fail("unterminated $(");
+                    j = end;
+                    continue;
+                }
                 // Only a quote, a backslash or a dollar is escapable in here.
-                // Identical to the lexer's, which ends the word.
                 if (s[j] == '\\' && j + 1 < s.size() &&
                     (s[j + 1] == '"' || s[j + 1] == '\\' || s[j + 1] == '$'))
                     j++;
+            }
             if (j >= s.size())
                 return fail("unterminated quote");
 
@@ -360,6 +407,19 @@ Result<void> Walk::run(Str s, bool in_quotes, bool literal, u32 depth)
             }
         }
 
+        // Not guarded by `!in_quotes`, unlike the quote arms: a backtick works
+        // inside `"…"`, which is most of what it is still used for.
+        if (c == '`') {
+            usize end = tick_end(s, i);
+            if (end == Str::npos)
+                return fail("unterminated `");
+            Str body = s.substr(i + 1, end - (i + 1));
+            usize at = offset(s, i);
+            i        = end + 1;
+            TRY_VOID(command(body, at, true, in_quotes));
+            continue;
+        }
+
         if (c == '$') {
             TRY_VOID(dollar(s, i, in_quotes, depth));
             continue;
@@ -381,7 +441,7 @@ Result<void> expand_word(Str raw, const Vars &v, Split split, Vec<Field> &out, E
 {
     err = ExpandErr();
 
-    Walk w(v, split, out, err);
+    Walk w(v, split, raw, out, err);
     TRY_VOID(w.run(raw, false, true, 0));
     if (!w.finish())
         return Err(Error::NoMemory);

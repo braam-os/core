@@ -156,8 +156,23 @@ void test_tokenize()
     CHECK(lexed("echo ${x-'}'}") == "{echo}{${x-'}'}}");
     CHECK(lexed("echo $x|b") == "{echo}{$x}|{b}");
 
+    // A `$(…)` and a backtick run are one piece of the word for the same
+    // reason: what is in one is a command, so a separator there does not end
+    // the word. The parens are operators (S4) only when they stand alone.
+    CHECK(lexed("echo $(a b)") == "{echo}{$(a b)}");
+    CHECK(lexed("echo $(a|b)") == "{echo}{$(a|b)}");
+    CHECK(lexed("echo $(a; b)") == "{echo}{$(a; b)}");
+    CHECK(lexed("echo $(a $(b))c") == "{echo}{$(a $(b))c}");
+    CHECK(lexed("echo $(a ')' b)") == "{echo}{$(a ')' b)}");
+    CHECK(lexed("echo x$(a)y") == "{echo}{x$(a)y}");
+    CHECK(lexed("echo `a b`") == "{echo}{`a b`}");
+    CHECK(lexed("echo \"`a b`\"") == "{echo}{\"`a b`\"}");
+    CHECK(lexed("echo (x)") == "{echo}({x})"); // still operators on their own
+
     CHECK(lexed("echo 'a") == "{echo}!");
     CHECK(lexed("echo \"a") == "{echo}!");
     CHECK(lexed("echo a\\") == "{echo}!");
     CHECK(lexed("echo ${x") == "{echo}!");
+    CHECK(lexed("echo $(a") == "{echo}!");
+    CHECK(lexed("echo `a") == "{echo}!");
 }

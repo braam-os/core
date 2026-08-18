@@ -2,14 +2,16 @@
 
 The plan of record for turning `/bin/sh` from a prompt into a language. **What lands is deleted
 from here** — its reasoning moves to [Release_Notes.md](../../doc/Release_Notes.md), which is
-where the *why* lives once it is code. Five stages have landed, recorded there under *"The lexer
+where the *why* lives once it is code. Six stages have landed, recorded there under *"The lexer
 stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h)),
 *"The shell got variables"* (the `$` walk, `IFS` splitting, and the `Field` flag the mark could
 not carry), *"A line became a tree"* (the node arena in [parse.h](parse.h), `exec_node`/`Flow` in
 [job.cpp](job.cpp), and multi-line input by re-parsing), *"The tree learned to branch"*
-(`if`, the three loops, and `break`/`continue` as builtins that ask) and *"A word became a
-pattern"* (the pure matcher in [match.h](match.h), the walk in [glob.h](glob.h), and `case`).
-What remains is numbered below, once, in the order it should be done.
+(`if`, the three loops, and `break`/`continue` as builtins that ask), *"A word became a
+pattern"* (the pure matcher in [match.h](match.h), the walk in [glob.h](glob.h), and `case`) and
+*"A word could run a command"* (`$( )` and the backtick, the `substitute` hook that gives up
+rather than awaiting, and the pipe the shell drains). What remains is numbered below, once, in
+the order it should be done.
 
 Stages are **S1**…**S10**. A number is a name, not a position: when a stage lands its section is
 deleted and its number retires with it, so the rest keep the numbers they have and a commit
@@ -32,14 +34,14 @@ this as an explicit *non-*decision:
 > was blocked by the shell being kernel code and none of it is blocked now; they were simply
 > never written.
 
-The target is the full v7 Bourne subset — functions, positional parameters, command substitution,
-here-documents, `trap`, and `test`/`[` as a builtin, on top of the lists, control flow, `case`,
-`${x-y}` family and globbing that have landed. The reference is the same author's V7 port at
+The target is the full v7 Bourne subset — functions, positional parameters, here-documents,
+`trap`, and `test`/`[` as a builtin, on top of the lists, control flow, `case`, the `${x-y}`
+family, globbing and command substitution that have landed. The reference is the same author's V7 port at
 `/Users/vak/Project/Besm-6/v7besm/cmd/sh/` (≈3,450 lines of code across 29 files).
 
 **Headroom is not the constraint.** `kernel.wasm` does not change — every line of this is in the
-process binary. `sh.wasm` is 142,221 bytes and only `sh` links `src/sh/`; the only budget it
-spends is `rootfs/ = 1048576` against a 611,699-byte tree.
+process binary. `sh.wasm` is 150,920 bytes and only `sh` links `src/sh/`; the only budget it
+spends is `rootfs/ = 1048576` against a 620,398-byte tree.
 
 **And no syscall changes.** Everything scripting needs — pipe, spawn, wait, open, list, stat,
 chdir, getpid — is already in the §4.3 table. That is the concrete proof of the note above.
@@ -72,67 +74,22 @@ v7); `set -o`; `ulimit`, `umask`, `newgrp`, `hash`, `times` (no kernel concept e
 
 ## Stages
 
-Six left, in order. Each builds, passes CTest, and leaves a shell strictly better than the one
+Five left, in order. Each builds, passes CTest, and leaves a shell strictly better than the one
 before. Each carries the invariant it protects — that part is not recoverable from the code, and
 moves to Release_Notes.md when the stage lands and this section is deleted.
 
 | # | Stage | Days |
 |---|---|---|
-| S5 | Command substitution | 2.0 |
 | S6 | Functions, `.`, `eval`, `return` | 2.0 |
 | S7 | Redirection completion | 2.5 |
 | S8 | The scripting builtins | 2.0 |
 | S9 | Entry points | 1.0 |
 | S10 | Integration, docs, budget | 2.0 |
 
-**11.5 days, call it 14.** The two places it will go over are the
-capture/deadlock reasoning in S5 and the here-doc/fd bookkeeping in S7. A minimum-credible slice
+**9.5 days, call it 12.** The place it will go over is the here-doc and fd bookkeeping in S7;
+S5's capture/deadlock reasoning, the other candidate, came in at its estimate. A minimum-credible slice
 (`test` and `[` out of S8, plus `sh file` out of S9) is **~3 days** and is most of the remaining
 utility.
-
-### S5. Command substitution
-
-**Scope.** `$( )` and backticks, `ShIo::capture`, the drain protocol.
-
-**`$( )` and backticks: a pipe the shell itself drains.** A program stage takes the write end by
-`spawn`; the shell closes its copy and reads the other end to `Err(Closed)` *before* waiting the
-children — the shell is the drainer, so the eight-chunk pipe never fills for good. The one hazard
-is a **builtin** stage, which runs in the shell's own turn ([builtin.h](builtin.h)) and would fill
-eight chunks with nobody left to drain them. One field on the existing `ShIo` fixes it:
-
-```cpp
-struct ShIo {
-    u32 in  = SYS_STDIN;
-    u32 out = SYS_STDOUT;
-    u32 err = SYS_STDERR;
-    String *capture = nullptr;   // set: a builtin appends here, not to `out`
-};
-```
-
-When `capture` is set a builtin appends there instead of writing to `out`. It is **one line per
-builtin** — six call sites today — precisely because `builtin.h` already requires each to buffer
-its output and write it once. That discipline becomes load-bearing for a second reason, and its
-paragraph must say so.
-
-Residual hazard, pre-existing and not a regression: a builtin *upstream* of a program in the same
-pipeline (`echo x | wc`) still writes into a real 8-chunk pipe with the reader not yet draining.
-That is today's behaviour; do not fix it here.
-
-**Substitution is a hook the expander calls, not a pre-pass** — v7's `copyto`/`skipto` split — so
-that `${x-$(cmd)}` runs the command only when the branch is taken. The pure half of expansion
-takes a `substitute` callback alongside its name lookup; the unit tests pass a canned one, so it
-stays testable without reaching a syscall. Globbing needed no such hook — S4 made it a pass over
-the finished fields in `glob.cpp` instead.
-
-**Files.** [builtin.h](builtin.h) and every file in `builtin/`, [expand.cpp](expand.cpp),
-[job.cpp](job.cpp), [tokenize.cpp](tokenize.cpp) (the balanced `$(` scan).
-
-**Tests.** `test_tokenize.cpp` — the balanced `$(` scan and `more` inside one. `test_expand.cpp`
-— a canned `substitute` callback, including inside `${x-…}` where the branch is not taken.
-`run.mjs` — `x=$(ls /bin | wc -l); echo $x`, substitution through a real pipe the shell drains.
-
-**Done when** `$(…)` works with both a program and a builtin inside it, and the `${x-$(cmd)}`
-case runs the command exactly once and only when taken.
 
 ### S6. Functions, `.`, `eval`, `return`
 
@@ -244,12 +201,12 @@ budget change.
 ### Size
 
 Calibrated against the binary rather than guessed per stage, and re-measured at every stage: S1
-cost 20,807 bytes over 1,017 new lines, S2 10,644 over ~450, S3 12,678 and S4 14,607 — ≈20 bytes
-of wasm per line, which the arena stages came in under and the coroutine ones over. The stages
-left are more coroutine than logic, so budget nearer 40.
+cost 20,807 bytes over 1,017 new lines, S2 10,644 over ~450, S3 12,678, S4 14,607 and S5 8,699 —
+≈20 bytes of wasm per line, which the arena stages came in under and the coroutine ones over. The
+stages left are more coroutine than logic, so budget nearer 40.
 
-- **`sh.wasm`: 142,221 → ~180,000 bytes.**
-- **Staging tree: 611,699 → ~650,000 of 1,048,576 — 62%.** No budget change needed.
+- **`sh.wasm`: 150,920 → ~185,000 bytes.**
+- **Staging tree: 620,398 → ~655,000 of 1,048,576 — 62%.** No budget change needed.
 - **`kernel.wasm` does not move at all.**
 
 ~1,000 more lines of shell C++, ~400 of `test/unit/`, ~150 of `test/run.mjs`, ~250 of

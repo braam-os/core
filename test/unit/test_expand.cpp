@@ -1,4 +1,5 @@
 #include "harness.h"
+#include "kernel/fmt.h"
 #include "kernel/str.h"
 #include "sh/expand.h"
 
@@ -88,11 +89,39 @@ Str cb_at(void *, usize i)
     return i <= posn ? pos[i - 1] : Str();
 }
 
-constexpr Vars VARS = { nullptr, cb_look, cb_set, cb_count, cb_at };
+// The shell never runs a command here either: a canned answer per command
+// text, and a counter, which is what proves `${x-$(cmd)}` runs it only when
+// the branch is taken.
+usize subn;
+
+bool cb_sub(void *, usize, Str command, Str &out)
+{
+    subn++;
+    if (command == "two words")
+        out = "two words";
+    else if (command == "star")
+        out = "*";
+    else if (command == "trailing")
+        out = "x\n\n";
+    else if (command == "nothing")
+        out = "";
+    else
+        out = "out";
+    return true;
+}
+
+// The other half of the protocol: nothing has been run yet, so the walk gives
+// up with Err(Again) and says what it needs.
+bool cb_pending(void *, usize, Str, Str &)
+{
+    return false;
+}
+
+constexpr Vars VARS = { nullptr, cb_look, cb_set, cb_count, cb_at, cb_sub };
 
 void reset()
 {
-    tabn = posn = storen = 0;
+    tabn = posn = storen = subn = 0;
 }
 
 void def(Str name, Str value)
@@ -158,6 +187,27 @@ Str mark(Str raw)
 Str one(Str raw)
 {
     return shape(raw, false, Split::One);
+}
+
+// What Err(Again) asked for, as `at:command`, or `!` when the word expanded
+// without needing anything run.
+Str pending(Str raw)
+{
+    Vec<Field> out;
+    ExpandErr err;
+    Vars v       = VARS;
+    v.substitute = cb_pending;
+
+    Result<void> e = expand_word(raw, v, Split::Fields, out, err);
+    if (e.is_ok() || e.error() != Error::Again)
+        return "!";
+
+    Buf<64> b;
+    b.put(u32(err.at)).put(':').put(err.command);
+    usize n = 0;
+    for (; n < b.str().size() && n < sizeof(buf); n++)
+        buf[n] = b.str()[n];
+    return Str(buf, n);
 }
 
 } // namespace
@@ -263,6 +313,57 @@ void test_expand()
     CHECK(text("${nosuch") == "!");
     CHECK(text("${}") == "!");
     CHECK(text("${x*}") == "!");
+
+    // ---- command substitution ----
+
+    reset();
+    def("x", "hi");
+
+    CHECK(text("$(cmd)") == "{out}");
+    CHECK(text("`cmd`") == "{out}");
+    CHECK(text("a$(cmd)b") == "{aoutb}");
+    CHECK(text("$(nothing)") == "");
+
+    // The output splits like any other expansion, and quoting stops it.
+    CHECK(text("$(two words)") == "{two}{words}");
+    CHECK(text("\"$(two words)\"") == "{two words}");
+    CHECK(text("'$(cmd)'") == "{$(cmd)}"); // single quotes: as typed
+    CHECK(text("\"`two words`\"") == "{two words}");
+
+    // Trailing newlines go, so `x=$(pwd)` puts none in x.
+    CHECK(text("$(trailing)") == "{x}");
+    CHECK(one("$(trailing)y") == "{xy}");
+
+    // Unmarked, so a metacharacter out of one is live for the glob matcher —
+    // the same thing the variable case asserts below.
+    CHECK(mark("$(star)") == "{.}");
+    CHECK(mark("\"$(star)\"") == "{^}");
+
+    // Run only when the branch is taken, which is the whole reason the hook is
+    // a callback rather than a pre-pass over the word.
+    reset();
+    def("x", "hi");
+    CHECK(text("${x-$(cmd)}") == "{hi}");
+    CHECK_EQ(subn, 0);
+    CHECK(text("${nosuch-$(cmd)}") == "{out}");
+    CHECK_EQ(subn, 1);
+    CHECK(text("${x+$(cmd)}") == "{out}");
+    CHECK_EQ(subn, 2);
+    CHECK(text("${nosuch+$(cmd)}") == "");
+    CHECK_EQ(subn, 2);
+
+    // Unterminated is the expander's own error, not the lexer's, since a
+    // sourced word need not have come through one.
+    CHECK(text("$(a") == "!");
+    CHECK(text("`a") == "!");
+
+    // Err(Again): where it is and what to run, so the driver can memo it.
+    CHECK(pending("$(cmd)") == "0:cmd");
+    CHECK(pending("ab$(cmd)") == "2:cmd");
+    CHECK(pending("\"x $(cmd)\"") == "3:cmd");     // through the quote arm
+    CHECK(pending("${nosuch-$(cmd)}") == "9:cmd"); // through an operator body
+    CHECK(pending("`cmd`") == "0:cmd");
+    CHECK(pending("$x") == "!"); // nothing to run
 
     // `${x=y}` assigns, and only when it has to.
     reset();

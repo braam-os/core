@@ -7,6 +7,96 @@ of the two needs amending.
 
 ---
 
+## A word could run a command
+
+Sixth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `$( )` and the backtick, the pipe the
+shell drains itself, and the hook that lets a pure expander reach an impure command. `sh.wasm`
+went from 142,221 to 150,920 bytes and the staging tree from 611,699 to 620,398 against an
+unchanged 1 MiB budget. **`kernel.wasm` did not move and the syscall ABI did not change** —
+`Sys::Pipe` has been there since M6, and until now `watch` was its only caller.
+
+**The expander gives up rather than becoming a coroutine.** Running a command needs a `co_await`;
+`expand.cpp` is synchronous, and it is compiled into `tests.wasm` precisely because it reaches no
+syscall. So `Vars` took a fifth callback that hands back what a substitution *printed*, and when
+nobody has that yet the walk abandons the whole word with `Err(Again)`, naming the command and the
+byte where it began. `job.cpp` runs it, files the output under that offset, and expands again.
+
+That is only correct because the walk is idempotent, and it is idempotent for one specific reason:
+`${x=$(a)}` gives up **inside** the operator's body, before `v.set` is reached, so the retry finds
+x still unset and takes the same branch. Every other operator only reads. The word is walked once
+per substitution in it — one or two in practice — and the alternative, collecting every
+substitution in a single pass and re-expanding once, is what does *not* work: it would have to
+commit a placeholder for `${x=$(a)}`, and the second pass would then see x set and take the other
+branch.
+
+The property the TODO asked for falls out with nothing added: `${x-$(cmd)}` runs the command
+exactly once and only when the branch is taken, because the operator's word is only ever walked
+on the branch that takes it. `test_expand.cpp` proves it with a call counter rather than by
+reading the code.
+
+**The offset that keys the memo needs no plumbing.** Every recursion in the expander — a `"…"`
+body, a `${x-…}` body — is over a *substring* of the raw word, so subtracting the two data
+pointers gives the absolute offset and no base has to be threaded through `run`, `dollar` and
+`braced`. The unit tests assert it through both nestings, which is the only way that trick stays
+honest.
+
+**TODO.md's reason for `ShIo::capture` was wrong, so the field was not written.** It said a
+builtin inside `$( )` would "fill eight chunks with nobody left to drain them". `PIPE_SLOTS` counts
+**writes**, not 512-byte chunks: `pipe_write` puts a whole `Str` into one slot and returns its
+full size, so a builtin that buffers and writes once — which is `builtin.h`'s standing rule, and
+what all six output builtins do — uses one slot of eight and never parks. The last stage takes the
+capture pipe whether it is a builtin or a program, `builtin.h` and its six call sites did not
+change, and the rule there gained the second reason it is now load-bearing for. `builtin.h` also
+had "eight chunks" and now says what it counts.
+
+**Drained before the wait, and `watch` had already written the paragraph.** A child parked in a
+full pipe has not exited, so collecting statuses first is a deadlock only `^C` could break. The
+drain goes between the builtin loop and the wait loop, which is the one seam where the shell holds
+the read end and nothing else: a program stage's write end was *moved* into it by `spawn`, and a
+builtin's was closed by `close_stage` the moment its turn ended. `run.mjs` runs 7,077 bytes
+through it — fourteen chunks against eight slots — which is the case that hangs rather than fails
+if the two are ever swapped.
+
+One capture pipe per *pipeline*, not per line. `$(a; b)` makes one for each and drains each before
+the next runs, so the outputs concatenate in order and at most one message is ever queued; one
+pipe for the whole list could not see end-of-input until the list was over.
+
+**`"$(echo "a b")"` forced a real fix.** A `$(…)` inside double quotes quotes independently, and
+both scanners looked for the closing `"` byte by byte — so the inner quote ended the outer run and
+the word broke in the wrong place. The lexer's scan and the expander's now skip a `$(…)` whole,
+using the same `paren_end` they use everywhere else. `brace_end` was already the precedent for
+sharing a scan rather than keeping two copies; `paren_end` and `tick_end` join it in
+`tokenize.h`.
+
+**A substitution is not a subshell, and cannot be.** There is no fork, so the command runs in this
+shell: `$(cd /x)` moves it and `$(y=1)` sets a real variable. What *is* contained is containable
+without one — the command is parsed and run against its own `Tree` and its own `Ctx` rather than
+through `run_line`, which would clear a pending `break` and let `$(exit)` end the shell. The inner
+`Ctx` carries the outer's depth, so `$($($(…)))` is bounded like any other nest, and inherits
+`interactive`, so `^C` reaches the command and comes back as `Err(Cancelled)` — which the
+expansion path already turned into 130 at S4. The rest is in CLAUDE.md's gaps, waiting for the
+checkpoint S7 has to write for `( list )` anyway.
+
+**Trailing newlines go, which is not a detail.** `x=$(pwd)` must not put a newline in x, and every
+shell since v7 strips them. Everything else about the output falls out of `put_value`: unquoted it
+splits against IFS and is left **unmarked**, so a `*` out of a command globs exactly as one out of
+a variable does; inside `"…"` it is marked and unsplit. That is one call, and it is the whole of
+the quoting behaviour.
+
+**Nothing bounds the captured output** but the process's 16 MB cap, which is v7's answer too.
+`watch` stops appending at 32 KB because it only paints a screen; a substitution that truncated
+would corrupt a value with no way to tell.
+
+**What the tests prove separately.** `test_tokenize.cpp` has the balanced scans — nesting, a `)`
+inside quotes, a backtick run inside double quotes, and both unterminated forms reaching the
+continuation prompt. `test_expand.cpp` has the hook against canned answers: the splitting, the
+mark, the stripped newlines, the call counter, and `Err(Again)` reporting the right offset through
+a quote and through an operator body. `run.mjs` has what neither can: `$(ls /bin | grep less)`
+through a real pipeline, a builtin down the same pipe, a nested substitution, `$(pwd)` with no
+newline, and the 7,077-byte drain.
+
+---
+
 ## A word became a pattern
 
 Fifth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `*`, `?`, `[a-z]` and `[!…]` over the

@@ -34,6 +34,13 @@ enum class Tok : u8 {
 // carrying a copy, as they do for the quotes.
 usize brace_end(Str s, usize at);
 
+// The same, for the `$(…)` at s[at]: the index of its closing `)`, or npos.
+usize paren_end(Str s, usize at);
+
+// The backtick run at s[at]: the index of the closing one, or npos. They do
+// not nest, and an escaped one is not the end.
+usize tick_end(Str s, usize at);
+
 struct Lexer {
     explicit Lexer(Str line) : s_(line) {}
 

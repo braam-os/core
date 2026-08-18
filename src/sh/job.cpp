@@ -54,6 +54,11 @@ struct Run {
     Vec<usize> assign0; // where each command's start in avals
     Vec<Saved> saved;   // what a prefix displaced, until the command is done
 
+    // The read end of the capture pipe, when a substitution is running this
+    // pipeline. Held here rather than in a stage or in `spare`, since the
+    // sweep would close it before it could be drained.
+    u32 capture_r = 0;
+
     Args args(usize i) const
     {
         usize a = argv0[i];
@@ -78,6 +83,10 @@ struct Ctx {
     u32 breaks       = 0; // levels `break` has left to unwind
     u32 loops        = 0; // how many are running
     bool interactive = false;
+
+    // Where stdout goes when a `$(…)` is running this walk. Set on the whole
+    // tree, so every pipeline in `$(a; b)` appends to the same string.
+    String *capture = nullptr;
 };
 
 // What `break` and `continue` asked for, until the pipeline they ran in picks
@@ -134,13 +143,16 @@ void drop_entry(u32 id)
     }
 }
 
+// One raw word, running whatever substitutions it turns out to need. Defined
+// below, next to the walk it has to reach.
+Task<Result<void>> expand_one(const Ctx &cx, Str raw, Split split, Vec<Field> &out, ExpandErr &err);
+
 // Everything the pipeline holds. An assignment value and a redirection target
 // stay one word; only an argv word may become several, or none — and only an
 // argv word is globbed, since the other two are one field by definition.
-Task<Result<void>> expand_all(Run *r, ExpandErr &err)
+Task<Result<void>> expand_all(const Ctx &cx, Run *r, ExpandErr &err)
 {
-    const Vars &v = shell_vars();
-    usize n       = r->ncmds;
+    usize n = r->ncmds;
     Vec<Field> raw_fields;
 
     for (usize i = 0; i < n; i++) {
@@ -149,7 +161,9 @@ Task<Result<void>> expand_all(Run *r, ExpandErr &err)
         Args a = r->t->assigns(r->cmd0 + i);
         for (usize k = 0; k < a.size(); k++) {
             Str w = a[k];
-            CO_TRY_VOID(expand_word(w.substr(w.find('=') + 1), v, Split::One, r->avals, err));
+            Task<Result<void>> t =
+                expand_one(cx, w.substr(w.find('=') + 1), Split::One, r->avals, err);
+            CO_TRY_VOID(t ? co_await t : Err(Error::NoMemory));
         }
     }
 
@@ -157,16 +171,20 @@ Task<Result<void>> expand_all(Run *r, ExpandErr &err)
         if (!r->argv0.push(r->words.size()))
             co_return Err(Error::NoMemory);
         Args raw = r->t->args(r->cmd0 + i);
-        for (usize k = 0; k < raw.size(); k++)
-            CO_TRY_VOID(expand_word(raw[k], v, Split::Fields, raw_fields, err));
+        for (usize k = 0; k < raw.size(); k++) {
+            Task<Result<void>> t = expand_one(cx, raw[k], Split::Fields, raw_fields, err);
+            CO_TRY_VOID(t ? co_await t : Err(Error::NoMemory));
+        }
         Task<Result<void>> g = glob_fields(raw_fields, r->words);
         CO_TRY_VOID(g ? co_await g : Err(Error::NoMemory));
     }
 
     usize argvn = r->words.size();
     for (usize i = 0; i < n; i++)
-        for (const Redirect &rd : r->t->redirects(r->cmd0 + i))
-            CO_TRY_VOID(expand_word(r->t->target(rd), v, Split::One, r->words, err));
+        for (const Redirect &rd : r->t->redirects(r->cmd0 + i)) {
+            Task<Result<void>> t = expand_one(cx, r->t->target(rd), Split::One, r->words, err);
+            CO_TRY_VOID(t ? co_await t : Err(Error::NoMemory));
+        }
 
     // The views come after the last append, as parse.h's freeze() does.
     if (!r->argv.reserve(argvn) || !r->targets.reserve(r->words.size() - argvn))
@@ -481,7 +499,7 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
 
     // Expansion, before anything is opened or spawned.
     ExpandErr xerr;
-    Task<Result<void>> xt = expand_all(r, xerr);
+    Task<Result<void>> xt = expand_all(cx, r, xerr);
     if (Result<void> e = xt ? co_await xt : Err(Error::NoMemory); e.is_err()) {
         // A ^C caught mid-glob abandons the line, as a stage reporting 130 does.
         if (e.error() == Error::Cancelled) {
@@ -547,6 +565,25 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
             r->stages[i + 1].in = u32(p.value().r);
         else if (!r->spare.push(u32(p.value().r)))
             bad = 1;
+    }
+
+    // The capture pipe, when a `$(…)` is running this pipeline. Only the last
+    // stage can still hold SYS_STDOUT; `$(cmd > f)` displaced it, and then
+    // nothing is captured, which is what every shell does.
+    bool captured = false;
+    for (usize i = 0; i < n && cx.capture && !bad; i++) {
+        if (r->stages[i].out != SYS_STDOUT)
+            continue;
+        Task<Result<Piped>> t = make_pipe();
+        Result<Piped> p       = t ? co_await t : Err(Error::NoMemory);
+        if (p.is_err()) {
+            co_await say(SYS_STDERR, "out of memory");
+            bad = 1;
+            break;
+        }
+        r->stages[i].out = u32(p.value().w);
+        r->capture_r     = u32(p.value().r);
+        captured         = true;
     }
 
     // A stage may have no command word: `x=1` is one, and so is a word that
@@ -643,6 +680,27 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
             status = s.status;
     }
 
+    // Drained before the wait, not after: a child parked in a full pipe has
+    // not exited, so waiting first is a deadlock only ^C could break
+    // (../cmd/watch.cpp says the same). By here the write end has gone into a
+    // child, or was closed with the builtin that held it, so this is the only
+    // end left and the read ends when the writer does.
+    if (captured && !bad) {
+        for (;;) {
+            Task<Result<String>> t = read_chunk(r->capture_r);
+            Result<String> got     = t ? co_await t : Err(Error::NoMemory);
+            if (got.is_err())
+                break;
+            if (!cx.capture->append(got.value().str())) {
+                co_await say(SYS_STDERR, "out of memory");
+                status = 1;
+                break;
+            }
+        }
+    }
+    if (captured)
+        co_await close_fd(r->capture_r);
+
     // Collecting every child. A cancelled one answers 130 of its own accord,
     // so ^C needs nothing here: it went to the stages, not to us.
     for (usize i = 0; i < n && !bg; i++) {
@@ -737,6 +795,113 @@ bool loop_step(Ctx &cx)
 // The walk, which every construct below runs its parts through.
 Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n);
 
+// One substitution's output, remembered under where it began in the word so a
+// retry finds it rather than running the command twice.
+struct Sub {
+    usize at = 0;
+    String out;
+};
+
+bool cb_sub(void *ctx, usize at, Str, Str &out)
+{
+    for (const Sub &s : *static_cast<Vec<Sub> *>(ctx))
+        if (s.at == at) {
+            out = s.out.str();
+            return true;
+        }
+    return false;
+}
+
+// A substitution's command. Parsed and run here rather than through run_line,
+// which clears a pending `break` and would let `$(exit)` end the shell.
+Task<Result<void>> run_capture(const Ctx &cx, Str command, bool ticked, ExpandErr &err, String &out)
+{
+    String text;
+    if (ticked) {
+        // Inside backticks a backslash stands for itself except in front of
+        // one of these three.
+        for (usize i = 0; i < command.size(); i++) {
+            if (command[i] == '\\' && i + 1 < command.size() &&
+                (command[i + 1] == '`' || command[i + 1] == '\\' || command[i + 1] == '$'))
+                i++;
+            if (!text.push(command[i]))
+                co_return Err(Error::NoMemory);
+        }
+    } else if (!text.assign(command)) {
+        co_return Err(Error::NoMemory);
+    }
+
+    // Declared after `text`, so the tree that views it is destroyed first.
+    struct Drop {
+        ~Drop()
+        {
+            heap_delete(t);
+            heap_delete(cx);
+        }
+
+        Tree *t;
+        Ctx *cx;
+    } own{ heap_new<Tree>(), heap_new<Ctx>() };
+
+    if (!own.t || !own.cx)
+        co_return Err(Error::NoMemory);
+
+    ParseErr perr;
+    if (parse(text.str(), *own.t, perr).is_err()) {
+        err.name    = Str();
+        err.message = perr.message;
+        co_return Err(Error::Invalid);
+    }
+    if (own.t->root() == 0)
+        co_return {};
+
+    own.cx->line        = text.str();
+    own.cx->interactive = cx.interactive;
+    own.cx->depth       = cx.depth; // so `$($($(…)))` is bounded like any nest
+    own.cx->capture     = &out;
+
+    if (Task<i32> t = exec_node(*own.cx, *own.t, own.t->root()))
+        co_await t;
+
+    // A ^C inside the substitution abandons the word, and the line with it.
+    if (own.cx->flow == Flow::Interrupt)
+        co_return Err(Error::Cancelled);
+    co_return {};
+}
+
+// The expander is pure and cannot await, so it abandons the word the first
+// time it meets a substitution whose output nobody has. Running it and
+// expanding again is idempotent: `${x=$(a)}` gives up before the assignment,
+// so the retry takes the same branch and the command runs exactly once.
+Task<Result<void>> expand_one(const Ctx &cx, Str raw, Split split, Vec<Field> &out, ExpandErr &err)
+{
+    Vec<Sub> memo;
+    Vars v       = shell_vars();
+    v.ctx        = &memo;
+    v.substitute = cb_sub;
+
+    Vec<Field> got;
+    for (;;) {
+        got.clear();
+        Result<void> e = expand_word(raw, v, split, got, err);
+        if (e.is_ok()) {
+            for (Field &f : got)
+                if (!out.push(move(f)))
+                    co_return Err(Error::NoMemory);
+            co_return {};
+        }
+        if (e.error() != Error::Again)
+            co_return Err(e.error());
+
+        Sub s;
+        s.at                 = err.at;
+        Task<Result<void>> t = run_capture(cx, err.command, err.ticked, err, s.out);
+        CO_TRY_VOID(t ? co_await t : Err(Error::NoMemory));
+        if (!memo.push(move(s)))
+            co_return Err(Error::NoMemory);
+    }
+}
+
 Task<i32> exec_if(Ctx &cx, const Tree &tree, u32 n)
 {
     const Tree::Node &nd = tree.node(n);
@@ -819,19 +984,19 @@ Task<i32> exec_for(Ctx &cx, const Tree &tree, u32 n)
         Vec<Field> raw_fields;
         Vec<Field> fields;
         ExpandErr err;
-        for (usize i = 1; i < names.size(); i++)
-            if (Result<void> e =
-                    expand_word(names[i], shell_vars(), Split::Fields, raw_fields, err);
-                e.is_err()) {
-                if (e.error() != Error::Invalid)
-                    co_await say(SYS_STDERR, "out of memory");
-                else if (err.name.empty())
-                    co_await say(SYS_STDERR, err.message);
-                else
-                    co_await say2(SYS_STDERR, err.name, err.message);
+        for (usize i = 1; i < names.size(); i++) {
+            Task<Result<void>> t = expand_one(cx, names[i], Split::Fields, raw_fields, err);
+            if (Result<void> e = t ? co_await t : Err(Error::NoMemory); e.is_err()) {
+                if (e.error() == Error::Cancelled) {
+                    var_status(130);
+                    co_return 130;
+                }
+                if (Task<void> d = say_expand(e.error(), err))
+                    co_await d;
                 var_status(1);
                 co_return 1;
             }
+        }
         Task<Result<void>> g = glob_fields(raw_fields, fields);
         if (Result<void> e = g ? co_await g : Err(Error::NoMemory); e.is_err()) {
             if (e.error() == Error::Cancelled) {
@@ -897,8 +1062,12 @@ Task<i32> exec_case(Ctx &cx, const Tree &tree, u32 n)
 
     Vec<Field> subject;
     ExpandErr err;
-    if (Result<void> e = expand_word(tree.args(nd.c)[0], shell_vars(), Split::One, subject, err);
-        e.is_err()) {
+    Task<Result<void>> st = expand_one(cx, tree.args(nd.c)[0], Split::One, subject, err);
+    if (Result<void> e = st ? co_await st : Err(Error::NoMemory); e.is_err()) {
+        if (e.error() == Error::Cancelled) {
+            var_status(130);
+            co_return 130;
+        }
         if (Task<void> t = say_expand(e.error(), err))
             co_await t;
         var_status(1);
@@ -914,8 +1083,12 @@ Task<i32> exec_case(Ctx &cx, const Tree &tree, u32 n)
         Args pats = tree.args(tree.kid(nd.a + 2 * k));
         for (usize p = 0; p < pats.size() && !took; p++) {
             Vec<Field> pat;
-            if (Result<void> e = expand_word(pats[p], shell_vars(), Split::One, pat, err);
-                e.is_err()) {
+            Task<Result<void>> pt = expand_one(cx, pats[p], Split::One, pat, err);
+            if (Result<void> e = pt ? co_await pt : Err(Error::NoMemory); e.is_err()) {
+                if (e.error() == Error::Cancelled) {
+                    var_status(130);
+                    co_return 130;
+                }
                 if (Task<void> t = say_expand(e.error(), err))
                     co_await t;
                 var_status(1);

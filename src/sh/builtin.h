@@ -1,23 +1,12 @@
-// Shell builtins: the commands that are the shell's own state rather than
-// programs, and so are not files in /bin and never will be.
+// Shell builtins: what touches this process's own state — its cwd, its job
+// table, its loop — and so is not a file in /bin and never will be.
 //
-// What makes one a builtin has changed now that the shell is itself a program.
-// It is no longer "no syscall could serve it" — `chdir`, `wait` and `kill` all
-// exist. It is that the thing it touches is *this process's own*: `cd` moves
-// the working directory a typed command inherits, `jobs`, `fg` and `kill` read
-// and signal a table no syscall shows to anybody else, `exit` ends the shell's
-// loop, and `help` lists the rest.
+// **A builtin buffers its output and writes it once.** It runs in its turn
+// rather than alongside, and a pipe holds eight writes of any size
+// (PIPE_SLOTS, ../user/io.h), so a line at a time would fill one and park with
+// nobody left to drain it. See Release_Notes.md for the rest of the reasoning.
 //
-// A builtin runs inside the shell rather than as a child, so it reads and
-// writes descriptors like anything else and pipes and redirects for free. One
-// discipline goes with that: **a builtin buffers its output and writes it
-// once.** Nothing in this process can wait for a sibling task, so a builtin in
-// a pipeline runs to completion in its turn rather than alongside — and a pipe
-// holds eight chunks, so a builtin that wrote a line at a time would fill one
-// and park with nobody left to drain it.
-//
-// The table is an explicit sorted array rather than a list each entry registers
-// itself on, for the reason it always was: --gc-sections never extracts an
+// The table is an explicit sorted array: --gc-sections never extracts an
 // archive member nothing references.
 #pragma once
 
