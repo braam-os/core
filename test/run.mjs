@@ -2369,6 +2369,22 @@ if (mode === "--kernel") {
     if (s.cursor_on !== 0)
         fail("the cursor is drawn over the scrollback");
 
+    // A row at a time is the same chord with an arrow — what a wheel notch
+    // becomes (web/worker.js) — and the shell is holding the keys, so this is
+    // also the pump intercepting it ahead of a claimant.
+    const back = rows(s);
+    press(KEY.DOWN, SHIFT);
+    run(9230.961);
+    s = descriptor(addr);
+    if (row(s, 0) !== back[1])
+        fail(`Shift+Down put ${JSON.stringify(row(s, 0))} on top, expected ` +
+             `${JSON.stringify(back[1])}`);
+    press(KEY.UP, SHIFT);
+    run(9230.962);
+    s = descriptor(addr);
+    if (row(s, 0) !== "line0")
+        fail(`Shift+Up put ${JSON.stringify(row(s, 0))} on top, expected line0`);
+
     // Back down again, onto exactly the screen that was left behind.
     press(KEY.PAGE_DOWN, SHIFT);
     press(KEY.PAGE_DOWN, SHIFT);

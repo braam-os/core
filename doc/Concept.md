@@ -251,9 +251,10 @@ grid does not have; scrollback arrived without it, and it is still outstanding.
 
 **A row that leaves the top is kept**, in a ring of `SCREEN_SCROLLBACK` rows at the grid's own
 width, fed by the scroll and by the resize's drop and by nothing else. **Shift+PageUp and
-Shift+PageDown page a view over it**, half a screen at a time, and any other key returns to the
-live screen. The console pump owns the chord, since the history is the kernel's grid — but not
-while a program holds the screen, whose grid it is not.
+Shift+PageDown page a view over it**, half a screen at a time, **and Shift+Up and Shift+Down move
+it a row**, which is what a wheel notch arrives as; any other key returns to the live screen. The
+console pump owns the chord, since the history is the kernel's grid — but not while a program
+holds the screen, whose grid it is not, and where the same keys reach the claimant instead.
 
 The renderer is told nothing. While a view is up the live grid is left exactly where it is, so
 output, the cursor and `screen_scrolled()` carry on into it unaware, and `cells` points at a
@@ -336,6 +337,15 @@ and any resize, drops the selection. Select all is `Cmd+A`, or `Ctrl+Shift+A` wh
 deciding which terminal on a shared page owns the copy chord and the paste event is the hidden
 input's rather than the canvas's; the canvas carries a `braam-focus` class so a page can still
 draw a ring around it.
+
+**The wheel is page-side in the same sense, and becomes the scrollback chord.** A `wheel` over the
+canvas is turned into the keystrokes above — one Shift+Up or Shift+Down per row, the half-screen
+chord for a page-mode delta — so the history is scrolled by the only mechanism that reaches it and
+the ABI still has no mouse in it. The delta crosses to the worker in device pixels, as a drag
+does, because the worker owns the font and therefore the row height; the fraction of a row left
+over is carried, or a trackpad's small deltas would never reach one. The run is fed through
+`key()` like a paste and takes the ring's back-pressure the same way. `Ctrl`+wheel is the
+browser's zoom and is left alone; everything else over the canvas is the terminal's.
 
 **The key bar is page-side in exactly the sense the selection is.** A software keyboard has no
 `Ctrl` and no `Esc`, and usually no `Tab` and no arrows, so a page may hand `mount()` a container

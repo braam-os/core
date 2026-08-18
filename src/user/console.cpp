@@ -107,12 +107,17 @@ Task<i32> console_pump()
         Key k = r.value();
 
         // Shift+PageUp and Shift+PageDown page the screen's history, half a
-        // screen at a time — but not while a program holds the screen, whose
-        // grid that is not. Every other key returns to the live screen.
+        // screen at a time; Shift+Up and Shift+Down move it a row, which is
+        // what the page turns a wheel notch into. Not while a program holds the
+        // screen, whose grid that is not. Every other key returns to the live
+        // screen.
         if (!tty_screen_owner() && (k.mods & MOD_SHIFT) &&
-            (k.code == KEY_PAGE_UP || k.code == KEY_PAGE_DOWN)) {
-            i32 page = i32(max(1u, screen().rows / 2));
-            screen_view_scroll(k.code == KEY_PAGE_UP ? -page : page);
+            (k.code == KEY_PAGE_UP || k.code == KEY_PAGE_DOWN || k.code == KEY_UP ||
+             k.code == KEY_DOWN)) {
+            bool back = k.code == KEY_PAGE_UP || k.code == KEY_UP;
+            bool page = k.code == KEY_PAGE_UP || k.code == KEY_PAGE_DOWN;
+            i32 step  = page ? i32(max(1u, screen().rows / 2)) : 1;
+            screen_view_scroll(back ? -step : step);
             continue;
         }
         screen_view_home();

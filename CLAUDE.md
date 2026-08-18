@@ -130,8 +130,8 @@ These three answer most "how should X work?" questions; full statements in Conce
    process are `host_svc` operations.
 3. **The terminal is a cell grid in linear memory, not a byte stream.** No ANSI escapes, no VT100
    emulation, no xterm.js. Colours are struct fields, cursor addressing is indexing. Mouse
-   selection and copy live entirely on the page and in `web/render.js`; there is no mouse anywhere
-   in the ABI (§3.5).
+   selection and copy live entirely on the page and in `web/render.js`, and the wheel becomes the
+   scrollback chord's keystrokes in `web/worker.js`; there is no mouse anywhere in the ABI (§3.5).
 
 Further constraints, easy to violate by habit:
 
@@ -307,8 +307,9 @@ change to argue in Concept.md first.
 - **A mouse selection does not survive output.** Dropped by the next keystroke and by a resize;
   holding one needs the per-row continuation bit the re-wrap is waiting for. A selection *over*
   scrollback works, since the view is composed into the cells the renderer already reads.
-- **Scrollback is 512 rows and pages by half a screen**, and any key but the chord returns to the
-  live screen. It is not a pager: no search, no mark, and no line model behind it.
+- **Scrollback is 512 rows**, paged by half a screen (Shift+PageUp/PageDown) or moved a row at a
+  time (Shift+Up/Down, which is what the page turns a wheel notch into); any key but the chord
+  returns to the live screen. It is not a pager: no search, no mark, and no line model behind it.
 - **A multi-line paste loses everything after the first command** — type-ahead across a command
   boundary, not the paste. Pasting one line is exact.
 - **No per-process root.** A process has its own cwd, but an absolute path resolves with the

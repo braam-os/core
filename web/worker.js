@@ -3,6 +3,7 @@
 
 import { makeFsImports, openStore } from "./fs.js";
 import { Memory, makeImports } from "./host.js";
+import { MOD_SHIFT, named } from "./keys.js";
 import { makeProc } from "./proc.js";
 import { Renderer } from "./render.js";
 import { makeSvcImport } from "./svc.js";
@@ -172,12 +173,55 @@ function deselect() {
         self.postMessage({ kind: "selection", text: "" });
 }
 
+// The wheel is the page's gesture too, and reaches the kernel as the keystrokes
+// the scrollback chord is made of (Concept.md §3.5) — so there is no mouse in
+// the ABI here either. The worker owns the font, so this is the side that can
+// turn device pixels into rows; the fraction of a row left over is carried, or
+// a trackpad's small deltas would never scroll at all.
+let residue = 0;
+
+const KEY_UP = named("ArrowUp");
+const KEY_DOWN = named("ArrowDown");
+const KEY_PAGE_UP = named("PageUp");
+const KEY_PAGE_DOWN = named("PageDown");
+
+// One flick may not outrun the key ring, which holds 64.
+const WHEEL_MAX = 64;
+
+function scroll({ dy, mode }) {
+    if (!renderer)
+        return;
+    let rows = dy;
+    const page = mode === 2; // pages: the chord's own half a screen each
+    if (mode !== 1 && !page) {
+        if ((dy < 0) !== (residue < 0))
+            residue = 0; // a reversal continues nothing
+        const exact = (residue + dy) / renderer.cellH;
+        rows = Math.trunc(exact);
+        residue = (exact - rows) * renderer.cellH;
+    }
+    const n = Math.trunc(rows);
+    if (!n)
+        return;
+
+    const back = n < 0;
+    const code = page ? (back ? KEY_PAGE_UP : KEY_PAGE_DOWN) : (back ? KEY_UP : KEY_DOWN);
+    deselect();
+    // Fed like a paste: a full ring is back-pressure, and the rest of the flick
+    // is dropped rather than queued. One pump, so the whole run costs one paint.
+    for (let i = Math.min(Math.abs(n), WHEEL_MAX); i > 0; i--)
+        if (!self.kernel.key(code, MOD_SHIFT))
+            break;
+    pump();
+}
+
 // The worker owns the font, so it owns the geometry: the page reports a box in
 // device pixels and reads back whatever the kernel accepted.
 function fit({ width, height, dpr }) {
     if (!renderer)
         return;
     deselect();
+    residue = 0; // the row height it is a fraction of is about to change
     const { cols, rows } = renderer.fit(width, height, dpr);
     const info = self.kernel.resize(cols, rows);
     if (info === 0) {
@@ -331,6 +375,9 @@ self.onmessage = ({ data }) => {
         last_key = key_at;
         self.kernel.key(data.code >>> 0, data.mods >>> 0);
         pump();
+        break;
+    case "scroll":
+        scroll(data);
         break;
     case "select":
         if (renderer) {

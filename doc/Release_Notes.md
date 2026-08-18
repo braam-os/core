@@ -7,6 +7,58 @@ of the two needs amending.
 
 ---
 
+## The wheel is a keystroke
+
+Scrollback has been reachable only from the keyboard since it arrived, and the gesture everyone
+tries first — a wheel, a two-finger swipe — did nothing at all. Closing that cost **no import, no
+export, no message the kernel understands and no mouse in the ABI**: the page turns a wheel notch
+into the keystrokes the chord is already made of.
+
+**Why not a tenth export.** `scroll(lines)` was the obvious shape and would have been exact: one
+call, one repaint, no chord to invent. It was rejected because it puts a pointer gesture into the
+ABI, which §3.5 spends a paragraph saying it does not have — the selection, the key bar, the
+paste and the soft keyboard are all page-side, and each of them arrives as an ordinary
+`{code, mods}` or as nothing at all. The wheel is not a different kind of input; it is a way of
+asking for the scroll chord, exactly as the key bar is a way of asking for `Esc`. So the page
+sends keys, the kernel cannot tell a wheel-born Shift+Up from a typed one, and the export list
+stays at nine.
+
+**The chord grew a row.** Half a screen a notch is unusable, so `console_pump` now takes
+Shift+Up and Shift+Down beside Shift+PageUp and Shift+PageDown, one row instead of `rows / 2`.
+Nothing else in the tree binds Shift with an arrow, so no claimant lost a key it was reading, and
+the keyboard gains a line-at-a-time scroll it did not have — the feature is worth having on its
+own, which is part of the argument for this shape over an export.
+
+**A claimed screen keeps the fall-through, and `less` gets the wheel free.** The chord is not the
+pump's while a program holds the screen, so the synthetic key is delivered raw like any other —
+and `less` switches on `k.code` without looking at the modifier, so a wheel over the pager pages
+it a line at a time with nothing written for it. `edit` moves its cursor a row, which is the same
+bargain and harmless. Swallowing the key while the screen is claimed was the alternative: more
+predictable, and it makes the wheel dead inside the two programs where scrolling is the whole
+point.
+
+**Pixels cross, rows are computed in the worker.** `deltaY` is device pixels, lines or pages
+depending on the platform and the input device, and only the worker knows `cellH` — it owns the
+font, which is why it also owns the geometry (`fit`). So `web/braam.js` posts the delta in device
+pixels, as a selection drag already does, and `web/worker.js` divides. The leftover fraction is
+**carried between events**: a trackpad delivers a few pixels at a time, and truncating each one
+independently means a slow swipe scrolls nothing ever. The residue is zeroed when the direction
+reverses (a reversal continues nothing) and in `fit`, where the row height it is a fraction of
+changes underneath it. A page-mode delta is passed to the half-screen chord instead of being
+converted, since that is what it already means.
+
+**Fed like a paste.** The run goes through `key()` and stops when it returns false, which is the
+back-pressure the ring's return value exists for (§3.5), and it is clamped to a ring's worth so a
+fling cannot outrun it. One `pump()` for the whole run, so *n* rows cost one composition pass and
+one `host_present` rather than *n* of each. It deliberately does not touch `key_at` or the sample
+array: those measure what a *keystroke* costs, and a wheel event is not one.
+
+**`Ctrl`+wheel is the browser's.** A trackpad pinch arrives as a wheel with `ctrlKey` set, and
+zoom belongs to the user. Everything else over the canvas is prevented and taken, which is the
+same claim `touch-action: none` already makes for a drag — an embedding page does not scroll under
+a terminal the pointer is over. Touch is still not covered: a one-finger drag selects, and a
+two-finger scroll gesture would need a decision about which one wins.
+
 ## The environment crosses a spawn
 
 `export` set a bit nothing read. §4.5 listed it as one of six things v7 has that this cannot,

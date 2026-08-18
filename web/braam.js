@@ -231,6 +231,28 @@ export function mount(options = {}) {
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointercancel", onPointerUp);
 
+    // The wheel scrolls the screen's history, and reaches the kernel as the
+    // keystrokes that chord is (Concept.md §3.5): there is no mouse event in
+    // the ABI, here as for the selection. The delta crosses in device pixels
+    // because the worker owns the font and therefore the row height; a line or
+    // page delta is a count and goes unscaled.
+    function onWheel(event) {
+        // The browser's zoom, which a trackpad pinch also arrives as.
+        if (event.ctrlKey || event.metaKey)
+            return;
+        event.preventDefault(); // the canvas owns the wheel over itself
+        if (!event.deltaY)
+            return;
+        const dpr = window.devicePixelRatio || 1;
+        worker.postMessage({
+            kind: "scroll",
+            dy: event.deltaMode === 0 ? event.deltaY * dpr : event.deltaY,
+            mode: event.deltaMode,
+        });
+    }
+
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+
     function copy() {
         const text = selection;
         selection = ""; // ^C interrupts again from here, without waiting for a reply
@@ -583,6 +605,7 @@ export function mount(options = {}) {
             canvas.removeEventListener("pointermove", onPointerMove);
             canvas.removeEventListener("pointerup", onPointerUp);
             canvas.removeEventListener("pointercancel", onPointerUp);
+            canvas.removeEventListener("wheel", onWheel);
             canvas.classList.remove("braam-focus");
             removeEventListener("paste", onPaste);
             // The sink and the buttons go with their listeners; the container

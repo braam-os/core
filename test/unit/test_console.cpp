@@ -169,6 +169,21 @@ void test_console()
     settle();
     CHECK_EQ(screen_view(), 5u);
 
+    // Shift with an arrow is the same chord a row at a time — what a wheel
+    // notch arrives as (web/worker.js).
+    press(KEY_UP, MOD_SHIFT);
+    settle();
+    CHECK_EQ(screen_view(), 6u);
+    press(KEY_UP, MOD_SHIFT);
+    settle();
+    CHECK_EQ(screen_view(), 7u);
+    press(KEY_DOWN, MOD_SHIFT);
+    settle();
+    CHECK_EQ(screen_view(), 6u);
+    press(KEY_PAGE_DOWN, MOD_SHIFT);
+    settle();
+    CHECK_EQ(screen_view(), 1u);
+
     // Unshifted it is an ordinary key, and any ordinary key is the way back.
     press(KEY_PAGE_UP);
     settle();
@@ -186,6 +201,10 @@ void test_console()
     settle();
     CHECK_EQ(got_n, 0u);
     CHECK_EQ(screen_view(), 5u);
+    press(KEY_UP, MOD_SHIFT);
+    settle();
+    CHECK_EQ(got_n, 0u);
+    CHECK_EQ(screen_view(), 6u);
     press('k');
     settle();
     CHECK_EQ(screen_view(), 0u);
@@ -202,6 +221,13 @@ void test_console()
         settle();
         CHECK_EQ(got_n, 1u);
         CHECK_EQ(got[0], u32(KEY_PAGE_UP));
+        CHECK_EQ(screen_view(), 0u);
+        // The row chord goes the same way, which is how the wheel scrolls a
+        // pager: less reads the arrow and ignores the modifier.
+        press(KEY_UP, MOD_SHIFT);
+        settle();
+        CHECK_EQ(got_n, 2u);
+        CHECK_EQ(got[1], u32(KEY_UP));
         CHECK_EQ(screen_view(), 0u);
         heap_delete(alt);
     }
