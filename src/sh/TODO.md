@@ -2,13 +2,13 @@
 
 The plan of record for turning `/bin/sh` from a prompt into a language. **What lands is deleted
 from here** — its reasoning moves to [Release_Notes.md](../../doc/Release_Notes.md), which is
-where the *why* lives once it is code. Three stages have landed, recorded there under *"The lexer
-stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h), which
-carries the quoting mark out of band beside the text), *"The shell got variables"* (the `$` walk,
-`IFS` splitting, the `Field` flag the mark could not carry, and the five variable builtins) and
-*"A line became a tree"* (the node arena in [parse.h](parse.h), `exec_node`/`Flow` in
-[job.cpp](job.cpp), and multi-line input by re-parsing). What remains is numbered below, once, in
-the order it should be done.
+where the *why* lives once it is code. Four stages have landed, recorded there under *"The lexer
+stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h)),
+*"The shell got variables"* (the `$` walk, `IFS` splitting, and the `Field` flag the mark could
+not carry), *"A line became a tree"* (the node arena in [parse.h](parse.h), `exec_node`/`Flow` in
+[job.cpp](job.cpp), and multi-line input by re-parsing) and *"The tree learned to branch"*
+(`if`, the three loops, and `break`/`continue` as builtins that ask). What remains is numbered
+below, once, in the order it should be done.
 
 Stages are **S1**…**S10**. A number is a name, not a position: when a stage lands its section is
 deleted and its number retires with it, so the rest keep the numbers they have and a commit
@@ -24,8 +24,8 @@ command  := (word | redirect)+
 redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
 ```
 
-There is no control flow, no globbing — `*` and `?` are ordinary word characters — and no way to
-run a file of commands beyond `sh -s` reading stdin. Release_Notes.md records this as an explicit
+There is no globbing — `*` and `?` are ordinary word characters — and no way to run a file of
+commands beyond `sh -s` reading stdin. Release_Notes.md records this as an explicit
 *non-*decision:
 
 > `/bin/sh` has no variables, no `-c`, no globbing and no scripts beyond `sh -s`. None of that
@@ -38,8 +38,8 @@ the `${x-y}` family, positional parameters, command substitution, here-documents
 `/Users/vak/Project/Besm-6/v7besm/cmd/sh/` (≈3,450 lines of code across 29 files).
 
 **Headroom is not the constraint.** `kernel.wasm` does not change — every line of this is in the
-process binary. `sh.wasm` is 114,936 bytes and only `sh` links `src/sh/`; the only budget it
-spends is `rootfs/ = 1048576` against a 599,238-byte tree.
+process binary. `sh.wasm` is 127,614 bytes and only `sh` links `src/sh/`; the only budget it
+spends is `rootfs/ = 1048576` against a 597,092-byte tree.
 
 **And no syscall changes.** Everything scripting needs — pipe, spawn, wait, open, list, stat,
 chdir, getpid — is already in the §4.3 table. That is the concrete proof of the note above.
@@ -59,12 +59,8 @@ Six things in the v7 set do not exist in Braam and must be decided rather than p
 | `export` reaching a child | There is no environment in the wasm ABI. | `export` records the intent, honoured by `.`, functions and `eval` — same process. Taking the name cost `/bin/export` its own, which is now `save`. Nothing crosses a spawn. The alternative is `PROC_ABI == 10` across `sysabi.h`, `syscall.cpp`, `exec.cpp`, `rt.h`, `web/proc.js`, System_Calls.md and `run.mjs` — a milestone of its own with no consumer, since no program in `/bin` reads an environment and there is no `PATH`, `HOME` or `TERM` to carry. |
 | `trap … <signal>` | There are no signals, and `CancelState::cancelled` ([../kernel/sched.h](../kernel/sched.h)) is a **sticky** bool: once ^C sets it, every subsequent await returns `Err(Cancelled)` at once. | `trap … 0` (EXIT) works on any normal exit. `trap … 2` (INT) works in an **interactive** shell, where ^C is an ordinary key and the shell was never cancelled — it fires when a stage reports 130. In a *script* shell the process itself is cancelled, so the handler could neither spawn nor write: accepted, never fires. `trap '' INT` (ignore) is impossible outright. |
 
-Two further gaps this work **creates** and must record:
+One further gap this work **creates** and must record:
 
-- An interactive loop whose body is entirely builtins cannot be interrupted. The shell arms its
-  children with `Sys::Fg` and is never in its own foreground set, so `while :; do :; done` typed
-  at the prompt has nowhere for a `^C` to go, and `rt.h` is explicit that nothing cancels from
-  inside a process. The escape is killing the shell, which init then replaces.
 - **`$$` is not unique per shell.** `/bin/sh` at the top level takes init's pid, since it is a
   process inside init's task (Concept.md §4). A nested `sh` gets its own.
 
@@ -82,7 +78,6 @@ moves to Release_Notes.md when the stage lands and this section is deleted.
 
 | # | Stage | Days |
 |---|---|---|
-| S3 | Control flow | 2.0 |
 | S4 | Globbing and `case` | 2.0 |
 | S5 | Command substitution | 2.0 |
 | S6 | Functions, `.`, `eval`, `return` | 2.0 |
@@ -91,31 +86,10 @@ moves to Release_Notes.md when the stage lands and this section is deleted.
 | S9 | Entry points | 1.0 |
 | S10 | Integration, docs, budget | 2.0 |
 
-**15.5 days, call it 18 — three and a half working weeks.** The two places it will go over are
-the capture/deadlock reasoning in S5 and the here-doc/fd bookkeeping in S7. A minimum-credible
-slice (S3, plus `test` and `sh file`) is **~4 days** and is most of the remaining utility.
-
-### S3. Control flow
-
-**Scope.** `if`/`elif`/`else`/`fi`, `while`, `until`, `for … in`, `break` and `continue`.
-
-**`^C` reaches a loop the only way it can**, and the rule must hold or `while true; do sleep 5;
-done` becomes uninterruptible — you would ^C once per iteration for ever. **A stage that reports
-130 sets `Flow::Interrupt`, which unwinds every enclosing list, loop and function up to
-`run_line`.** That landed with S2, which is where `;` first made it reachable, so a loop needs
-only to let it through rather than consume it the way it consumes `Break`. In a script shell the
-`sh` process is itself cancelled instead, and since `CancelState::cancelled` is sticky the first
-await afterwards returns `Err(Cancelled)` and so does every one after — mapping to the same
-`Flow::Interrupt` and 130.
-
-**Files.** [parse.cpp](parse.cpp), [job.cpp](job.cpp), [job.h](job.h).
-
-**Tests.** `test_parse.cpp` — `if(C){T}{E}`, `while(C){B}`, `for(x;a b c){B}`. `run.mjs` —
-`for i in a b c; do echo $i; done` giving three rows; `^C` in `while true; do sleep 1; done`,
-asserting the prompt comes back reading `[130]`, which is the `Flow::Interrupt` rule end to end.
-
-**Done when** the three loops and `if` run, `break`/`continue` leave them, and a `^C` inside a
-loop returns to the prompt in one press.
+**13.5 days, call it 16 — three working weeks.** The two places it will go over are the
+capture/deadlock reasoning in S5 and the here-doc/fd bookkeeping in S7. A minimum-credible slice
+(`test` and `[` out of S8, plus `sh file` out of S9) is **~3 days** and is most of the remaining
+utility.
 
 ### S4. Globbing and `case`
 

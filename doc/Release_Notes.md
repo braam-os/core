@@ -7,6 +7,87 @@ of the two needs amending.
 
 ---
 
+## The tree learned to branch
+
+Fourth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `if`/`elif`/`else`/`fi`, `while`,
+`until`, `for … in`, `break` and `continue`. `sh.wasm` went from 114,936 to 127,614 bytes and the
+staging tree from 584,414 to 597,092 against an unchanged 1 MiB budget. **`kernel.wasm` did not
+move and the syscall ABI did not change.**
+
+A correction to the two entries below this one, since it is a measurement and not a judgement:
+both were taken on a build tree still holding the `/bin/export` that S1 renamed to `save`, which
+`copy_directory` never deletes. Clean, S2 ended at 584,414 rather than the 599,238 recorded
+there. CLAUDE.md already warns that a release is cut from a clean tree; so, it turns out, is a
+number.
+
+**Almost nothing new had to be invented, which is the point of having built S2 first.** The node
+arena took four kinds, `Flow` took two values, and `break`/`continue` went in as builtins through
+the path `exit` already used — a flag the builtin sets, turned into a `Flow` by the pipeline it
+ran in, consumed by the loop above. `builtin.h`'s rule needed no amendment: what they touch is
+this process's own walk.
+
+**`if` is a flat run of (condition, body) pairs where v7 nests.** The V7 shell desugars `elif`
+into a nested `TIF` as the else-branch, which is elegant in a shell that unwinds with `longjmp`
+and wrong in one whose walk is a chain of coroutine frames: `elif` nine times would be nine
+frames deep. It is the same argument that made `Seq` and the `&&` chain n-ary in the stage
+before, and it is now the third time it has come up, so it is worth naming — **in this executor,
+depth costs frames, so anything that reads as a chain must be stored as one.**
+
+**Three places where POSIX won over the reference, all deliberate.** An `if` whose condition
+fails with no `else` reports 0; v7 reports the *condition's* status, because its `execute()`
+zeroes `exitval` only for a non-null tree and the missing else-branch is a null one. That is a
+bug every shell since has fixed, and scripts have assumed the fix for forty years. `for x in;
+do … done` is legal with an empty list where v7's `chkword` refuses it. And `continue n` takes a
+level, which v7 parses for `break` and ignores for `continue`.
+
+One v7 behaviour was deliberately *not* reproduced: `break 9` inside one loop leaves its level
+counter set after the outermost loop exits, and nothing there ever clears it, so the rest of the
+script is silently skipped. `run_line` clears the request on the way out, so it can spill into
+the rest of a line but never into the next one.
+
+**A loop lets `Flow::Interrupt` through rather than consuming it**, and that one line is what
+makes `while true; do sleep 5; done` come back on a single `^C` instead of one press per
+iteration. `Break` and `Continue` are the only two a loop takes; `Exit` and `Interrupt` pass
+through to `run_line`. The gap it leaves is now in CLAUDE.md: a loop whose body is *entirely*
+builtins has nowhere for a `^C` to go, because the shell arms its children with `Sys::Fg` and is
+never in its own foreground set. Every `while true` has a program in it today, since `true` is
+`/bin/true`, so the gap only opens when S8 makes `:` and `test` builtins — which is the stage
+that has to argue for them.
+
+**A construct that runs nothing has to say so.** `exec_pipeline` is what publishes `$?`, so an
+`if` that took no branch and a loop whose body never ran would have left the *condition's* status
+visible even though they report 0. Both call `var_status` on that path and only that path — the
+same shape the `!` operator already needed.
+
+**`for`'s name and word list are a `Command`**, so the expander that serves a command serves them
+too and `for i in $files` splits against `IFS` for free, with globbing to follow at S4 with
+nothing added. The one catch was that `add_word` counts a leading `name=value` as an assignment
+prefix, which would have hidden `for i in x=1` from `args()`; the fix is a defaulted parameter
+that the `for` words pass false. Its items are copied before the loop starts, because a `set` or
+`shift` in the body would otherwise move the vector being walked — v7 takes a reference on the
+parameter block for exactly that reason.
+
+**Reserved words are recognised by position and quoting is handled by doing nothing.** `ends_list`
+is consulted only where a command may start, and `simple()` takes words greedily, so `echo done`
+prints `done` and `while true do …` reads `do` as an argument to `true` — which is v7's behaviour
+and why the `;` is mandatory. And because a word still carries its quotes at that point, `'do'`
+is four bytes and can never match the two-byte keyword.
+
+**Two things cost more time than the feature did.** A conditional expression choosing between
+string literals — `w == "then" ? "…" : "…"` — is not a constant pointer, so `Str`'s
+`__builtin_strlen` did not fold and the link failed on `strlen` with no libc to satisfy it. The
+codebase already had that comment in `job.cpp`; it now has it twice. And a driver case that types
+a 63-character command in one burst overflows the 64-slot key ring and loses its Enter, which
+looks exactly like a hung shell. A human types slowly enough never to see it.
+
+**What the tests prove separately.** `test_parse.cpp` renders the four constructs, so `if` with
+an `elif` chain, a nested loop and a `for` with and without its `in` are each one string compare;
+`test/run.mjs` has what the tree cannot show — that a loop rebinds its variable, that `break 2`
+leaves both loops and nothing else, that `break` outside a loop is silent, and that
+`if false; then echo x; fi` reports 0.
+
+---
+
 ## A line became a tree
 
 Third of the stages in [src/sh/TODO.md](../src/sh/TODO.md), and the one it called the largest.

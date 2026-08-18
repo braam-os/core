@@ -478,12 +478,13 @@ if (mode === "--kernel") {
     if (pasted("a\r\nb\tc").join() !== [97, KEY.ENTER, 98, KEY.TAB, 99].join())
         fail(`pasted() gave [${pasted("a\r\nb\tc")}]`);
 
-    submit("clear", 1045); // the programs need more than the whole grid
-    addr = instance.exports.resize(100, 48);
+    submit("clear", 1045); // the builtins and the programs need a tall grid
+    addr = instance.exports.resize(100, 60);
     if (addr === 0)
         fail("the resize before help failed");
     s = submit("help", 1050);
-    for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "edit",
+    for (const name of ["break", "cat", "cd", "chat", "clear", "continue", "curl", "date", "df",
+                        "echo", "edit",
                         "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
                         "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd",
                         "readonly", "rm", "save", "set", "shift", "sleep",
@@ -802,6 +803,52 @@ if (mode === "--kernel") {
         fail("a list's first pipeline was filed as a job");
     vrun("kill %1");
     vrun("clear");
+
+    // Control flow. The unit suite has the tree; what only a real shell shows
+    // is that a loop rebinds its variable and that break and continue reach
+    // the loop from inside a pipeline.
+    vshows("for i in a b c; do echo $i; done", "a");
+    vshows("for i in a b c; do echo $i; done", "c");
+    vrun("clear");
+    if (rows(vrun("for i in; do echo x; done")).includes("x"))
+        fail("a for over an empty list ran its body");
+    vrun("set p q");
+    vshows("for i; do echo $i; done", "q"); // no `in`: the positional parameters
+    vrun("set --");
+
+    vshows("if true; then echo yes; else echo no; fi", "yes");
+    vshows("if false; then echo no; else echo yes; fi", "yes");
+    vshows("if false; then echo no; elif true; then echo yes; fi", "yes");
+    vrun("clear");
+    if (rows(vrun("if false; then echo no; fi")).includes("no"))
+        fail("an if ran a branch its condition refused");
+
+    // POSIX rather than v7: an if that takes no branch reports 0, where v7
+    // leaves the failed condition's status behind.
+    vshows("if false; then echo x; fi; echo $?", "0");
+    vshows("for i in a; do false; done; echo $?", "1");
+    vshows("while false; do echo x; done; echo $?", "0");
+
+    vshows("while true; do echo once; break; done", "once");
+    vshows("until false; do echo once; break; done", "once");
+    vrun("clear");
+    if (rows(vrun("for i in a b c; do continue; echo skipped; done")).includes("skipped"))
+        fail("continue did not start the next turn");
+
+    // `break 2` leaves both, and leaves nothing behind for the next line.
+    // Spelled without spaces because the driver types a line in one burst and
+    // the key ring holds 64: a human types slowly enough not to care.
+    vrun("clear");
+    let looped = rows(vrun("for i in a b;do for j in c d;do echo $i$j;break 2;done;done"));
+    if (!looped.includes("ac"))
+        fail(`a nested loop printed ${JSON.stringify(looped)}, expected ac`);
+    if (looped.includes("ad") || looped.includes("bc"))
+        fail(`break 2 left a loop running: ${JSON.stringify(looped)}`);
+    vshows("echo after", "after");
+
+    // Outside a loop both are silent no-ops, as they are in v7.
+    vshows("break; echo still", "still");
+    vshows("continue 3; echo still", "still");
 
     // M5: the shell starts in /home, which is where a redirection lands.
     // `pwd` reads its own cwd through Sys::Chdir now, so this is also the proof
@@ -2009,12 +2056,12 @@ if (mode === "--kernel") {
     // The builtins are the shell's own state, so they are not files: `cd` is
     // not in /bin and never resolves through it, and `help` prints them ahead
     // of everything else, with the usage line the table carries.
-    addr = instance.exports.resize(100, 48);
+    addr = instance.exports.resize(100, 60);
     s = submit("clear", 9090);
     s = submit("help", 9091);
     const helped = rows(s).filter((line) => line.startsWith("  "));
-    for (const [i, name] of ["cd", "exit", "export", "fg", "help", "jobs", "kill", "readonly",
-                             "set", "shift", "unset"].entries())
+    for (const [i, name] of ["break", "cd", "continue", "exit", "export", "fg", "help", "jobs",
+                             "kill", "readonly", "set", "shift", "unset"].entries())
         if (!helped[i] || !helped[i].startsWith(`  ${name} `))
             fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);
     if (!helped.some((line) => line.startsWith("  wc ") && line.includes("count lines")))

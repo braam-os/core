@@ -4,8 +4,12 @@
 //   list     := and_or (sep and_or)* [sep]
 //   sep      := ';' | '&' | newline
 //   and_or   := pipeline (('&&' | '||') pipeline)*
-//   pipeline := ['!'] (group | simple ('|' simple)*)
+//   pipeline := ['!'] (compound | simple ('|' simple)*)
+//   compound := group | if | loop | for
 //   group    := '{' list '}'
+//   if       := 'if' list 'then' list ('elif' list 'then' list)* ['else' list] 'fi'
+//   loop     := ('while' | 'until') list 'do' list 'done'
+//   for      := 'for' name ['in' word*] sep 'do' list 'done'
 //   simple   := assign* (word | redirect)+ | assign+ redirect*
 //   assign   := name '=' word, and only ahead of the first ordinary word
 //   redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
@@ -67,6 +71,11 @@ struct Tree {
         AndOr, // the same, plus c: an offset into the operator list
         Not,   // ! a
         Group, // { a }
+        If,    // a, b: b (condition, body) pairs in the child list; c the else
+        While, // a the condition, b the body
+        Until, // the same, run while the condition fails
+        For,   // a the body, b the command holding the name then the words,
+               // c set when there was an `in`
     };
 
     enum class Op : u8 { And, Or };
@@ -80,7 +89,9 @@ struct Tree {
 
     // ---- before freeze() ----
 
-    Result<void> add_word(Str w);
+    // `assignable` off for a `for` loop's name and words, which are not a
+    // command and where a leading `x=1` is an ordinary word.
+    Result<void> add_word(Str w, bool assignable = true);
 
     Result<void> add_redirect(Redir kind, Str target);
 

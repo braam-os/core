@@ -343,14 +343,20 @@ change to argue in Concept.md first.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything not a child of the caller.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.
-- **The shell has no `-c`, no globbing and no scripts beyond `sh -s`.** It has variables and
-  lists now, but **`export` reaches no child**: there is no environment anywhere in the wasm ABI,
+- **The shell has no `-c`, no globbing and no scripts beyond `sh -s`.** It has variables, lists
+  and control flow now, but **`export` reaches no child**: there is no environment anywhere in the wasm ABI,
   so it records an intent that only this process can honour. `/bin/export` was renamed `save` to
   give the builtin its name.
-- **Only a pipeline may go into the background.** `a && b &` and `{ … ; } &` are refused, because
-  backgrounding means the shell keeps running while the rest goes and nothing in a process can
-  wait for a sibling task. **And a group cannot yet be piped or redirected** — `{ a; } | wc` and
-  `{ a; } > f` need the base stdio S7 threads through `Ctx`.
+- **Only a pipeline may go into the background.** `a && b &`, `{ … ; } &` and `while … done &`
+  are refused, because backgrounding means the shell keeps running while the rest goes and
+  nothing in a process can wait for a sibling task. **And a compound command cannot yet be piped
+  or redirected** — `{ a; } | wc` and `for … done > f` need the base stdio S7 threads through
+  `Ctx`. V7 does it by forking the compound into a subshell, which there is no fork for here.
+- **A loop whose body is entirely builtins cannot be interrupted.** The shell arms its *children*
+  with `Sys::Fg` and is never in its own foreground set, so a `^C` has nowhere to go and `rt.h`
+  is explicit that nothing cancels from inside a process. A loop with a program in it — which is
+  every `while true`, since `true` is `/bin/true` — is interrupted in one press. The escape from
+  the other kind is killing the shell, which init then replaces.
 - **Two fidelity losses the worker costs (§4.3):** a binary that will not instantiate reads as a
   crash rather than a refusal, and `Sys::Now` is relative (nothing calls `proc_now()`).
 - **A host that cannot make a nested worker cannot run anything**, and says so once a second rather

@@ -7,6 +7,7 @@
 # resident shell still exists: it is the same code either side of the process
 # boundary, since it touches nothing but Str, String and Vec.
 add_library(braam_sh STATIC
+    builtin/break.cpp
     builtin/cd.cpp
     builtin/exit.cpp
     builtin/export.cpp

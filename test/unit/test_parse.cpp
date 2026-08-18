@@ -99,6 +99,49 @@ struct Render {
             node(nd.a);
             put("}");
             return;
+        case Tree::Kind::If:
+            put("if");
+            for (u32 k = 0; k < nd.b; k++) {
+                put("(");
+                node(t.kid(nd.a + 2 * k));
+                put("){");
+                node(t.kid(nd.a + 2 * k + 1));
+                put("}");
+            }
+            if (nd.c) {
+                put("{");
+                node(nd.c);
+                put("}");
+            }
+            return;
+        case Tree::Kind::While:
+        case Tree::Kind::Until:
+            if (nd.kind == Tree::Kind::While)
+                put("while(");
+            else
+                put("until(");
+            node(nd.a);
+            put("){");
+            node(nd.b);
+            put("}");
+            return;
+        case Tree::Kind::For: {
+            Args a = t.args(nd.b);
+            put("for(");
+            put(a[0]);
+            if (nd.c) {
+                put(";");
+                for (usize w = 1; w < a.size(); w++) {
+                    if (w > 1)
+                        put(" ");
+                    put(a[w]);
+                }
+            }
+            put("){");
+            node(nd.a);
+            put("}");
+            return;
+        }
         }
     }
 };
@@ -198,6 +241,44 @@ void test_parse()
     CHECK(shape("{ { a; }; }") == "{{{a}}}");
     CHECK(shape("echo '{'") == "{echo}{'{'}"); // quoted, so not reserved
 
+    // ---- control flow ----
+
+    CHECK(shape("if a; then b; fi") == "if({a}){{b}}");
+    CHECK(shape("if a; then b; else c; fi") == "if({a}){{b}}{{c}}");
+    CHECK(shape("if a; then b; elif c; then d; fi") == "if({a}){{b}}({c}){{d}}");
+    CHECK(shape("if a; then b; elif c; then d; else e; fi") == "if({a}){{b}}({c}){{d}}{{e}}");
+    CHECK(shape("if a\nthen b\nfi") == "if({a}){{b}}");
+    CHECK(shape("if a; b; then c; fi") == "if({a};{b}){{c}}"); // the condition is a list
+
+    CHECK(shape("while a; do b; done") == "while({a}){{b}}");
+    CHECK(shape("until a; do b; done") == "until({a}){{b}}");
+    CHECK(shape("while a; do done") == "while({a}){}"); // an empty body
+
+    CHECK(shape("for i in a b c; do echo $i; done") == "for(i;a b c){{echo}{$i}}");
+    CHECK(shape("for i; do b; done") == "for(i){{b}}");
+    CHECK(shape("for i in; do b; done") == "for(i;){{b}}");        // POSIX, where v7 refuses
+    CHECK(shape("for i in x=1; do b; done") == "for(i;x=1){{b}}"); // not an assignment
+
+    // Nesting, and that a construct is a pipeline like any other.
+    CHECK(shape("if a; then while b; do c; done; fi") == "if({a}){while({b}){{c}}}");
+    CHECK(shape("while a; do if b; then c; fi; done") == "while({a}){if({b}){{c}}}");
+    CHECK(shape("! if a; then b; fi") == "!if({a}){{b}}");
+    CHECK(shape("if a; then b; fi && c") == "if({a}){{b}}&&{c}");
+    CHECK(shape("if a; then b; fi; c") == "if({a}){{b}};{c}");
+
+    // Reserved only in command position, and never through a quote.
+    CHECK(shape("echo done") == "{echo}{done}");
+    CHECK(shape("echo if then fi") == "{echo}{if}{then}{fi}");
+    CHECK(shape("echo 'do'") == "{echo}{'do'}");
+    CHECK(shape("for do in a; do b; done") == "for(do;a){{b}}"); // a name, not a keyword
+
+    CHECK(shape("for i in a b; do for j in c; do echo x; done; done") ==
+          "for(i;a b){for(j;c){{echo}{x}}}");
+    CHECK(shape("for i in a; do for j in c; do echo x; break 2; done; done") ==
+          "for(i;a){for(j;c){{echo}{x};{break}{2}}}");
+    CHECK(shape("for i in a b; do for j in c d; do echo x; break 2; done; done") ==
+          "for(i;a b){for(j;c d){{echo}{x};{break}{2}}}");
+
     // ---- refusals ----
 
     CHECK(shape("| ls") == "!syntax error near '|'");
@@ -208,17 +289,26 @@ void test_parse()
     CHECK(shape("ls > | wc") == "!syntax error: expected a file name");
     CHECK(shape("> f") == "!syntax error: expected a command");
     CHECK(shape("a|b|c|d|e|f|g|h|i") == "!too many commands in a pipeline");
-    CHECK(shape("}") == "!syntax error near '}'");
+    CHECK(shape("}") == "!syntax error: unexpected keyword");
 
     // Backgrounding is for a pipeline: the shell keeps running while it goes,
     // and nothing in a process can wait for a sibling task.
     CHECK(shape("a && b &") == "!cannot run a list in the background");
     CHECK(shape("{ a; } &") == "!cannot run a list in the background");
+    CHECK(shape("while a; do b; done &") == "!cannot run a list in the background");
 
-    // A group needs the base stdio S7 threads through, so it may not yet be
+    // A compound needs the base stdio S7 threads through, so it may not yet be
     // piped or redirected.
-    CHECK(shape("{ a; } | wc") == "!syntax error: a group cannot be piped or redirected yet");
-    CHECK(shape("{ a; } > f") == "!syntax error: a group cannot be piped or redirected yet");
+    CHECK(shape("{ a; } | wc") ==
+          "!syntax error: a compound command cannot be piped "
+          "or redirected yet");
+    CHECK(shape("while a; do b; done > f") ==
+          "!syntax error: a compound command cannot be "
+          "piped or redirected yet");
+
+    CHECK(shape("for 1 in a; do b; done") == "!syntax error: expected a name after 'for'");
+    CHECK(shape("do b; done") == "!syntax error: unexpected keyword");
+    CHECK(shape("fi") == "!syntax error: unexpected keyword");
 
     // ---- `more`: the text ended inside something ----
 
@@ -229,6 +319,12 @@ void test_parse()
     CHECK(shape("{ a; b") == "?syntax error: expected '}'");
     CHECK(shape("echo 'a") == "?unterminated quote or ${");
     CHECK(shape("echo ${x") == "?unterminated quote or ${");
+    CHECK(shape("if a") == "?syntax error: expected 'then'");
+    CHECK(shape("if a; then b") == "?syntax error: expected 'fi'");
+    CHECK(shape("while a") == "?syntax error: expected 'do'");
+    CHECK(shape("while a; do b") == "?syntax error: expected 'done'");
+    CHECK(shape("for i in a b") == "?syntax error: expected 'do'");
+    CHECK(shape("for") == "?syntax error: expected a name after 'for'");
     CHECK(shape("!") == "!syntax error: expected a command");
 
     // Stage boundaries, checked apart from the rendering above.

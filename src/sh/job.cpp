@@ -60,9 +60,9 @@ struct Run {
     }
 };
 
-// There are no exceptions, so a transfer of control is a field. A loop and a
-// function body will consume more of these; run_line consumes these two.
-enum class Flow : u8 { Normal, Exit, Interrupt };
+// There are no exceptions, so a transfer of control is a field. A loop
+// consumes Break and Continue; run_line consumes the rest.
+enum class Flow : u8 { Normal, Break, Continue, Exit, Interrupt };
 
 // What the walk threads through the tree. Its own block, not a frame's: it
 // grows with every stage left, and run_line's frame is a recursion's root.
@@ -72,9 +72,16 @@ struct Ctx {
     Str line;
     Flow flow        = Flow::Normal;
     i32 exit_status  = 0;
-    u32 depth        = 0;
+    u32 depth        = 0; // exec_node recursion
+    u32 breaks       = 0; // levels `break` has left to unwind
+    u32 loops        = 0; // how many are running
     bool interactive = false;
 };
+
+// What `break` and `continue` asked for, until the pipeline they ran in picks
+// it up. 0 is "nothing asked".
+u32 g_break;
+bool g_break_cont;
 
 // One line of the job table. It outlives the frame that started the job, so the
 // command text is copied rather than viewed.
@@ -672,11 +679,177 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     if (shell_exit_wanted(want)) {
         cx.flow        = Flow::Exit;
         cx.exit_status = want;
+    } else if (g_break) {
+        // Outside a loop it is a silent no-op, as in v7.
+        if (cx.loops) {
+            cx.flow   = g_break_cont ? Flow::Continue : Flow::Break;
+            cx.breaks = g_break;
+        }
+        g_break = 0;
     } else if (!bg && status == 130) {
         cx.flow = Flow::Interrupt;
     }
 
     var_status(status);
+    co_return status;
+}
+
+// What a loop does with the flow its body left; false stops it. Exit and
+// Interrupt pass through, which is what makes one ^C enough.
+bool loop_step(Ctx &cx)
+{
+    if (cx.flow != Flow::Break && cx.flow != Flow::Continue)
+        return cx.flow == Flow::Normal;
+
+    bool cont = cx.flow == Flow::Continue;
+    if (cx.breaks > 1) {
+        cx.breaks--; // an outer loop takes the rest
+        return false;
+    }
+    cx.flow   = Flow::Normal;
+    cx.breaks = 0;
+    return cont;
+}
+
+// The walk, which every construct below runs its parts through.
+Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n);
+
+Task<i32> exec_if(Ctx &cx, const Tree &tree, u32 n)
+{
+    const Tree::Node &nd = tree.node(n);
+
+    Task<i32> step;
+    i32 status = 0; // no branch taken is 0, which is POSIX rather than v7
+    u32 k      = 0;
+
+    bool took = false;
+    for (k = 0; k < nd.b && !took; k++) {
+        step   = exec_node(cx, tree, tree.kid(nd.a + 2 * k));
+        status = step ? co_await step : 1;
+        if (cx.flow != Flow::Normal)
+            co_return status;
+        if (status != 0)
+            continue;
+        step   = exec_node(cx, tree, tree.kid(nd.a + 2 * k + 1));
+        status = step ? co_await step : 1;
+        took   = true;
+    }
+
+    if (!took) {
+        status = 0;
+        if (nd.c) {
+            step   = exec_node(cx, tree, nd.c);
+            status = step ? co_await step : 1;
+        }
+        // Nothing ran, so nothing published a status: `if false; then a; fi`
+        // is 0 and not the condition's, which is POSIX rather than v7.
+        else
+            var_status(status);
+    }
+    co_return status;
+}
+
+// `while` and `until` differ by one comparison, as they do in v7.
+Task<i32> exec_loop(Ctx &cx, const Tree &tree, u32 n)
+{
+    const Tree::Node &nd = tree.node(n);
+    bool until           = nd.kind == Tree::Kind::Until;
+
+    Task<i32> step;
+    i32 status = 0; // a body that never runs is 0
+    i32 cond   = 0;
+    bool ran   = false;
+
+    cx.loops++;
+    for (;;) {
+        step = exec_node(cx, tree, nd.a);
+        cond = step ? co_await step : 1;
+        if (cx.flow != Flow::Normal) {
+            loop_step(cx);
+            break;
+        }
+        if ((cond == 0) == until)
+            break;
+
+        step   = exec_node(cx, tree, nd.b);
+        status = step ? co_await step : 1;
+        if (!loop_step(cx))
+            break;
+        ran = true;
+    }
+    cx.loops--;
+    if (!ran)
+        var_status(status); // a body that never ran is 0, not the condition's
+    co_return status;
+}
+
+Task<i32> exec_for(Ctx &cx, const Tree &tree, u32 n)
+{
+    const Tree::Node &nd = tree.node(n);
+    Args names           = tree.args(nd.b); // the name, then the words
+    Str name             = names[0];
+
+    // Owned copies, so a `set` or `shift` in the body cannot move them —
+    // v7 takes a reference on the parameter block for the same reason.
+    Vec<String> items;
+    if (nd.c) {
+        Vec<Field> fields;
+        ExpandErr err;
+        for (usize i = 1; i < names.size(); i++)
+            if (Result<void> e = expand_word(names[i], shell_vars(), Split::Fields, fields, err);
+                e.is_err()) {
+                if (e.error() != Error::Invalid)
+                    co_await say(SYS_STDERR, "out of memory");
+                else if (err.name.empty())
+                    co_await say(SYS_STDERR, err.message);
+                else
+                    co_await say2(SYS_STDERR, err.name, err.message);
+                var_status(1);
+                co_return 1;
+            }
+        if (!items.reserve(fields.size())) {
+            co_await say(SYS_STDERR, "out of memory");
+            co_return 1;
+        }
+        for (Field &f : fields)
+            items.push(move(f.text));
+    } else {
+        // `for i; do` walks the positional parameters.
+        if (!items.reserve(args_count())) {
+            co_await say(SYS_STDERR, "out of memory");
+            co_return 1;
+        }
+        for (usize k = 1; k <= args_count(); k++) {
+            String v;
+            if (!v.assign(args_at(k))) {
+                co_await say(SYS_STDERR, "out of memory");
+                co_return 1;
+            }
+            items.push(move(v));
+        }
+    }
+
+    Task<i32> step;
+    i32 status = 0;
+    usize k    = 0;
+    bool ran   = false;
+
+    cx.loops++;
+    for (k = 0; k < items.size(); k++) {
+        if (!var_set(name, items[k].str())) {
+            co_await say2(SYS_STDERR, name, "cannot be set");
+            status = 1;
+            break;
+        }
+        step   = exec_node(cx, tree, nd.a);
+        status = step ? co_await step : 1;
+        if (!loop_step(cx))
+            break;
+        ran = true;
+    }
+    cx.loops--;
+    if (!ran)
+        var_status(status);
     co_return status;
 }
 
@@ -749,11 +922,33 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
         step   = exec_node(cx, tree, nd.a);
         status = step ? co_await step : 1;
         break;
+
+    case Tree::Kind::If:
+        step   = exec_if(cx, tree, n);
+        status = step ? co_await step : 1;
+        break;
+
+    case Tree::Kind::While:
+    case Tree::Kind::Until:
+        step   = exec_loop(cx, tree, n);
+        status = step ? co_await step : 1;
+        break;
+
+    case Tree::Kind::For:
+        step   = exec_for(cx, tree, n);
+        status = step ? co_await step : 1;
+        break;
     }
     co_return status;
 }
 
 } // namespace
+
+void loop_break(u32 levels, bool cont)
+{
+    g_break      = levels;
+    g_break_cont = cont;
+}
 
 bool line_incomplete(Str text)
 {
@@ -798,5 +993,8 @@ Task<i32> run_line(Str line, bool interactive)
 
     if (own.cx->flow == Flow::Exit)
         shell_exit(own.cx->exit_status);
+    // `break 9` in one loop must not skip whatever comes next, which is what
+    // v7 does with its own leftover.
+    g_break = 0;
     co_return status;
 }

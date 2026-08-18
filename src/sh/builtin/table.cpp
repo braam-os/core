@@ -2,10 +2,12 @@
 
 namespace {
 
-// Sorted, because `help` prints it in order and a linear search over eleven
+// Sorted, because `help` prints it in order and a linear search over thirteen
 // entries is not worth an index.
 constexpr Builtin TABLE[] = {
+    { "break", "[<n>] — leave a loop, or n of them", builtin_break },
     { "cd", "[<dir>] — change the working directory, /home by default", builtin_cd },
+    { "continue", "[<n>] — start a loop's next turn", builtin_continue },
     { "exit", "[<status>] — end the shell", builtin_exit },
     { "export", "[<name>[=<value>]...] — mark a variable, which no child can see", builtin_export },
     { "fg", "[%n] — wait for a background job in the foreground", builtin_fg },

@@ -26,6 +26,11 @@
 // and the stages are put in front so that ^C reaches them rather than us.
 Task<i32> run_line(Str line, bool interactive);
 
+// `break` and `continue`, which ask rather than act for the reason `exit`
+// does: a builtin runs inside a pipeline and the loop that must hear it is up
+// the walk. Outside a loop both are silent no-ops.
+void loop_break(u32 levels, bool cont);
+
 // Whether the text ended *inside* something — a quote, a `${`, a trailing
 // `&&`, an unclosed `{` — so a reader should take another line before running
 // it. A parse of its own, which is what makes the accumulation re-parsing

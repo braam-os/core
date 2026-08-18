@@ -21,6 +21,17 @@ namespace {
 
 // `name=` on the raw word, before any quote comes off: a name is what a `$`
 // would accept, so `a2=1` assigns and `2a=1` is an ordinary word.
+bool is_name(Str w)
+{
+    for (usize i = 0; i < w.size(); i++) {
+        char c = w[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+              (i && c >= '0' && c <= '9')))
+            return false;
+    }
+    return !w.empty();
+}
+
 bool is_assignment(Str w)
 {
     usize i = 0;
@@ -36,13 +47,13 @@ bool is_assignment(Str w)
 
 } // namespace
 
-Result<void> Tree::add_word(Str w)
+Result<void> Tree::add_word(Str w, bool assignable)
 {
     // An assignment counts only while nothing else has been seen: in `ls x=1`
     // the second word is an argument.
     bool leading = words_.size() - argv0_ == assign_n_;
     TRY_VOID(keep(w, words_));
-    if (leading && is_assignment(w))
+    if (assignable && leading && is_assignment(w))
         assign_n_++;
     return {};
 }
@@ -223,13 +234,25 @@ struct Parser {
         return Error::NoMemory;
     }
 
+    // Reserved by position: this is only ever asked where a command may
+    // start, and a raw word still carries its quotes, so `'do'` cannot match.
     bool reserved(Str w) const { return tok == Tok::Word && word == w; }
 
-    bool ends_list() const { return tok == Tok::End || reserved("}"); }
+    bool ends_list() const
+    {
+        return tok == Tok::End || reserved("}") || reserved("then") || reserved("elif") ||
+               reserved("else") || reserved("fi") || reserved("do") || reserved("done");
+    }
 
     Result<u32> list(u32 nest);
     Result<u32> and_or(u32 nest);
     Result<u32> pipeline(u32 nest);
+    Result<u32> compound(u32 nest, bool &any);
+    Result<u32> if_clause(u32 nest);
+    Result<u32> loop_clause(u32 nest, bool until);
+    Result<u32> for_clause(u32 nest);
+    Result<void> want(Str w);
+    Result<void> skip_seps();
     Result<void> simple();
 };
 
@@ -285,6 +308,132 @@ Result<void> Parser::simple()
     return {};
 }
 
+// The word after a construct's keyword, which the construct must have.
+Result<void> Parser::want(Str w)
+{
+    if (reserved(w))
+        return advance();
+
+    // A literal per branch, not one conditional expression: Str's length folds
+    // only when the pointer is constant (Concept.md §C.3). Out of text asks
+    // for more; anything else is a mistake with a whole line behind it.
+    if (w == "then")
+        err.message = "syntax error: expected 'then'";
+    else if (w == "do")
+        err.message = "syntax error: expected 'do'";
+    else if (w == "done")
+        err.message = "syntax error: expected 'done'";
+    else if (w == "fi")
+        err.message = "syntax error: expected 'fi'";
+    else
+        err.message = "syntax error: expected '}'";
+    err.more = tok == Tok::End;
+    return Err(Error::Invalid);
+}
+
+Result<void> Parser::skip_seps()
+{
+    while (tok == Tok::Semi || tok == Tok::Newline)
+        TRY_VOID(advance());
+    return {};
+}
+
+// Pairs in a flat run rather than v7's nest, because the walk recurses.
+Result<u32> Parser::if_clause(u32 nest)
+{
+    Vec<u32> kids;
+    u32 els = 0;
+
+    for (;;) {
+        TRY_VOID(advance()); // `if` or `elif`
+        u32 cond = TRY(list(nest + 1));
+        TRY_VOID(want("then"));
+        u32 body = TRY(list(nest + 1));
+        if (!kids.push(cond) || !kids.push(body))
+            return Err(oom());
+        if (!reserved("elif"))
+            break;
+    }
+
+    if (reserved("else")) {
+        TRY_VOID(advance());
+        els = TRY(list(nest + 1));
+    }
+    TRY_VOID(want("fi"));
+
+    u32 off = TRY(t.add_kids(kids));
+    return t.add_node(Tree::Node{ Tree::Kind::If, false, off, u32(kids.size() / 2), els, 0 });
+}
+
+Result<u32> Parser::loop_clause(u32 nest, bool until)
+{
+    TRY_VOID(advance()); // `while` or `until`
+    u32 cond = TRY(list(nest + 1));
+    TRY_VOID(want("do"));
+    u32 body = TRY(list(nest + 1));
+    TRY_VOID(want("done"));
+
+    Tree::Kind k = until ? Tree::Kind::Until : Tree::Kind::While;
+    return t.add_node(Tree::Node{ k, false, cond, body, 0, 0 });
+}
+
+Result<u32> Parser::for_clause(u32 nest)
+{
+    TRY_VOID(advance()); // `for`
+    if (tok != Tok::Word || !is_name(word))
+        return Err(fail("syntax error: expected a name after 'for'", tok == Tok::End));
+
+    // Name and words as one command, so the command expander serves them.
+    // Not assignable: `for i in x=1` is an ordinary word.
+    u32 cmd = u32(t.size());
+    if (t.add_word(word, false).is_err())
+        return Err(oom());
+    TRY_VOID(advance());
+
+    u32 has_in = 0;
+    if (reserved("in")) {
+        has_in = 1;
+        TRY_VOID(advance());
+        while (tok == Tok::Word) {
+            if (t.add_word(word, false).is_err())
+                return Err(oom());
+            TRY_VOID(advance());
+        }
+    }
+    if (t.end_command().is_err())
+        return Err(oom());
+
+    TRY_VOID(skip_seps());
+    TRY_VOID(want("do"));
+    u32 body = TRY(list(nest + 1));
+    TRY_VOID(want("done"));
+
+    return t.add_node(Tree::Node{ Tree::Kind::For, false, body, cmd, has_in, 0 });
+}
+
+// A compound command, or 0 with `any` false when the token is not one.
+Result<u32> Parser::compound(u32 nest, bool &any)
+{
+    any = true;
+    if (reserved("{")) {
+        TRY_VOID(advance());
+        u32 body = TRY(list(nest + 1));
+        TRY_VOID(want("}"));
+        return t.add_node(Tree::Node{ Tree::Kind::Group, false, body, 0, 0, 0 });
+    }
+    if (reserved("if"))
+        return if_clause(nest);
+    if (reserved("while"))
+        return loop_clause(nest, false);
+    if (reserved("until"))
+        return loop_clause(nest, true);
+    if (reserved("for"))
+        return for_clause(nest);
+
+    any = false;
+    return u32(0);
+}
+
 Result<u32> Parser::pipeline(u32 nest)
 {
     usize text0 = begin;
@@ -295,16 +444,15 @@ Result<u32> Parser::pipeline(u32 nest)
         TRY_VOID(advance());
     }
 
-    u32 n = 0;
-    if (reserved("{")) {
-        TRY_VOID(advance());
-        u32 body = TRY(list(nest + 1));
-        if (!reserved("}"))
-            return Err(fail("syntax error: expected '}'", true));
-        TRY_VOID(advance());
+    bool is_compound = false;
+    u32 n            = TRY(compound(nest, is_compound));
+    if (is_compound) {
+        // v7 forks for this; with no fork it needs the base stdio the
+        // redirection stage threads through the walk.
         if (tok == Tok::Pipe || redir_of(tok))
-            return Err(fail("syntax error: a group cannot be piped or redirected yet"));
-        n = TRY(t.add_node(Tree::Node{ Tree::Kind::Group, false, body, 0, 0, 0 }));
+            return Err(
+                fail("syntax error: a compound command cannot be piped "
+                     "or redirected yet"));
     } else {
         u32 first = u32(t.size());
         TRY_VOID(simple());
@@ -411,7 +559,7 @@ Result<void> parse(Str line, Tree &out, ParseErr &err)
 
     u32 root = TRY(p.list(0));
     if (p.tok != Tok::End)
-        return Err(p.fail("syntax error near '}'"));
+        return Err(p.fail("syntax error: unexpected keyword"));
 
     out.set_root(root);
     if (out.freeze().is_err()) {
