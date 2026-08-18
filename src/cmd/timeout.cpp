@@ -6,10 +6,11 @@
 // Concept.md §4.3 exists for: a builtin could not do it (it would be running in
 // the shell's own job) and nothing else in /bin can start a process.
 //
-// Milliseconds, for the reason `sleep` gives: no float parser, and the smoke
-// test wants an exact number.
+// The delay is seconds, or milliseconds with -m, as `sleep`'s is.
 
 namespace {
+
+constexpr u32 MAX_SECS = 4294967; // as many as convert to ms inside a u32
 
 // The alarm, in a task of its own. It has to be the second task rather than the
 // root, because a process ends when its *root* returns (Concept.md §4.3) — so
@@ -35,26 +36,33 @@ Task<i32> alarm(u32 pid, u32 ms)
 
 Task<i32> proc_main(Args args)
 {
-    Option<u32> ms = args.size() >= 3 ? parse_u32(args[1]) : None;
-    if (!ms.has_value()) {
-        co_await write_all(SYS_STDERR, "usage: timeout <ms> <command> [<arg>...]\n");
+    usize i    = 1;
+    bool milli = i < args.size() && args[i] == "-m";
+    if (milli)
+        i++;
+
+    Option<u32> n = args.size() >= i + 2 ? parse_u32(args[i]) : None;
+    if (!n.has_value() || (!milli && n.value() > MAX_SECS)) {
+        co_await write_all(SYS_STDERR, "usage: timeout [-m] <seconds> <command> [<arg>...]\n");
         co_return 2;
     }
+    u32 ms = milli ? n.value() : n.value() * 1000;
+    i++;
 
     // Stdio is shared rather than moved, so the child writes where this process
-    // writes and `timeout 500 ls | wc` is one pipeline with one reader.
+    // writes and `timeout 5 ls | wc` is one pipeline with one reader.
     Result<u32> pid = Err(Error::NoMemory);
-    if (Task<Result<u32>> t = spawn(Args{ args.v.subspan(2) }))
+    if (Task<Result<u32>> t = spawn(Args{ args.v.subspan(i) }))
         pid = co_await t;
     if (pid.is_err()) {
         if (pid.error() == Error::Cancelled)
             co_return 130;
-        if (Task<void> e = errln("timeout", args[2], pid.error()))
+        if (Task<void> e = errln("timeout", args[i], pid.error()))
             co_await e;
         co_return pid.error() == Error::NotFound ? 127 : 126;
     }
 
-    if (!proc_spawn(alarm(pid.value(), ms.value()))) {
+    if (!proc_spawn(alarm(pid.value(), ms))) {
         co_await write_all(SYS_STDERR, "timeout: no room for a timer\n");
         if (Task<Result<void>> t = kill_child(pid.value()))
             co_await t;

@@ -7,6 +7,55 @@ of the two needs amending.
 
 ---
 
+## Seconds, and `-m` for the machine's unit
+
+`sleep`, `timeout` and `watch -n` took **milliseconds**, and `vmstat` took **seconds**. Every
+duration a user types is now seconds, and all four accept `-m` to mean the number is milliseconds
+instead. `sleep 5` waits five seconds, `sleep -m 5` returns almost at once.
+
+**Why the divergence was there, and why a flag keeps it.** The earlier note below — "`sleep` takes
+milliseconds; there is no float parser, the scheduler is a millisecond machine, and the smoke test
+needs an exact number to assert `tick()`'s return value against" — was three arguments, and only
+the third is still load-bearing. The float parser is still absent and the argument is still
+`parse_u32`, so seconds cost nothing to parse; the scheduler being a millisecond machine is an
+implementation fact that `sleep_for(secs * 1000)` hides in one multiply. But the test harness
+really does own the clock and really does assert the exact millisecond `tick()` reports, and a
+whole second is a clumsy unit for a virtual clock whose ticks are hand-picked ten milliseconds
+apart. `-m` is what preserves that: `test/run.mjs` spells every one of its delays with it, so not a
+single tick value or hand-written `now` in that file moved when the default changed. A seconds-only
+change would have had to retime four blocks and rewrite the `[30, 20, -1]` assertion that has stood
+since M1.
+
+The alternative was a fractional parser — `sleep 0.5` — which reads better than `sleep -m 500` and
+was rejected on cost: it is real parsing code in four binaries that each carry their own copy of
+`text.cpp`, to express something no caller in the tree wants. `sleep 0.5` is a usage error, not a
+rounding.
+
+**This supersedes two paragraphs further down.** vmstat's *"Seconds, which makes it the one time
+argument here that is not milliseconds"* now describes the rule rather than the exception, and its
+first clause — that a rate per second wants an interval in seconds — is the argument that won
+generally. M3's *"`sleep` takes milliseconds… the divergence from POSIX lives in the usage string"*
+is retired; the usage string reads `usage: sleep [-m] <seconds>` and there is no divergence left to
+record.
+
+**Nothing below the command line moved.** `Sys::Sleep`'s payload is still milliseconds (§4.3) and
+`sleep_for(u32 ms)` is still the SDK's call, so this is four argument parsers and four usage
+strings. `vmstat` needed slightly more care than the others: its columns are rates *per second*
+whatever `-m` says, and its "a count without an interval paces itself" default has to stay a whole
+second under `-m` too, since a one-millisecond interval would measure nothing but vmstat.
+
+`watch`'s ad-hoc `args[1] == "-n"` became a leading-option loop in vmstat's style, so `-m` and `-n`
+compose in either order. The three ordinary programs cap a seconds argument at 4,294,967 — as many
+as convert to milliseconds inside a `u32` — and refuse anything above it rather than wrapping;
+under `-m` the parser's own range is the cap.
+
+**What the tests gained.** `sleep 5` asserting `tick()` returns 5000 is the whole seconds path in
+one line, and `watch -n 100` asserting an interval of 100000 is the same check for the one program
+whose conversion is not at the top of `proc_main`. The refusals — `sleep 0.5`, `sleep 4294968`,
+`sleep -m` with no number, `watch -n 4294968` — are cheap and pin the boundary. Three copies of
+`/share/help` are `wc`'d by an unrelated case, so lengthening four help lines moved a byte count
+there — the exact number is worth keeping over a looser assertion precisely because it notices.
+
 ## The wheel is a keystroke
 
 Scrollback has been reachable only from the keyboard since it arrived, and the gesture everyone

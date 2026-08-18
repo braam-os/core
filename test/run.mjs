@@ -390,7 +390,7 @@ if (mode === "--kernel") {
     // `sleep` parks on the timer queue, and the delays tick reports are exact
     // because the clock is ours. It exercises argv and `exec` with it, since
     // `sleep` is a binary like everything else.
-    type("sleep 30");
+    type("sleep -m 30");
     press(KEY.ENTER);
     const delays = [1000, 1010, 1030].map((now) => run(now));
     const want_delays = [30, 20, -1];
@@ -759,7 +759,7 @@ if (mode === "--kernel") {
 
     // A spawn that names no environment hands the child the caller's, which is
     // what a program that starts a program gets without doing anything.
-    vshows("timeout 5000 env", "ev=yes");
+    vshows("timeout -m 5000 env", "ev=yes");
 
     // A command name and a redirection target out of a variable: the argv
     // words split and the target does not.
@@ -836,9 +836,9 @@ if (mode === "--kernel") {
 
     // A background job is listed by its own text, not by the whole line.
     vrun("clear");
-    vrun("echo first; sleep 5000 &");
+    vrun("echo first; sleep -m 5000 &");
     cont = vrun("jobs");
-    if (!rows(cont).some((line) => line.includes("running sleep 5000")))
+    if (!rows(cont).some((line) => line.includes("running sleep -m 5000")))
         fail(`jobs after a list showed ${JSON.stringify(rows(cont))}`);
     if (rows(cont).some((line) => line.includes("running echo first")))
         fail("a list's first pipeline was filed as a job");
@@ -1243,7 +1243,7 @@ if (mode === "--kernel") {
         fail(`vmstat -s did not total the syscalls: ${JSON.stringify(rows(s))}`);
 
     s = submit("vmstat -s 1", 1185.8);
-    if (!rows(s).includes("usage: vmstat [-s] [-w <secs>] [-c <count>] [<secs> [<count>]]"))
+    if (!rows(s).includes("usage: vmstat [-s] [-m] [-w <secs>] [-c <count>] [<secs> [<count>]]"))
         fail(`vmstat -s with an interval printed ${JSON.stringify(rows(s))}`);
 
     // BSD's other spelling of the same thing, and -c counts the first row, so
@@ -1253,6 +1253,13 @@ if (mode === "--kernel") {
     const once = rows(s).filter((line) => line && !line.includes("$"));
     if (once.length !== 3)
         fail(`vmstat -w 1 -c 1 printed ${once.length} lines, expected a header and a row`);
+
+    // -m says the interval is milliseconds.
+    s = submit("clear", 1185.95);
+    s = submit("vmstat -m -w 1 -c 1", 1186.05);
+    const milli = rows(s).filter((line) => line && !line.includes("$"));
+    if (milli.length !== 3)
+        fail(`vmstat -m -w 1 -c 1 printed ${milli.length} lines, expected a header and a row`);
 
     // Two rows an interval apart. The interval is a second, so the second row
     // needs a tick past the deadline the sleep put on the timer queue — which is
@@ -1278,7 +1285,7 @@ if (mode === "--kernel") {
 
     // M4, second criterion: ^C interrupts a running pipeline and the prompt
     // comes back. tick's return value is what proves the sleep really went.
-    type("sleep 5000");
+    type("sleep -m 5000");
     press(KEY.ENTER);
     if (run(1190) !== 5000)
         fail("the pipeline did not park on the timer");
@@ -1294,6 +1301,31 @@ if (mode === "--kernel") {
     s = submit("echo back", 1210);
     if (!rows(s).includes("back"))
         fail(`the shell lost the keyboard after ^C: ${JSON.stringify(rows(s))}`);
+
+    // The default unit: a bare number is seconds.
+    type("sleep 5");
+    press(KEY.ENTER);
+    if (run(1211) !== 5000)
+        fail("sleep's argument was not read as seconds");
+    press("c".codePointAt(0), CTRL);
+    if (run(1212) !== -1)
+        fail("^C left the seconds timer armed");
+
+    // A fraction has no parser, and a value that would not convert is refused.
+    s = submit("clear", 1213);
+    s = submit("sleep 0.5", 1214);
+    if (!rows(s).some((line) => line.startsWith("usage: sleep")))
+        fail(`a fractional sleep gave ${JSON.stringify(rows(s))}, expected the usage line`);
+    if (!rows(s).includes(prompt(2)))
+        fail(`a fractional sleep left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
+    s = submit("clear", 1215);
+    s = submit("sleep 4294968", 1216);
+    if (!rows(s).some((line) => line.startsWith("usage: sleep")))
+        fail(`a sleep past the millisecond range gave ${JSON.stringify(rows(s))}`);
+    s = submit("clear", 1217);
+    s = submit("sleep -m", 1218);
+    if (!rows(s).some((line) => line.startsWith("usage: sleep")))
+        fail(`-m without a number gave ${JSON.stringify(rows(s))}, expected the usage line`);
 
     // An asynchronous reply really does park the task: hold the reply back and
     // the shell has nothing pending until it lands, which is the path a browser
@@ -1692,14 +1724,14 @@ if (mode === "--kernel") {
     // M7, second criterion: a job is backgrounded and listed, and its finish
     // is announced at the next prompt.
     s = submit("clear", 3081);
-    s = submit("sleep 5000 &", 3082);
+    s = submit("sleep -m 5000 &", 3082);
     if (!rows(s).some((line) => line.startsWith("[1] ")))
         fail(`& said nothing: ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt())
         fail(`& did not come back to a prompt: ${JSON.stringify(rows(s))}`);
 
     s = submit("jobs", 3083);
-    if (!rows(s).some((line) => line.startsWith("[1]+ running sleep 5000")))
+    if (!rows(s).some((line) => line.startsWith("[1]+ running sleep -m 5000")))
         fail(`jobs listed nothing: ${JSON.stringify(rows(s))}`);
 
     // There is no /proc/jobs any more: the table is the shell's own memory now
@@ -1742,14 +1774,14 @@ if (mode === "--kernel") {
     // And a job cancelled outright, which is the other half: kill %n reaches
     // every stage, and the shell stays where it was.
     s = submit("clear", 3092);
-    s = submit("sleep 5000 &", 3093);
+    s = submit("sleep -m 5000 &", 3093);
     s = submit("kill %2", 3094);
     s = submit("jobs", 3095);
     if (rows(s).some((line) => line.includes("running")))
         fail(`kill %2 left the job running: ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 3096);
-    s = submit("sleep 5000 &", 3097);
+    s = submit("sleep -m 5000 &", 3097);
 
     // The timer finally fires, and the job is reported and dropped.
     run(9000);
@@ -1960,7 +1992,7 @@ if (mode === "--kernel") {
     // The ordinary path: the child runs, writes to the stdio it shared with its
     // parent, and its status is what `timeout` reports.
     s = submit("clear", 9100);
-    s = submit("timeout 10000 echo child", 9101);
+    s = submit("timeout -m 10000 echo child", 9101);
     if (!rows(s).includes("child"))
         fail(`a spawned child printed ${JSON.stringify(rows(s))}, expected child`);
     if (row(s, s.cursor_y) !== prompt())
@@ -1970,9 +2002,9 @@ if (mode === "--kernel") {
 
     // The kill path: the child outlasts the delay, so the alarm task kills it
     // and 124 says which of the two ended it. The clock has to be moved past
-    // the delay by hand, exactly as `sleep 30` above needs it.
+    // the delay by hand, exactly as `sleep -m 30` above needs it.
     s = submit("clear", 9110);
-    type("timeout 20 sleep 10000");
+    type("timeout -m 20 sleep -m 10000");
     press(KEY.ENTER);
     run(9111);
     if (others() !== 2)
@@ -1988,7 +2020,7 @@ if (mode === "--kernel") {
     // a pipe the *shell's* Job owns, and that block has to outlive both the
     // stage and every syscall server still parked on it.
     s = submit("clear", 9115);
-    s = submit("timeout 10000 echo one two | wc", 9116);
+    s = submit("timeout -m 10000 echo one two | wc", 9116);
     if (!rows(s).some((line) => line.trim() === "1 2 8"))
         fail(`a supervised child in a pipeline printed ${JSON.stringify(rows(s))}`);
     if (others() !== 0)
@@ -1997,19 +2029,19 @@ if (mode === "--kernel") {
     // A child's exit status reaches the parent, and the parent's reaches the
     // shell — two Waits deep, since `false` is a process of its own.
     s = submit("clear", 9120);
-    s = submit("timeout 10000 false", 9121);
+    s = submit("timeout -m 10000 false", 9121);
     if (!rows(s).includes(prompt(1)))
         fail(`a child's status did not reach the shell: ${JSON.stringify(rows(s))}`);
 
     // A name that is not a command is the parent's diagnostic, not a crash.
     s = submit("clear", 9130);
-    s = submit("timeout 10000 nosuchthing", 9131);
+    s = submit("timeout -m 10000 nosuchthing", 9131);
     if (!rows(s).includes(prompt(127)))
         fail(`spawning a missing command gave ${JSON.stringify(rows(s))}, expected 127`);
 
     // A builtin is the shell's own state and cannot be spawned into a process.
     s = submit("clear", 9140);
-    s = submit("timeout 10000 cd", 9141);
+    s = submit("timeout -m 10000 cd", 9141);
     if (!rows(s).some((line) => line.startsWith("timeout: cd:")))
         fail(`spawning a builtin gave ${JSON.stringify(rows(s))}, expected a refusal`);
 
@@ -2018,7 +2050,7 @@ if (mode === "--kernel") {
     submit("cd /bin", 9150);
     cwd = "/bin";
     s = submit("clear", 9151);
-    s = submit("timeout 10000 pwd", 9152);
+    s = submit("timeout -m 10000 pwd", 9152);
     if (!rows(s).includes("/bin"))
         fail(`a child's inherited cwd printed ${JSON.stringify(rows(s))}, expected /bin`);
     submit("cd /home", 9153);
@@ -2028,9 +2060,10 @@ if (mode === "--kernel") {
     // the child, so the child exiting is what closes the channel and gives the
     // read its end of input — nothing else ends that loop.
     s = submit("clear", 9145);
-    type("watch -n 100000 echo tick");
+    type("watch -n 100 echo tick");
     press(KEY.ENTER);
-    run(9146);
+    if (run(9146) !== 100000)
+        fail("watch's -n was not read as seconds");
     if (!rows(descriptor(addr)).includes("tick"))
         fail(`watch printed ${JSON.stringify(rows(descriptor(addr)))}, expected tick`);
     if (others() !== 1)
@@ -2041,6 +2074,18 @@ if (mode === "--kernel") {
     s = descriptor(addr);
     if (!rows(s).includes(prompt(130)))
         fail(`^C on watch left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
+
+    // timeout's default unit, and an interval that would not convert to ms.
+    s = submit("clear", 9148);
+    s = submit("timeout 10 echo child", 9148.1);
+    if (!rows(s).includes("child"))
+        fail(`timeout in seconds printed ${JSON.stringify(rows(s))}, expected child`);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`timeout in seconds left ${row(s, s.cursor_y)}, expected a bare prompt`);
+    s = submit("clear", 9148.2);
+    s = submit("watch -n 4294968 echo tick", 9148.3);
+    if (!rows(s).includes("usage: watch [-m] [-n <seconds>] <command> [<arg>...]"))
+        fail(`a watch interval past the millisecond range gave ${JSON.stringify(rows(s))}`);
     if (others() !== 0)
         fail(`${others()} instances outlived watch`);
 
@@ -2060,7 +2105,7 @@ if (mode === "--kernel") {
     net.terminated.length = 0;
     s = submit("clear", 9160);
     net.hold(2); // the parent binds a worker first, and it is the child that loops
-    type("timeout 20 spin");
+    type("timeout -m 20 spin");
     press(KEY.ENTER);
     run(9161);
     if (others() !== 2)
@@ -2078,7 +2123,7 @@ if (mode === "--kernel") {
     s = submit("spin 1", 9205); // warm the pool again, for the reason above
     s = submit("clear", 9210);
     net.hold(2);
-    type("timeout 100000 spin");
+    type("timeout -m 100000 spin");
     press(KEY.ENTER);
     run(9211);
     if (others() !== 2)
@@ -2182,7 +2227,7 @@ if (mode === "--kernel") {
     // ^C reaches what sh put in front, and sh survives it: the whole point of
     // Sys::Fg. The prompt that comes back is sh's, reporting 130.
     s = submit("clear", 9210);
-    type("sleep 60000");
+    type("sleep -m 60000");
     press(KEY.ENTER);
     run(9211);
     press("c".codePointAt(0), CTRL);
@@ -2209,11 +2254,11 @@ if (mode === "--kernel") {
     // A background job, its table, and `kill %n` — all sh's own memory now,
     // over Sys::Spawn and Sys::Kill.
     s = submit("clear", 9216.5);
-    s = submit("sleep 60000 &", 9216.6);
+    s = submit("sleep -m 60000 &", 9216.6);
     if (!rows(s).some((line) => line.startsWith("[1] ")))
         fail(`sh did not announce the job: ${JSON.stringify(rows(s))}`);
     s = submit("jobs", 9216.7);
-    if (!rows(s).some((line) => line.startsWith("[1]+ running sleep 60000")))
+    if (!rows(s).some((line) => line.startsWith("[1]+ running sleep -m 60000")))
         fail(`sh's jobs printed ${JSON.stringify(rows(s))}`);
     s = submit("kill %1", 9216.8);
     if (!rows(s).some((line) => line.startsWith("[1] interrupt")))
@@ -2503,10 +2548,10 @@ if (mode === "--kernel") {
     // parked on Sys::Wait meanwhile, so it learns nothing until the stage it is
     // waiting for finishes, which is what the second run() is for.
     s = submit("clear", 11076.2);
-    s = submit("sleep 60000 &", 11076.3);
+    s = submit("sleep -m 60000 &", 11076.3);
     if (!rows(s).some((line) => /^\[\d+\] \d+$/.test(line)))
         fail(`the doomed shell did not announce the job: ${JSON.stringify(rows(s))}`);
-    type("sleep 1 | wc");
+    type("sleep -m 1 | wc");
     press(KEY.ENTER);
     run(11076.4);
 
@@ -2556,7 +2601,7 @@ if (mode === "--kernel") {
 
     // And the other half of the console: the replacement arming a foreground of
     // its own, and taking the screen back from a full-screen child.
-    type("sleep 60000");
+    type("sleep -m 60000");
     press(KEY.ENTER);
     run(11079.6);
     press("c".codePointAt(0), CTRL);
@@ -2738,9 +2783,9 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "braam: nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 7,278 bytes is fifteen chunks against eight
+    // The many-writes case: 7,416 bytes is fifteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1224 7278");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "126 1248 7416");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;
@@ -2945,7 +2990,7 @@ if (mode === "--kernel") {
 
     // `wait` collects a background job without putting a prompt in between.
     s = submit("clear", (gt += 0.01));
-    s = submit("sleep 5000 & wait; echo waited", (gt += 0.01));
+    s = submit("sleep -m 5000 & wait; echo waited", (gt += 0.01));
     if (rows(s).includes("waited"))
         fail("wait came back before the job did");
     run(20000);
@@ -2956,7 +3001,7 @@ if (mode === "--kernel") {
     // can: the interrupt went to the stage, so this shell was never cancelled.
     submit("clear", (gt += 0.01));
     submit("trap 'echo caught' 2", (gt += 0.01));
-    type("sleep 5000");
+    type("sleep -m 5000");
     press(KEY.ENTER);
     run((gt += 0.01));
     press("c".codePointAt(0), CTRL);

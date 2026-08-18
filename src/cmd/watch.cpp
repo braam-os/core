@@ -10,7 +10,8 @@
 
 namespace {
 
-constexpr u32 DEFAULT_MS = 2000;
+constexpr u32 DEFAULT_SECS = 2;
+constexpr u32 MAX_SECS     = 4294967; // as many as convert to ms inside a u32
 
 // The most of a child's output to hold. A command that prints for ever must not
 // grow this process until its 16 MB cap stops it.
@@ -79,21 +80,37 @@ Task<Result<i32>> once(Args cmd, String &out)
 
 Task<i32> proc_main(Args args)
 {
-    u32 ms      = DEFAULT_MS;
-    usize first = 1;
-    if (args.size() > 2 && args[1] == "-n") {
-        Option<u32> n = parse_u32(args[2]);
+    // -m and -n in either order, up to the command's first word.
+    bool milli = false, bad = false;
+    Option<u32> n = None;
+    usize first   = 1;
+    for (; first < args.size(); first++) {
+        Str a = args[first];
+        if (a == "-m") {
+            milli = true;
+            continue;
+        }
+        if (a != "-n")
+            break;
+        if (first + 1 >= args.size()) {
+            bad = true;
+            break;
+        }
+        n = parse_u32(args[++first]);
         if (!n.has_value()) {
-            co_await write_all(SYS_STDERR, "watch: -n wants milliseconds\n");
+            co_await write_all(SYS_STDERR, "watch: -n wants a number\n");
             co_return 2;
         }
-        ms    = n.value();
-        first = 3;
     }
-    if (args.size() <= first) {
-        co_await write_all(SYS_STDERR, "usage: watch [-n <ms>] <command> [<arg>...]\n");
+    if (n.has_value() && !milli && n.value() > MAX_SECS)
+        bad = true;
+    if (bad || args.size() <= first) {
+        co_await write_all(SYS_STDERR, "usage: watch [-m] [-n <seconds>] <command> [<arg>...]\n");
         co_return 2;
     }
+    u32 ms = DEFAULT_SECS * 1000;
+    if (n.has_value())
+        ms = milli ? n.value() : n.value() * 1000;
 
     Args cmd{ args.v.subspan(first) };
     String out;

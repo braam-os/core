@@ -19,7 +19,7 @@ constexpr usize W_PROC = 3, W_MEM = 7, W_AL = 6, W_FR = 6, W_GR = 4;
 constexpr usize W_RATE = 6, W_TICK = 6;
 constexpr usize GAP = 2;
 
-// Seconds, as BSD's are — the one time argument here that is not milliseconds.
+// Seconds, as BSD's are; -m says the interval is milliseconds instead.
 constexpr u32 DEFAULT_SECS = 1;
 constexpr u32 MAX_SECS     = 4294967; // as many as convert to ms inside a u32
 
@@ -247,13 +247,13 @@ usize screen_rows(Str host)
     return rows && rows.value() > 2 ? usize(rows.value()) : FALLBACK_ROWS;
 }
 
-constexpr Str USAGE = "usage: vmstat [-s] [-w <secs>] [-c <count>] [<secs> [<count>]]\n";
+constexpr Str USAGE = "usage: vmstat [-s] [-m] [-w <secs>] [-c <count>] [<secs> [<count>]]\n";
 
 } // namespace
 
 Task<i32> proc_main(Args args)
 {
-    bool sum = false, bad = false;
+    bool sum = false, milli = false, bad = false;
     u32 interval = 0, reps = 0; // reps 0 is "until ^C"
 
     usize i = 1;
@@ -263,6 +263,10 @@ Task<i32> proc_main(Args args)
             break;
         if (a == "-s") {
             sum = true;
+            continue;
+        }
+        if (a == "-m") {
+            milli = true;
             continue;
         }
         // -w and -c take the next word: nothing in the tree accepts -w5 or -sc.
@@ -306,7 +310,7 @@ Task<i32> proc_main(Args args)
     if (sum && (interval || reps))
         bad = true;
 
-    if (interval > MAX_SECS)
+    if (!milli && interval > MAX_SECS)
         bad = true;
 
     if (bad) {
@@ -314,13 +318,13 @@ Task<i32> proc_main(Args args)
         co_return 2;
     }
 
-    // A count without an interval paces itself, as BSD's does.
+    // A count without an interval paces itself, as BSD's does; a second either way.
     if (reps && !interval)
-        interval = DEFAULT_SECS;
+        interval = milli ? DEFAULT_SECS * 1000 : DEFAULT_SECS;
 
     // The wait is what `sleep_for` takes, and the fallback divisor when two reads
     // land inside one millisecond of the kernel's clock.
-    const u32 wait_ms = interval * 1000;
+    const u32 wait_ms = milli ? interval : interval * 1000;
 
     Result<String> first = Err(Error::NoMemory);
     if (Task<Result<String>> t = read_file("/proc/stat"))

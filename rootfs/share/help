@@ -29,14 +29,14 @@ pwd      print the working directory
 rm       [-r] <path>... — remove files, or directories with -r
 save     <file> [<name>] — download a file out of the browser
 sh       [-eux] [-s | -c <command> | <file>] [<arg>...] — the shell
-sleep    <ms> — wait, in milliseconds
+sleep    [-m] <secs> — wait, in seconds, or milliseconds with -m
 spin     [<millions>] — loop without yielding, to be killed
 tail     [-n <count>] [<file>...] — the last lines, ten by default
 test     <expr> — evaluate a condition and report it as a status
-timeout  <ms> <command> [<arg>...] — run a command, killing it after a delay (124)
+timeout  [-m] <secs> <command> [<arg>...] — run a command, killing it after a delay (124)
 touch    <file>... — create empty files
 true     succeed
 uname    [-a|-s|-r|-m] — name the system, and with -a the host it runs on
-vmstat   [-s] [<secs> [<count>]] — report what the kernel is doing, as rates
-watch    [-n <ms>] <command> [<arg>...] — run a command over and over
+vmstat   [-s] [-m] [<secs> [<count>]] — report what the kernel is doing, as rates
+watch    [-m] [-n <secs>] <command> [<arg>...] — run a command over and over
 wc       [<file>...] — count lines, words and bytes
