@@ -5,6 +5,7 @@
 #include "io.h"
 #include "kernel/alloc.h"
 #include "kernel/sched.h"
+#include "kernel/vec.h"
 #include "proctab.h"
 #include "svc/proc.h"
 
@@ -26,6 +27,56 @@ bool read_leb(const u8 *p, usize n, usize &at, u32 &out)
             return true;
         shift += 7;
     }
+}
+
+// A String of exactly `n` zero bytes, to be written over by an encoder.
+bool sized(String &out, usize n)
+{
+    if (!out.reserve(n))
+        return false;
+    for (usize i = 0; i < n; i++)
+        out.push(0);
+    return true;
+}
+
+// The words the interpreter is entered with, argv-encoded: they must outlive
+// the image they view.
+bool lead_words(String &out, Str interp, Str arg, Str script)
+{
+    Str v[3] = { interp, arg, script };
+    usize n  = 3;
+    if (arg.empty()) {
+        v[1] = script;
+        n    = 2;
+    }
+    if (!sized(out, argv_size(v, n)))
+        return false;
+    argv_encode(v, n, reinterpret_cast<u8 *>(out.data()));
+    return true;
+}
+
+// _start's payload: argv, then the environment. A script's lead words replace
+// argv[0]. Not a coroutine, so the word list is stack rather than frame.
+bool argv_payload(String &out, Str lead, Args args, Str env)
+{
+    const u8 *lp = reinterpret_cast<const u8 *>(lead.data());
+    usize nl     = argv_count(lp, lead.size());
+    usize skip   = nl && args.size() ? 1 : 0;
+
+    Vec<Str> words;
+    if (!words.reserve(nl + args.size() - skip))
+        return false;
+    for (usize i = 0; i < nl; i++)
+        if (!words.push(argv_at(lp, lead.size(), i)))
+            return false;
+    for (usize i = skip; i < args.size(); i++)
+        if (!words.push(args[i]))
+            return false;
+
+    if (!sized(out, argv_size(words.data(), words.size())))
+        return false;
+    argv_encode(words.data(), words.size(), reinterpret_cast<u8 *>(out.data()));
+    return out.append(env);
 }
 
 Task<void> say(Stream err, Str who, Str what)
@@ -149,41 +200,70 @@ Result<ProcMeta> exec_meta(Str image)
     return Err(Error::Invalid);
 }
 
+// Two rounds at most: the second is the interpreter a `#!` line named. A loop
+// rather than a nested call, so the one level is a bound.
+//
+// `out.lead` is written before the interpreter is known to load, which is safe
+// because every caller discards `out` on error.
 Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
 {
-    if (name.empty())
-        co_return Err(Error::NotFound);
+    String hold;     // the interpreter's name, once a #! line has named one
+    Str word = name; // and what this round resolves
 
-    // A name with a slash is a path; a bare name is looked for in /bin, which
-    // is where the archive puts the binaries. There is no PATH variable yet, and
-    // one directory is not a search path.
-    String path;
-    bool ok = name.contains("/") ? path.assign(name) : path.assign("/bin/") && path.append(name);
-    if (!ok)
-        co_return Err(Error::NoMemory);
+    for (u32 round = 0;; round++) {
+        if (word.empty())
+            co_return Err(Error::NotFound);
 
-    // `./prog` is relative to whoever asked — the shell for a typed command,
-    // the parent for a Sys::Spawn, and those are two different directories now.
-    if (!cwd.empty()) {
-        String abs;
-        CO_TRY_VOID(path_resolve(cwd, path.str(), abs));
-        path = move(abs);
+        // A name with a slash is a path; a bare name is looked for in /bin,
+        // which is where the archive puts the binaries. There is no PATH
+        // variable yet, and one directory is not a search path.
+        String path;
+        bool ok =
+            word.contains("/") ? path.assign(word) : path.assign("/bin/") && path.append(word);
+        if (!ok)
+            co_return Err(Error::NoMemory);
+
+        // `./prog` is relative to whoever asked — the shell for a typed command,
+        // the parent for a Sys::Spawn, and those are two different directories
+        // now. An interpreter is absolute, so this only normalises one.
+        if (!cwd.empty()) {
+            String abs;
+            CO_TRY_VOID(path_resolve(cwd, path.str(), abs));
+            path = move(abs);
+        }
+
+        Result<String> image = Err(Error::NoMemory);
+        CO_CALL(image, read_file(path.str()));
+        if (image.is_err())
+            // A missing interpreter is a file that will not run, not a command
+            // that does not exist: 126, not 127.
+            co_return Err(round && image.error() == Error::NotFound ? Error::Invalid
+                                                                    : image.error());
+
+        Result<ProcMeta> meta = exec_meta(image.value().str());
+        if (meta.is_ok()) {
+            if (meta.value().max_pages == 0 || meta.value().max_pages > PROC_MAX_PAGES)
+                meta.value().max_pages = PROC_MAX_PAGES;
+            out.meta  = meta.value();
+            out.path  = move(path);
+            out.image = move(image.value());
+            co_return {};
+        }
+        // Unsupported is one of ours built against another kernel; only Invalid
+        // means "not a module at all".
+        if (meta.error() != Error::Invalid)
+            co_return Err(meta.error());
+
+        Str interp, arg;
+        if (round || !exec_shebang(image.value().str(), interp, arg))
+            co_return Err(Error::Invalid);
+
+        // Both view the image, which goes at the end of this round. The script
+        // word is the resolved path, not the caller's.
+        if (!lead_words(out.lead, interp, arg, path.str()) || !hold.assign(interp))
+            co_return Err(Error::NoMemory);
+        word = hold.str();
     }
-
-    Result<String> image = Err(Error::NoMemory);
-    CO_CALL(image, read_file(path.str()));
-    if (image.is_err())
-        co_return Err(image.error());
-
-    ProcMeta meta = CO_TRY(exec_meta(image.value().str()));
-
-    if (meta.max_pages == 0 || meta.max_pages > PROC_MAX_PAGES)
-        meta.max_pages = PROC_MAX_PAGES;
-
-    out.meta  = meta;
-    out.path  = move(path);
-    out.image = move(image.value());
-    co_return {};
 }
 
 Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, Str env, bool *died)
@@ -256,13 +336,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, Str env, b
     // The first step is _start and carries argv then the environment; every one
     // after it is _resume, carrying the answer to a syscall.
     String payload;
-    usize n = argv_size(args.v.data(), args.size());
-    if (!payload.reserve(n + p->env.size()))
-        co_return 1;
-    for (usize i = 0; i < n; i++)
-        payload.push(0);
-    argv_encode(args.v.data(), args.size(), reinterpret_cast<u8 *>(payload.data()));
-    if (!payload.append(p->env.str()))
+    if (!argv_payload(payload, exe.lead.str(), args, p->env.str()))
         co_return 1;
 
     // The stepper. It never performs a syscall itself: each one gets a

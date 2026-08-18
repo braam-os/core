@@ -28,6 +28,48 @@ constexpr u32 PROC_ABI       = 11;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
+// The other thing `exec` will instantiate: a text file whose first line names an
+// interpreter (Concept.md §4.3). The interpreter is absolute and the rest of the
+// line is one argument, unsplit. `interp` and `arg` view `image`, and are
+// written only on true. Here rather than in exec.cpp because `test -x` gives the
+// same answer and cannot reach the kernel's trees; nothing here is on the wire.
+constexpr usize PROC_SHEBANG_MAX = 128; // the first line must end inside this
+
+inline bool exec_shebang(Str image, Str &interp, Str &arg)
+{
+    if (!image.starts_with("#!"))
+        return false;
+
+    // Space and tab alone; a newline ends the line rather than separating words.
+    auto blank = [](char c) { return c == ' ' || c == '\t'; };
+
+    // A line running past the cap is not a first line.
+    usize cap = image.size() < PROC_SHEBANG_MAX ? image.size() : PROC_SHEBANG_MAX;
+    usize eol = 2;
+    while (eol < cap && image[eol] != '\n')
+        eol++;
+    if (eol == cap && cap < image.size())
+        return false;
+
+    Str line = image.substr(2, eol - 2);
+    usize at = 0, end = line.size();
+    while (end > at && (blank(line[end - 1]) || line[end - 1] == '\r'))
+        end--;
+    while (at < end && blank(line[at]))
+        at++;
+    if (at == end || line[at] != '/')
+        return false;
+
+    usize name = at;
+    while (at < end && !blank(line[at]))
+        at++;
+    interp = line.substr(name, at - name);
+    while (at < end && blank(line[at]))
+        at++;
+    arg = line.substr(at, end - at);
+    return true;
+}
+
 // What a spawn request's `flags` word carries: the two page counts the host
 // needs before it can make a Memory. One word because the record has no second
 // scalar left — `aux` is the pid, and nothing else may ride on that.
@@ -323,6 +365,9 @@ constexpr u32 SYS_O_APPEND = 16;
 // allocator's top size class on both sides of the wire, and one byte more
 // costs a whole 64 KiB span (Concept.md §8.2).
 constexpr u32 SYS_CHUNK = 512;
+
+// `test -x` decides from one chunk (src/cmd/sh/condrun.cpp).
+static_assert(PROC_SHEBANG_MAX <= SYS_CHUNK, "test -x could no longer see a whole #! line");
 
 // The outcome of one _start or _resume, as the host reports it.
 enum class ProcStep : u32 {

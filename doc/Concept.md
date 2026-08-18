@@ -549,6 +549,23 @@ the point.
 word in the custom section is what makes an amendment safe: `exec` refuses a binary whose number
 is not the kernel's, so a stale binary is a diagnostic rather than a wrong answer.
 
+**Two kinds of file are executable, and the second is defined by its first line.** `exec` reads
+the image and looks for `\0asm` and the `braam` section; failing that, a file beginning `#!`
+followed by an absolute path names an interpreter, and what is instantiated is *that* binary,
+entered with the interpreter, its one argument if the line carried one, the resolved path of the
+script, and then the caller's own arguments. Three bounds make it a rule rather than a search: the
+lookup is **one level deep**, so an interpreter that is itself a script is `Err(Invalid)`; the
+interpreter must be **absolute**, since there is no PATH and one directory is not a search path;
+and the first line must end within `PROC_SHEBANG_MAX` bytes, so a file is decided by its head. A
+script costs **one** process, not two — the resolution happens in `exec_resolve` before any process
+exists, so the depth and child caps count the interpreter exactly as they counted a binary, and
+every script shares the interpreter's already-compiled `Module`. The kernel does read file contents
+to decide what a program is; it always did, for the custom section. What it does not do is guess,
+and a text file with no `#!` is still `Err(Invalid)`. An interpreter that is not there is
+`Err(Invalid)` too, rather than the `Err(NotFound)` of a command that does not exist: 126 and not
+127, because the file is there and it is the file that will not run. `test -x` answers from the
+same two rules, out of one `SYS_CHUNK`.
+
 ```
 process imports:  env.memory                        // the kernel's, so the cap is the kernel's
                   sys(op, a0, a1, a2) -> i32        // sync ops, immediate result
@@ -772,16 +789,17 @@ expansion output only — a literal byte of the word never goes through it, so `
 typed `a:b` alone and cuts `$path` in two. A redirection target and an assignment value expand as
 exactly one field however they expand, so `> *.txt` writes to the pattern.
 
-**Five things in v7 cannot exist here, and each has a decided substitute rather than a gap.**
-`export` was a sixth until the environment crossed a spawn (§4.3); what is left of it is that
-an exported variable is a copy taken at spawn and there is no `setenv` to change one after.
+**Four things in v7 cannot exist here, and each has a decided substitute rather than a gap.**
+`export` was a fifth until the environment crossed a spawn (§4.3), and `#!` a sixth until `exec`
+learned to read a first line (§4.3) — `./script.sh` works, and the row that said it never would is
+gone. What is left of `export` is that an exported variable is a copy taken at spawn and there is
+no `setenv` to change one after.
 
 | v7 | Why not | What happens instead |
 |---|---|---|
 | `( list )` as a real subshell | There is no `fork`, and spawning a second `/bin/sh` would lose everything a spawn does not carry — the unexported variables, the functions, the options and the traps — and cost a worker against the depth cap. | It runs in this process with the shell's own mutable state saved and put back: cwd, variables, positional parameters, functions, options, traps and the `exec` base. `(cd /x; ls)` and `(set -e; …)` are exact; only memory isolation is lost. |
 | A compound command in the background | Backgrounding means the shell runs on while the group does, and nothing inside a process can wait for a sibling task (§3.6). | Refused. `cmd &` on a simple pipeline is unaffected. |
 | `exec cmd` replacing the image | A process is an instance in a worker; there is no re-instantiate-in-place and a spawn makes a new pid. | `exec` with no command makes its redirections permanent, which is exact. `exec cmd` spawns, waits, and leaves with the child's status. |
-| `#!` scripts | `exec` requires `\0asm` plus a `braam` section carrying the ABI number, so a text file can never be handed to it. | `sh file` and `sh < file`. There is no `./script.sh` and there will not be. |
 | `trap … <signal>` | There are no signals, and the cancellation flag is sticky: once `^C` sets it every later await answers at once. | `trap … 0` on any normal exit, and `trap … 2` in an interactive shell, where the interrupt went to the stages and this process was never cancelled. `trap '' 2` is refused rather than accepted and dropped. |
 
 **What runs a command word is §4's rule**: a function, then a builtin, then a binary in `/bin` —

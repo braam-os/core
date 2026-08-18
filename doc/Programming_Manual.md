@@ -173,12 +173,28 @@ standard input instead, which is what a pipeline into the shell uses. The status
 leaves with is the status `sh` exits with, so a script composes into a pipeline like anything
 else.
 
-**Two limits, both deliberate.** There is no `#!` and there never will be: `exec` requires `\0asm`
-plus the `braam` metadata section (§10), so a text file can never be handed to it — `sh file` and
-`sh < file` are the whole of it, and `./script.sh` is not a thing here. And a script is **parsed
-whole before any of it runs**, as `. file` is, so a syntax error on the last line means the first
-line does not run either. That is the price of the shell keeping its standard input free for the
-script to read from, which is what lets `while read l; do …; done` inside one work against a pipe.
+**`#!` works, within three bounds.** A file whose first line is `#!` followed by an absolute path
+is executable, so `./script.sh` and a script installed in `/bin` both run:
+
+```
+$ cat greet
+#!/bin/sh
+echo greetings $1
+$ ./greet world
+greetings world
+```
+
+What is instantiated is the interpreter, entered with itself, its one argument if the line carried
+one, the resolved path of the script, and then your own arguments — so `$0` is the script and `$1`
+onwards are yours, exactly as `sh file` gives them. The interpreter must be **absolute**, since
+there is no PATH to search; the lookup is **one level deep**, so an interpreter that is itself a
+script is refused; and the first line must end within 128 bytes. `test -x` answers by the same two
+rules, and a script costs one process rather than two.
+
+**One limit remains, and it is deliberate.** A script is **parsed whole before any of it runs**, as
+`. file` is, so a syntax error on the last line means the first line does not run either. That is
+the price of the shell keeping its standard input free for the script to read from, which is what
+lets `while read l; do …; done` inside one work against a pipe.
 
 The rest of what a script can and cannot do — no subshell isolation, no compound command in the
 background — is §4.5's table. `export` does reach a child: an exported variable is copied into
@@ -395,8 +411,9 @@ sh: hello: built for another process ABI
 ```
 
 The answer is to rebuild against the SDK that matches the system. `not executable` is the
-other one, and it means the file has no stamp at all — an ordinary `.wasm` from somewhere
-else, or a stamp that was stripped.
+other one, and it means the file has no stamp at all and no `#!` line either — an ordinary
+`.wasm` from somewhere else, a stamp that was stripped, or a script whose interpreter is
+missing.
 
 The ABI changes when the syscall table does, and both are documented in Concept.md §4.3.
 

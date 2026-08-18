@@ -11,11 +11,15 @@
 // A resolved command: a binary and its bytes. The pid is filled in by whoever
 // spawns the task, and read by the task itself a tick later — a Task is lazy,
 // so nothing has looked yet.
+//
+// For a script the binary is the interpreter's, and `lead` carries the words it
+// is entered with in place of argv[0].
 struct Executable {
     u32 pid   = 0;
     u32 depth = 0; // how many spawns from init this is
     String path;
     String image;
+    String lead; // argv-encoded [interp, arg?, script]; empty for a binary
     ProcMeta meta{};
 };
 
@@ -29,6 +33,11 @@ Result<ProcMeta> exec_meta(Str image);
 // such command"; Err(Invalid) is "not executable". There is nothing to look at
 // before /bin any more: a builtin is the shell's own frame, and the shell is a
 // program that never asks the kernel for one.
+//
+// A file that is not a module is looked at once more for a `#!` line naming an
+// absolute interpreter, resolved one level deep — an interpreter that is itself
+// a script is refused — and `out.path` becomes that interpreter's. An
+// interpreter that is not there is Err(Invalid), not Err(NotFound).
 //
 // `cwd` is what a name with a slash in it is relative to. Empty means the
 // kernel's own, which is what init runs /bin/sh from; a Sys::Spawn passes the

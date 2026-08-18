@@ -3035,6 +3035,17 @@ if (mode === "--kernel") {
     plant("/home/s9/err.sh", "false\necho never\n");
     plant("/home/s9/q.sh", "echo start\necho ${nosuch?is unset}\necho never\n");
     plant("/home/s9/bad.sh", "echo start\nif true\n");
+    plant("/home/s9/hi.sh", "#!/bin/sh\necho hi $1 $#\n");
+    plant("/home/s9/sp.sh", "#! /bin/sh\necho spaced\n");
+    plant("/home/s9/tr.sh", "#!/bin/sh -x\necho traced\n");
+    plant("/home/s9/who.sh", "#!/bin/sh\necho $0\n");
+    plant("/home/s9/cat.sh", "#!/bin/cat\nthe file itself\n");
+    plant("/home/s9/nest.sh", "#!/home/s9/hi.sh\necho never\n");
+    plant("/home/s9/gone.sh", "#!/bin/nosuch\necho never\n");
+    plant("/home/s9/plain.sh", "echo never\n");
+    plant("/home/s9/x7.sh", "#!/bin/sh\necho out\nexit 7\n");
+    plant("/home/s9/self.sh", "#!/bin/sh\nps\n");
+    plant("/bin/greet", "#!/bin/sh\necho greetings\n");
 
     sshows("echo $0", "/bin/sh"); // argv[0], which for init's shell is the path
     sshows("sh /home/s9/loop.sh", "1|2|3");
@@ -3056,6 +3067,53 @@ if (mode === "--kernel") {
     // ${x?} ends a script, which is what S9 decided and v7 does. The line it
     // is on is the second, so `start` printed and `never` did not.
     sshows("sh /home/s9/q.sh; echo $?", "start|braam: nosuch: is unset|1");
+
+    // A #! file is executable, and the interpreter is what instantiates.
+    submit("cd /home/s9", (s9t += 0.01));
+    sshows("./hi.sh a b", "hi a 2");
+    sshows("/home/s9/hi.sh a b", "hi a 2"); // by absolute path, the same
+    sshows("./sp.sh", "spaced");            // `#! /bin/sh`
+    sshows("./tr.sh", "+ echo traced|traced");        // the interpreter's argument arrived
+    sshows("./who.sh", "/home/s9/who.sh");            // $0 is the resolved script
+    sshows("./cat.sh", "#!/bin/cat|the file itself"); // any interpreter, not just sh
+    sshows("./hi.sh a b | wc", "1 3 7");              // a stage like any other
+    sshows("sh ./hi.sh a b", "hi a 2");               // and the older way still works
+    // A bare word finds /bin, and what the interpreter is handed is the
+    // resolved path — a relative one would send it looking in its own cwd.
+    sshows("greet", "greetings");
+
+    sshows("test -x ./hi.sh; echo $?", "0");
+    sshows("test -x ./plain.sh; echo $?", "1");
+    sshows("test -x /bin/sh; echo $?", "0");
+
+    // The refusals. A missing interpreter is 126 and not 127: the file is
+    // there, and the interpreter is part of what makes it executable.
+    sshows("./plain.sh; echo $?", "braam: ./plain.sh: not executable|126");
+    sshows("./gone.sh; echo $?", "braam: ./gone.sh: not executable|126");
+    sshows("./nest.sh; echo $?", "braam: ./nest.sh: not executable|126"); // one level only
+    sshows("./nosuch.sh; echo $?", "braam: ./nosuch.sh: not found|127");
+
+    // /proc names the job by the word the caller typed, not by the interpreter
+    // the kernel went on to instantiate, so ps, jobs and kill %n still point at
+    // the script — while the syscall server it spawned names /bin/sh, which is
+    // what crashed if anything does.
+    submit("clear", (s9t += 0.01));
+    const psr = rows(submit("./self.sh", (s9t += 0.01)));
+    if (!psr.some((line) => /^ *\d+ +\d+ \.\/self\.sh +[RS]\+ +bound /.test(line)))
+        fail(`ps inside a #! script did not name the script: ${JSON.stringify(psr)}`);
+    if (!psr.some((line) => /^ *\d+ +\d+ \/bin\/sh +[RS] +- /.test(line)))
+        fail(`the script's syscall server did not name the interpreter: ${JSON.stringify(psr)}`);
+
+    submit("cd /home", (s9t += 0.01));
+    submit("rm /bin/greet", (s9t += 0.01));
+
+    // A #! script's status reaches the prompt as any other program's does.
+    s = submit("clear", (s9t += 0.01));
+    s = submit("/home/s9/x7.sh", (s9t += 0.01));
+    if (!rows(s).includes("out"))
+        fail(`a #! script printed ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes(prompt(7)))
+        fail(`a #! script's exit 7 left ${row(s, s.cursor_y)}, expected ${prompt(7)}`);
 
     // A script's status reaches the parent's prompt as [n].
     s = submit("clear", (s9t += 0.01));

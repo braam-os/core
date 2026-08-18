@@ -8,8 +8,9 @@
 
 namespace {
 
-// What a program's first four bytes are. A file is executable here exactly
-// when the kernel would instantiate it (exec_meta, ../user/exec.cpp).
+// What a program's first four bytes are, or the line that names one instead. A
+// file is executable here exactly when the kernel would instantiate it
+// (exec_meta and exec_shebang, kernel/sysabi.h); one chunk sees both.
 constexpr Str WASM_MAGIC = Str("\0asm", 4);
 
 Task<bool> answer(const CondProbe &p)
@@ -46,13 +47,15 @@ Task<bool> answer(const CondProbe &p)
         if (r.is_err())
             co_return false;
 
-        bool wasm = false;
+        bool runnable = false;
         if (Task<Result<String>> c = read_chunk(u32(r.value()))) {
             Result<String> got = co_await c;
-            wasm               = got.is_ok() && got.value().str().starts_with(WASM_MAGIC);
+            Str interp, arg;
+            runnable = got.is_ok() && (got.value().str().starts_with(WASM_MAGIC) ||
+                                       exec_shebang(got.value().str(), interp, arg));
         }
         co_await close_fd(u32(r.value()));
-        co_return wasm;
+        co_return runnable;
     }
 
     Task<Result<FileInfo>> t = stat_of(p.arg);

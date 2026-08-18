@@ -258,6 +258,16 @@ stale binary and wants saying so. `exec_resolve` propagates both, so a typed com
 `braam: <name>: built for another process ABI` and a `/bin/sh` that will not resolve names the
 number this kernel speaks.
 
+`Err(Invalid)` now means a file that was never a program **and had no `#!` line either**. A file
+that is not a module is looked at once more by `exec_shebang`, and a first line naming an absolute
+interpreter makes it one: `exec_resolve` re-resolves to that interpreter — **one level only**, so
+an interpreter that is itself a script is `Err(Invalid)` — and instantiates it with the lead words
+`[interpreter, argument?, resolved script path]` in place of argv[0]. `Sys::Spawn` still reports
+one child: the resolution happens before any process exists, so the depth and child caps count the
+interpreter as they counted a binary. An interpreter that is not there folds into `Err(Invalid)`
+rather than surfacing as the `Err(NotFound)` of a command that does not exist, so a shell says
+`not executable` and 126 for a script that is there and will not run.
+
 Nothing in the section says *where* the process runs, because there is only one place: a worker
 of its own (Concept.md §4). The `tier` word that used to sit third is gone rather than reserved
 — `abi` is what refuses a binary from a build that had one.

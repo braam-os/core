@@ -212,7 +212,10 @@ Further constraints, easy to violate by habit:
 
 Every program is a binary; there is no in-kernel program, no program registry and no way to write
 one (Concept.md §4). A command word resolves as **function, then builtin, then `/bin`**, and only
-the last of the three costs a process. Two kinds of thing run a command:
+the last of the three costs a process. A file is a program when it carries the `braam` section,
+and otherwise when it begins `#!` and names an absolute interpreter, which `exec_resolve` chases
+exactly once; `test -x` answers from the same `exec_shebang` in `sysabi.h`. Two kinds of thing run
+a command:
 
 - **Shell builtin** — the twenty-six in `src/cmd/sh/builtin/`, inside `/bin/sh`, plus a shell
   function, which is the same thing named by the user. Two clauses make one. Either it touches the
@@ -329,7 +332,9 @@ change to argue in Concept.md first.
   `ScreenEnter` is `Err(Perm)`.
 - **Every command costs an instantiation and a worker** — roughly a millisecond, plus reading the
   image out of the store. The host caches the compiled `Module` by path, so only the compile is
-  saved; the worker comes from the pool.
+  saved; the worker comes from the pool. A `#!` script costs one, not two, and shares the
+  interpreter's cached `Module` — but its image is read twice, once by the kernel for its first
+  line and once by the interpreter.
 - **Every syscall a program makes is two `postMessage` hops**, 34–45 µs. Bulk I/O pays it per
   `SYS_CHUNK` (512 bytes): measured at 6–13 ms over a quarter of a megabyte through three
   processes, which is why a bigger chunk or a batched step protocol was decided against. A workload
@@ -361,10 +366,10 @@ change to argue in Concept.md first.
   table at each spawn), and adding one would break §4.3's "every operation has a caller in
   `src/cmd/`". `x=1 prog` reaches that child alone; `/bin/export` is still named `save`, to give
   the builtin its name.
-- **No `#!` scripts, and a script file is parsed whole.** `exec_meta` requires `\0asm` plus a
-  `braam` section, so a text file can never be exec'd: `sh file` and `sh < file` are the whole of
-  it and `./script.sh` will not arrive. `sh file` reads and parses the file at once, as `.` does,
-  so a syntax error anywhere in it means none of it runs — v7 runs everything above the error.
+- **A script file is parsed whole.** `sh file` reads and parses it at once, as `.` does, so a
+  syntax error anywhere in it means none of it runs — v7 runs everything above the error. `#!`
+  works now (`./script.sh`), within three bounds: the interpreter must be absolute (there is no
+  PATH), the lookup is one level deep, and the first line must end within `PROC_SHEBANG_MAX`.
 - **`trap` has two signals and one of them cannot be ignored.** There are none in the system, so
   `trap … 0` (EXIT) and `trap … 2` (INT) are all there is, and `trap '' 2` is refused rather than
   accepted and dropped: `CancelState::cancelled` is sticky. A `trap … 2` in a *script* shell can

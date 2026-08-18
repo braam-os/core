@@ -7,6 +7,76 @@ of the two needs amending.
 
 ---
 
+## `#!` after all
+
+A text file beginning `#!/` or `#! /` is now a program. `./script.sh` runs, a bare `script` in
+`/bin` runs, `Sys::Spawn` on one from any process runs, and `test -x` agrees. `kernel.wasm` went
+149,613 → 151,542 of 262,144 and `sh.wasm` 218,887 → 219,637, the staging tree 727,600 → 729,099
+of 1 MiB. **`PROC_ABI` is still 11**: argv is still argv and the host still receives
+`(path, image, ProcMeta)`, so nothing a binary observes moved. A diff touching `sysabi.h` reads
+like a bump and this one is not.
+
+**This reverses "`#!` is settled rather than deferred" below**, which argued that "there is no
+place to put an interpreter lookup that would not be the kernel reading file contents to decide
+what a program is". The premise is right and the conclusion does not follow: the kernel already
+reads file contents to decide what a program is — that is the whole of `exec_meta`, which walks
+the section list looking for `braam`. Reading eight bytes further into the same image, in the same
+function, against the same contract, adds no capability the kernel did not have. What the old
+argument was really protecting was that `exec` should not *guess*, and that survives intact: a
+text file with no `#!` is still `Err(Invalid)`, and there is no sniffing of any kind beyond the
+two literal prefixes.
+
+**Three bounds are what make it a rule rather than a search.** The interpreter is **absolute**,
+because the `/` is required after `#!` — there is no PATH here and one directory is not a search
+path, so a relative interpreter has nothing to resolve against and is refused rather than guessed
+at. The lookup is **one level deep**, which is v7's and Linux's ENOEXEC answer: an interpreter
+that is itself a script is `Err(Invalid)`. And the first line must end within `PROC_SHEBANG_MAX`,
+so a file is decided by its head rather than by a scan. That cap is 128 and is `static_assert`ed
+against `SYS_CHUNK`, because `test -x` decides from a single `read_chunk`: the two answers can
+only agree while a whole `#!` line fits in one. Tying them at the constant is what keeps a later
+raise from silently splitting `exec` and `-x` apart.
+
+**`exec_resolve` became a two-round loop rather than a recursive call.** A nested `Task` would be
+a second coroutine frame and a second allocation on the path every command takes, and "one level
+only" written as a loop bound is a fact the compiler enforces rather than a convention a later
+edit can drift past.
+
+**`Executable::path` is the interpreter's now, and it had to be.** It is the key the host caches
+the compiled `Module` under and it is what the no-worker backoff re-reads on each retry; keying
+either on the script would hand the host a text file. The cost is that `braam: /bin/sh: crashed`
+names the interpreter rather than the script — which is truthful, since the interpreter is what
+crashed. Nothing a user navigates by moved: `ps`, `jobs`, `/proc` and `kill %n` all read the
+scheduler's job name, which `sched_spawn` takes from the caller's word, so they still say
+`./script.sh`. A second `String` holding a display name would have bought three error messages and
+cost a field on every `Executable`, one of which lives on init's coroutine frame.
+
+**A missing interpreter is 126, not 127.** Letting the interpreter's `Err(NotFound)` through would
+print `braam: ./s.sh: not found` for a script that plainly exists, and would spend the one status
+that means "the command word names nothing" on a file that does name something. So the second
+round's `NotFound` alone collapses to `Invalid` — "not executable" — and every other error is let
+through unchanged, which keeps the genuinely useful one: a stale interpreter still reports
+`Err(Unsupported)` and prints `built for another process ABI`, naming the repair. A new `Error`
+value was the alternative and is far too expensive for a diagnostic string: `Error` crosses the
+wire as a negated `i32` in every reply, so it would mean a `PROC_ABI` bump, `web/` changes and a
+System_Calls.md edit.
+
+**A script costs one process, not two.** The resolution happens before any process exists, so
+`SYS_PROC_DEPTH` and `SYS_CHILD_MAX` count the interpreter exactly as they counted a binary, and
+every script shares `/bin/sh`'s already-compiled `Module` — the second and later scripts pay the
+instantiation and the worker, not the compile.
+
+**The cost, stated rather than hidden: a script's image is read twice.** `exec_resolve` reads the
+whole file through the ordinary VFS before it can discover it is not a module, keeps 128 bytes of
+it and throws the rest away; the interpreter then reads the same file again. Avoiding it means
+splitting `read_file` into a probe-then-rest read, which is a worse VFS for files that are small
+by nature. The `#!` rule lives in `sysabi.h` beside `PROC_SECTION` and `PROC_MAGIC` for the same
+reason those are there — it is the exec contract — and being a header is what lets
+`src/cmd/sh/condrun.cpp` answer `-x` from the one statement of it, since `braam_sh` cannot reach
+`src/user/`. Being `inline` costs nothing: it is expanded into its single call site in each of the
+three binaries that call it and emitted out of line in none of them.
+
+---
+
 ## Seconds, and `-m` for the machine's unit
 
 `sleep`, `timeout` and `watch -n` took **milliseconds**, and `vmstat` took **seconds**. Every
@@ -313,7 +383,7 @@ where the `^C`-is-130 distinction now lives once instead of four times.
 section carrying `PROC_ABI`, so a text file can never be handed to `Sys::Spawn`; there is no
 place to put an interpreter lookup that would not be the kernel reading file contents to decide
 what a program is. `sh file` and `sh < file` are the whole of it, and `./script.sh` will not
-arrive later.
+arrive later — **which it since has: "`#!` after all" above reverses this, and says why.**
 
 ---
 

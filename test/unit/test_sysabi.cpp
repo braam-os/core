@@ -271,4 +271,43 @@ void test_sysabi()
     over.bytes.push('\x40');
     over.bytes.append("xx");
     CHECK(refused(exec_meta(over.str()), Error::Invalid));
+
+    // The other kind of program: a text file whose first line names one.
+    Str in, ar;
+    CHECK(exec_shebang("#!/bin/sh\necho hi\n", in, ar) && in == "/bin/sh" && ar.empty());
+    CHECK(exec_shebang("#! /bin/sh\n", in, ar) && in == "/bin/sh" && ar.empty());
+    CHECK(exec_shebang("#!\t/bin/sh\n", in, ar) && in == "/bin/sh");
+    CHECK(exec_shebang("#!/bin/sh -x\n", in, ar) && in == "/bin/sh" && ar == "-x");
+    CHECK(exec_shebang("#!/bin/sh", in, ar) && in == "/bin/sh" && ar.empty()); // ends at EOF
+
+    // One argument, not a word list, and blanks around it are not part of it.
+    CHECK(exec_shebang("#!/bin/awk -f -v x=1\n", in, ar) && ar == "-f -v x=1");
+    CHECK(exec_shebang("#!/bin/sh   -x  \r\n", in, ar) && in == "/bin/sh" && ar == "-x");
+
+    CHECK(!exec_shebang("echo hi\n", in, ar));
+    CHECK(!exec_shebang("#!sh\n", in, ar)); // no PATH, so no relative interpreter
+    CHECK(!exec_shebang("#!  \n", in, ar));
+    CHECK(!exec_shebang("#!\n", in, ar));
+    CHECK(!exec_shebang("#!", in, ar));
+    CHECK(!exec_shebang("#", in, ar));
+    CHECK(!exec_shebang("", in, ar));
+    CHECK(!exec_shebang(Str("\0asm\1\0\0\0", 8), in, ar));
+
+    // A first line past the cap is not a first line, so exec and `test -x`
+    // (which sees one chunk) cannot disagree about a file.
+    String past;
+    CHECK(past.append("#!/bin/sh "));
+    for (usize i = 0; i < PROC_SHEBANG_MAX; i++)
+        past.push('x');
+    past.push('\n');
+    CHECK(!exec_shebang(past.str(), in, ar));
+
+    // And one ending exactly at it still is.
+    String edge;
+    CHECK(edge.append("#!/bin/sh"));
+    while (edge.size() < PROC_SHEBANG_MAX - 1)
+        edge.push(' ');
+    edge.push('\n');
+    CHECK_EQ(edge.size(), PROC_SHEBANG_MAX);
+    CHECK(exec_shebang(edge.str(), in, ar) && in == "/bin/sh" && ar.empty());
 }
