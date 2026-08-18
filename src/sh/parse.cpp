@@ -1,5 +1,6 @@
 #include "parse.h"
 
+#include "kernel/alloc.h"
 #include "kernel/host.h"
 #include "tokenize.h"
 
@@ -90,7 +91,19 @@ Result<u32> Tree::add_node(const Node &n)
         return Err(Error::NoMemory);
     if (!nodes_.push(n))
         return Err(Error::NoMemory);
+    if (n.kind == Kind::FuncDef)
+        defines_ = true;
     return u32(nodes_.size() - 1);
+}
+
+Result<void> Tree::own_source()
+{
+    if (!source_.empty() || line_.empty())
+        return {};
+    if (!source_.assign(line_))
+        return Err(Error::NoMemory);
+    line_ = source_.str();
+    return {};
 }
 
 Result<u32> Tree::add_kids(Span<const u32> kids)
@@ -256,7 +269,8 @@ struct Parser {
     Result<void> want(Str w);
     Result<void> skip_seps();
     Result<void> skip_newlines();
-    Result<void> simple();
+    Result<void> simple(Str first, bool have_first);
+    Result<u32> func_def(u32 nest, Str name);
 };
 
 // What a separator or an operator is called in a diagnostic.
@@ -284,9 +298,13 @@ Str near_of(Tok tok)
     }
 }
 
-Result<void> Parser::simple()
+// `first` is a name the caller ate to see whether a `(` followed it.
+Result<void> Parser::simple(Str first, bool have_first)
 {
-    bool any = false;
+    bool any = have_first;
+
+    if (have_first && t.add_word(first).is_err())
+        return Err(oom());
 
     for (;;) {
         if (tok == Tok::Word) {
@@ -491,6 +509,33 @@ Result<u32> Parser::case_clause(u32 nest)
     return t.add_node(Tree::Node{ Tree::Kind::Case, false, off, u32(kids.size() / 2), subject, 0 });
 }
 
+// `name ( ) compound`, with the name and the `(` already eaten. The body is a
+// compound, so the name rides in a command of its own as `for`'s does.
+Result<u32> Parser::func_def(u32 nest, Str name)
+{
+    TRY_VOID(advance()); // `(`
+    if (tok != Tok::RParen) {
+        // Anything between the parentheses means this was never a definition:
+        // `echo (x)` is a `(` where no grammar takes one.
+        if (tok == Tok::End)
+            return Err(fail("syntax error: expected ')'", true));
+        return Err(fail("syntax error near '('"));
+    }
+    TRY_VOID(advance());
+    TRY_VOID(skip_newlines());
+
+    u32 cmd = u32(t.size());
+    if (t.add_word(name, false).is_err() || t.end_command().is_err())
+        return Err(oom());
+
+    bool any = false;
+    u32 body = TRY(compound(nest + 1, any));
+    if (!any)
+        return Err(fail("syntax error: expected a compound command", tok == Tok::End));
+
+    return t.add_node(Tree::Node{ Tree::Kind::FuncDef, false, body, cmd, 0, 0 });
+}
+
 // A compound command, or 0 with `any` false when the token is not one.
 Result<u32> Parser::compound(u32 nest, bool &any)
 {
@@ -528,6 +573,23 @@ Result<u32> Parser::pipeline(u32 nest)
 
     bool is_compound = false;
     u32 n            = TRY(compound(nest, is_compound));
+
+    // A definition is told from a command only by the token after the name, so
+    // the name is eaten here and handed to whichever it turns out to be. After
+    // compound(), which has first refusal: every keyword is a name too.
+    Str name;
+    bool named = false;
+    if (!is_compound && !neg && tok == Tok::Word && is_name(word)) {
+        name  = word;
+        named = true;
+        TRY_VOID(advance());
+        if (tok == Tok::LParen) {
+            n           = TRY(func_def(nest, name));
+            is_compound = true;
+            named       = false;
+        }
+    }
+
     if (is_compound) {
         // v7 forks for this; with no fork it needs the base stdio the
         // redirection stage threads through the walk.
@@ -537,14 +599,14 @@ Result<u32> Parser::pipeline(u32 nest)
                      "or redirected yet"));
     } else {
         u32 first = u32(t.size());
-        TRY_VOID(simple());
+        TRY_VOID(simple(name, named));
         while (tok == Tok::Pipe) {
             TRY_VOID(advance());
             while (tok == Tok::Newline)
                 TRY_VOID(advance());
             if (tok == Tok::End)
                 return Err(fail("syntax error: expected a command", true));
-            TRY_VOID(simple());
+            TRY_VOID(simple(Str(), false));
         }
         u32 last = u32(t.size());
         if (last - first > Tree::MAX_STAGES)
@@ -652,4 +714,16 @@ Result<void> parse(Str line, Tree &out, ParseErr &err)
         return Err(Error::NoMemory);
     }
     return {};
+}
+
+void tree_hold(const Tree *t)
+{
+    if (t)
+        t->refs++;
+}
+
+void tree_release(const Tree *t)
+{
+    if (t && --t->refs == 0)
+        heap_delete(const_cast<Tree *>(t));
 }

@@ -28,8 +28,8 @@ Str name_of(Redir r)
 // its stages joined by '|', with '&' after it when it is a background one; a
 // list is its members joined by ';', '&&' or '||'; a group is braced; `!` is
 // itself; a `case` is its word in parentheses and then an arm's patterns in
-// parentheses and its body in braces. An error is '!' and its message, and '?'
-// when the text merely ended early.
+// parentheses and its body in braces; a definition is `fn(name){body}`. An
+// error is '!' and its message, and '?' when the text merely ended early.
 struct Render {
     const Tree &t;
     usize n = 0;
@@ -143,6 +143,13 @@ struct Render {
             put("}");
             return;
         }
+        case Tree::Kind::FuncDef:
+            put("fn(");
+            put(t.args(nd.b)[0]);
+            put("){");
+            node(nd.a);
+            put("}");
+            return;
         case Tree::Kind::Case: {
             put("case(");
             put(t.args(nd.c)[0]);
@@ -290,6 +297,17 @@ void test_parse()
     CHECK(shape("case x in a=1) b;; esac") == "case(x)(a=1){{b}}"); // not an assignment
     CHECK(shape("case in in in) b;; esac") == "case(in)(in){{b}}"); // reserved by position
 
+    // A definition is told from a command by what follows the name, and the
+    // body is any compound.
+    CHECK(shape("f() { echo hi; }") == "fn(f){{{echo}{hi}}}");
+    CHECK(shape("f(){ a; }") == "fn(f){{{a}}}"); // no space needed
+    CHECK(shape("f ( ) { a; }") == "fn(f){{{a}}}");
+    CHECK(shape("f()\n{ a; }") == "fn(f){{{a}}}"); // a newline before the body
+    CHECK(shape("f() if a; then b; fi") == "fn(f){if({a}){{b}}}");
+    CHECK(shape("f() while a; do b; done") == "fn(f){while({a}){{b}}}");
+    CHECK(shape("f() { a; }; f") == "fn(f){{{a}}};{f}");
+    CHECK(shape("f() { a; }; g() { b; }") == "fn(f){{{a}}};fn(g){{{b}}}");
+
     // Nesting, and that a construct is a pipeline like any other.
     CHECK(shape("if a; then while b; do c; done; fi") == "if({a}){while({b}){{c}}}");
     CHECK(shape("while a; do if b; then c; fi; done") == "while({a}){if({b}){{c}}}");
@@ -342,7 +360,12 @@ void test_parse()
     CHECK(shape("case x do a) b;; esac") == "!syntax error: expected 'in'");
     CHECK(shape("esac") == "!syntax error: unexpected keyword");
     CHECK(shape("echo (x)") == "!syntax error near '('"); // parens are operators now
-    CHECK(shape("(a; b)") == "!syntax error near '('");   // a subshell has no grammar yet
+    CHECK(shape("f() echo hi") == "!syntax error: expected a compound command");
+    CHECK(shape("2f() { a; }") == "!syntax error near '('"); // not a name
+    CHECK(shape("f() { a; } | wc") ==
+          "!syntax error: a compound command cannot be piped "
+          "or redirected yet");
+    CHECK(shape("(a; b)") == "!syntax error near '('"); // a subshell has no grammar yet
     CHECK(shape("do b; done") == "!syntax error: unexpected keyword");
     CHECK(shape("fi") == "!syntax error: unexpected keyword");
 
@@ -368,6 +391,9 @@ void test_parse()
     CHECK(shape("case x in") == "?syntax error: expected 'esac'");
     CHECK(shape("case x in a) b;;") == "?syntax error: expected 'esac'");
     CHECK(shape("case x in a") == "?syntax error: expected ')'");
+    CHECK(shape("f() {") == "?syntax error: expected '}'");
+    CHECK(shape("f()") == "?syntax error: expected a compound command");
+    CHECK(shape("f(") == "?syntax error: expected ')'");
     CHECK(shape("!") == "!syntax error: expected a command");
 
     // Stage boundaries, checked apart from the rendering above.

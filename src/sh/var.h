@@ -37,6 +37,10 @@ bool args_shift(usize n);
 usize args_count();
 Str args_at(usize i);
 
+// Exchanges the whole block for `next` and returns what was there, which is
+// what a function call does around its own. $0 is index 0 and rides with it.
+Vec<String> args_swap(Vec<String> next);
+
 // $$ and $0, planted once by the shell: nothing here makes a syscall.
 bool var_init(u32 pid, Str name0);
 

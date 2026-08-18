@@ -1,5 +1,6 @@
 // Shell builtins: what touches this process's own state — its cwd, its job
-// table, its loop — and so is not a file in /bin and never will be.
+// table, its loop — and so is not a file in /bin and never will be. A shell
+// function is the same thing named by the user, and is looked up first.
 //
 // **A builtin buffers its output and writes it once.** It runs in its turn
 // rather than alongside, and a pipe holds eight writes of any size

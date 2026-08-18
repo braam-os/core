@@ -13,6 +13,8 @@
 
 namespace {
 
+struct FuncEntry;
+
 // One stage, once its descriptors are decided. A number below SYS_FD_MIN is
 // "the stream this shell was given"; anything else is a descriptor of ours,
 // which a spawn *moves* out of our table and a builtin only borrows.
@@ -21,10 +23,11 @@ struct Stage {
     u32 out = SYS_STDOUT;
     u32 err = SYS_STDERR;
 
-    const Builtin *b = nullptr;
-    u32 pid          = 0;
-    i32 status       = 0;
-    bool moved       = false; // its three fds went into a child
+    const FuncEntry *fn = nullptr; // looked up ahead of a builtin and of /bin
+    const Builtin *b    = nullptr;
+    u32 pid             = 0;
+    i32 status          = 0;
+    bool moved          = false; // its three fds went into a child
 };
 
 // One variable an assignment prefix displaced.
@@ -68,8 +71,8 @@ struct Run {
 };
 
 // There are no exceptions, so a transfer of control is a field. A loop
-// consumes Break and Continue; run_line consumes the rest.
-enum class Flow : u8 { Normal, Break, Continue, Exit, Interrupt };
+// consumes Break and Continue, a function call Return; run_line the rest.
+enum class Flow : u8 { Normal, Break, Continue, Return, Exit, Interrupt };
 
 // What the walk threads through the tree. Its own block, not a frame's: it
 // grows with every stage left, and run_line's frame is a recursion's root.
@@ -82,6 +85,7 @@ struct Ctx {
     u32 depth        = 0; // exec_node recursion
     u32 breaks       = 0; // levels `break` has left to unwind
     u32 loops        = 0; // how many are running
+    u32 frames       = 0; // function calls and sourced files, for `return`
     bool interactive = false;
 
     // Where stdout goes when a `$(…)` is running this walk. Set on the whole
@@ -93,6 +97,62 @@ struct Ctx {
 // it up. 0 is "nothing asked".
 u32 g_break;
 bool g_break_cont;
+
+// The same, for `return`.
+bool g_return;
+i32 g_return_status;
+
+// One function, and the tree its body is a node of.
+struct FuncEntry {
+    String name;
+    const Tree *t = nullptr; // held, so the body outlives the line
+    u32 body      = 0;
+};
+
+// Built on first use, as the job and variable tables are.
+Vec<FuncEntry *> *g_funcs;
+
+Vec<FuncEntry *> &funcs()
+{
+    if (!g_funcs) {
+        g_funcs = heap_new<Vec<FuncEntry *>>();
+        if (!g_funcs)
+            panic("sh: out of memory");
+    }
+    return *g_funcs;
+}
+
+const FuncEntry *func_find(Str name)
+{
+    for (const FuncEntry *e : funcs())
+        if (e->name.str() == name)
+            return e;
+    return nullptr;
+}
+
+bool func_define(Str name, const Tree *t, u32 body)
+{
+    for (FuncEntry *e : funcs())
+        if (e->name.str() == name) {
+            tree_hold(t);
+            tree_release(e->t);
+            e->t    = t;
+            e->body = body;
+            return true;
+        }
+
+    FuncEntry *e = heap_new<FuncEntry>();
+    if (!e)
+        return false;
+    if (!e->name.assign(name) || !funcs().push(e)) {
+        heap_delete(e);
+        return false;
+    }
+    tree_hold(t);
+    e->t    = t;
+    e->body = body;
+    return true;
+}
 
 // One line of the job table. It outlives the frame that started the job, so the
 // command text is copied rather than viewed.
@@ -144,8 +204,14 @@ void drop_entry(u32 id)
 }
 
 // One raw word, running whatever substitutions it turns out to need. Defined
-// below, next to the walk it has to reach.
+// below, next to the walk it has to reach, as call_func is.
 Task<Result<void>> expand_one(const Ctx &cx, Str raw, Split split, Vec<Field> &out, ExpandErr &err);
+
+Task<i32> call_func(Ctx &cx, const FuncEntry *fn, Args a);
+
+// The walk a builtin is running inside, so that `.` and `eval` can reach it
+// through job.h without Ctx leaving this file.
+Ctx *g_ctx;
 
 // Everything the pipeline holds. An assignment value and a redirection target
 // stay one word; only an argv word may become several, or none — and only an
@@ -591,7 +657,16 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     for (usize i = 0; i < n && !bad; i++) {
         Args a = r->args(i);
         if (a.size()) {
-            r->stages[i].b = builtin_find(a[0]);
+            // A function first, then a builtin, then /bin.
+            r->stages[i].fn = func_find(a[0]);
+            if (!r->stages[i].fn)
+                r->stages[i].b = builtin_find(a[0]);
+            // Its body runs in this turn with the shell's own stdio, which S7
+            // is what threads through the walk.
+            else if (n > 1 || r->t->redirects(r->cmd0 + i).size()) {
+                co_await say2(SYS_STDERR, a[0], "a function cannot be piped or redirected yet");
+                bad = 1;
+            }
             continue;
         }
         Str who;
@@ -618,7 +693,7 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     // may write into a pipe whose reader is one of these.
     for (usize i = 0; i < n && !bad; i++) {
         Stage &s = r->stages[i];
-        if (s.b || !r->args(i).size())
+        if (s.b || s.fn || !r->args(i).size())
             continue;
         // An assignment prefix has nowhere to go: a child gets three
         // descriptors, an argv and a cwd, and no environment (§4.3).
@@ -660,17 +735,25 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     i32 status = bad;
     for (usize i = 0; i < n && !bad; i++) {
         Stage &s = r->stages[i];
-        if (!s.b)
+        if (!s.b && !s.fn)
             continue;
         // The prefix is this command's for its turn and then goes back.
         Str who;
         if (!apply_assigns(r, i, &r->saved, who)) {
             co_await say2(SYS_STDERR, who, "cannot be set");
             s.status = 1;
-        } else if (Task<i32> t = s.b->run(r->args(i), ShIo{ s.in, s.out, s.err }))
-            s.status = co_await t;
-        else
-            s.status = 1;
+        } else if (s.fn) {
+            Task<i32> t = call_func(cx, s.fn, r->args(i));
+            s.status    = t ? co_await t : 1;
+        } else {
+            Ctx *outer = g_ctx;
+            g_ctx      = &cx;
+            if (Task<i32> t = s.b->run(r->args(i), ShIo{ s.in, s.out, s.err }))
+                s.status = co_await t;
+            else
+                s.status = 1;
+            g_ctx = outer;
+        }
         undo_assigns(r->saved);
         // Closed the moment it is done, so whatever reads the other end sees
         // an end of input rather than waiting for a writer that has finished.
@@ -760,6 +843,14 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
     if (shell_exit_wanted(want)) {
         cx.flow        = Flow::Exit;
         cx.exit_status = want;
+    } else if (g_return) {
+        // Outside a function or a sourced file it is a no-op, as `break` is
+        // outside a loop.
+        if (cx.frames) {
+            cx.flow        = Flow::Return;
+            cx.exit_status = g_return_status;
+        }
+        g_return = false;
     } else if (g_break) {
         // Outside a loop it is a silent no-op, as in v7.
         if (cx.loops) {
@@ -867,6 +958,88 @@ Task<Result<void>> run_capture(const Ctx &cx, Str command, bool ticked, ExpandEr
     if (own.cx->flow == Flow::Interrupt)
         co_return Err(Error::Cancelled);
     co_return {};
+}
+
+// A function body, run on the caller's Ctx so that a capture, the keyboard and
+// the depth bound all reach it. The tree is held for the call: a body that
+// redefines its own name must not free what it is running.
+Task<i32> call_func(Ctx &cx, const FuncEntry *fn, Args a)
+{
+    Vec<String> next;
+    String zero;
+    if (!zero.assign(args_at(0)) || !next.reserve(a.size()) || !next.push(move(zero))) {
+        co_await say(SYS_STDERR, "out of memory");
+        co_return 1;
+    }
+    for (usize i = 1; i < a.size(); i++) {
+        String s;
+        if (!s.assign(a[i]) || !next.push(move(s))) {
+            co_await say(SYS_STDERR, "out of memory");
+            co_return 1;
+        }
+    }
+
+    const Tree *t = fn->t;
+    u32 body      = fn->body;
+    tree_hold(t);
+
+    Vec<String> saved = args_swap(move(next));
+    cx.frames++;
+
+    Task<i32> step = exec_node(cx, *t, body);
+    i32 status     = step ? co_await step : 1;
+
+    cx.frames--;
+    args_swap(move(saved));
+    if (cx.flow == Flow::Return) {
+        cx.flow = Flow::Normal;
+        status  = cx.exit_status;
+        var_status(status);
+    }
+    tree_release(t);
+    co_return status;
+}
+
+// `.` and `eval` are one thing twice: a text parsed into a tree of its own and
+// run in the walk already in progress. A tree that defined something outlives
+// this call, so it owns its text and carries the reference.
+Task<i32> run_text(Ctx &cx, String text)
+{
+    struct Drop {
+        ~Drop() { tree_release(t); }
+
+        Tree *t;
+    } own{ heap_new<Tree>() };
+
+    if (!own.t) {
+        co_await say(SYS_STDERR, "out of memory");
+        co_return 1;
+    }
+    tree_hold(own.t);
+
+    ParseErr perr;
+    if (parse(text.str(), *own.t, perr).is_err()) {
+        co_await say(SYS_STDERR, perr.message);
+        co_return 2;
+    }
+    if (own.t->defines() && own.t->own_source().is_err()) {
+        co_await say(SYS_STDERR, "out of memory");
+        co_return 1;
+    }
+    if (own.t->root() == 0)
+        co_return 0;
+
+    cx.frames++;
+    Task<i32> step = exec_node(cx, *own.t, own.t->root());
+    i32 status     = step ? co_await step : 1;
+    cx.frames--;
+
+    if (cx.flow == Flow::Return) {
+        cx.flow = Flow::Normal;
+        status  = cx.exit_status;
+        var_status(status);
+    }
+    co_return status;
 }
 
 // The expander is pure and cannot await, so it abandons the word the first
@@ -1200,6 +1373,16 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
         step   = exec_case(cx, tree, n);
         status = step ? co_await step : 1;
         break;
+
+    case Tree::Kind::FuncDef:
+        // The tree the body is a node of takes a reference here, which is what
+        // lets the definition outlive the line.
+        if (!func_define(tree.args(nd.b)[0], &tree, nd.a)) {
+            co_await say(SYS_STDERR, "out of memory");
+            status = 1;
+        }
+        var_status(status);
+        break;
     }
     co_return status;
 }
@@ -1210,6 +1393,66 @@ void loop_break(u32 levels, bool cont)
 {
     g_break      = levels;
     g_break_cont = cont;
+}
+
+void func_return(i32 status)
+{
+    g_return        = true;
+    g_return_status = status;
+}
+
+bool func_unset(Str name)
+{
+    Vec<FuncEntry *> &t = funcs();
+    for (usize i = 0; i < t.size(); i++) {
+        if (t[i]->name.str() != name)
+            continue;
+        tree_release(t[i]->t);
+        heap_delete(t[i]);
+        t.erase(i);
+        return true;
+    }
+    return false;
+}
+
+Task<i32> sh_source(Str path, ShIo io)
+{
+    if (!g_ctx) {
+        co_await write_all(io.err, "braam: . outside a command\n");
+        co_return 1;
+    }
+
+    Result<String> text = Err(Error::NoMemory);
+    if (Task<Result<String>> t = read_file(path))
+        text = co_await t;
+    if (text.is_err()) {
+        if (Task<void> e = errln("braam", path, text.error()))
+            co_await e;
+        co_return text.error() == Error::NotFound ? 127 : 1;
+    }
+
+    Task<i32> t = run_text(*g_ctx, move(text.value()));
+    co_return t ? co_await t : 1;
+}
+
+Task<i32> sh_eval(Args args, ShIo io)
+{
+    if (!g_ctx) {
+        co_await write_all(io.err, "braam: eval outside a command\n");
+        co_return 1;
+    }
+
+    // The arguments are joined with one space, which is what makes
+    // `eval echo a b` and `eval 'echo a b'` the same command.
+    String text;
+    for (usize i = 1; i < args.size(); i++)
+        if ((i > 1 && !text.push(' ')) || !text.append(args[i]))
+            co_return 1;
+    if (text.empty())
+        co_return 0;
+
+    Task<i32> t = run_text(*g_ctx, move(text));
+    co_return t ? co_await t : 1;
 }
 
 bool line_incomplete(Str text)
@@ -1226,7 +1469,7 @@ Task<i32> run_line(Str line, bool interactive)
     struct Drop {
         ~Drop()
         {
-            heap_delete(t);
+            tree_release(t);
             heap_delete(cx);
         }
 
@@ -1238,11 +1481,17 @@ Task<i32> run_line(Str line, bool interactive)
         co_await say(SYS_STDERR, "out of memory");
         co_return 1;
     }
+    tree_hold(own.t);
 
     ParseErr perr;
     if (parse(line, *own.t, perr).is_err()) {
         co_await say(SYS_STDERR, perr.message);
         co_return 2;
+    }
+    // A definition pins the tree past this line, so it takes its text with it.
+    if (own.t->defines() && own.t->own_source().is_err()) {
+        co_await say(SYS_STDERR, "out of memory");
+        co_return 1;
     }
     if (own.t->root() == 0)
         co_return 0;
@@ -1257,6 +1506,7 @@ Task<i32> run_line(Str line, bool interactive)
         shell_exit(own.cx->exit_status);
     // `break 9` in one loop must not skip whatever comes next, which is what
     // v7 does with its own leftover.
-    g_break = 0;
+    g_break  = 0;
+    g_return = false;
     co_return status;
 }

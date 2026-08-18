@@ -1,20 +1,22 @@
 # The shell, as a library a binary links (Concept.md §4). Every other program in
-# src/cmd/ is one translation unit; this one is a grammar, a line editor, a job
-# runtime and six builtins, so it is a library and src/cmd/sh.cpp is its entry
-# point.
+# src/cmd/ is one translation unit; this one is a grammar, an expander, a line
+# editor, a job runtime and sixteen builtins, so it is a library and
+# src/cmd/sh.cpp is its entry point.
 #
-# parse.cpp and tokenize.cpp are also compiled into braam_user while the
-# resident shell still exists: it is the same code either side of the process
-# boundary, since it touches nothing but Str, String and Vec.
+# expand.cpp, match.cpp, parse.cpp and tokenize.cpp are pure, and test/ compiles
+# them into tests.wasm directly rather than linking this.
 add_library(braam_sh STATIC
     builtin/break.cpp
     builtin/cd.cpp
+    builtin/dot.cpp
+    builtin/eval.cpp
     builtin/exit.cpp
     builtin/export.cpp
     builtin/fg.cpp
     builtin/help.cpp
     builtin/jobs.cpp
     builtin/kill.cpp
+    builtin/return.cpp
     builtin/set.cpp
     builtin/table.cpp
     builtin/unset.cpp

@@ -344,9 +344,14 @@ change to argue in Concept.md first.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.
 - **The shell has no `-c` and no scripts beyond `sh -s`.** It has variables, lists, control flow,
-  `case` and globbing now, but **`export` reaches no child**: there is no environment anywhere in
-  the wasm ABI, so it records an intent that only this process can honour. `/bin/export` was
-  renamed `save` to give the builtin its name.
+  `case`, globbing, `$( )` and functions now, but **`export` reaches no child**: there is no
+  environment anywhere in the wasm ABI, so it records an intent that only this process can
+  honour. `/bin/export` was renamed `save` to give the builtin its name.
+- **A function is not a scope, and cannot be piped or redirected yet.** It runs in the shell's own
+  turn on the caller's `Ctx`, so `$1`…`$#` are saved and put back but its variables and cwd are
+  the shell's, and a `break` inside one reaches a loop outside it. `f | wc` and `f > log` are
+  refused the way `{ a; } | wc` is: the body would write to the shell's stdout, and threading the
+  base stdio is S7's. `x=$(f)` works, since the capture rides on `Ctx`.
 - **Globbing is argv words only**, not a redirection target or an assignment value: both expand
   under `Split::One`, one field in and one out, and `> *.txt` writes to the pattern rather than
   silently to whatever it matched. An unterminated `[` matches nothing (v7's answer), and a

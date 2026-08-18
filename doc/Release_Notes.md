@@ -7,6 +7,92 @@ of the two needs amending.
 
 ---
 
+## A line could outlive itself
+
+Seventh of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `name() { … }`, `.`, `eval`,
+`return` and `unset -f`. `sh.wasm` went from 150,920 to 164,817 bytes and the staging tree from
+620,398 to 634,295 against an unchanged 1 MiB budget. **`kernel.wasm` did not move and the syscall
+ABI did not change.**
+
+**This is the first stage with no reference to port.** The V7 shell has no functions and no
+`return` — both arrived with SVR2, five years later — so where every stage before this one could
+be checked against `/Users/vak/Project/Besm-6/v7besm/cmd/sh/`, this one is POSIX by choice. What
+v7 *does* have is `.` and `eval`, and its shape was worth keeping: one `execexp()` that pushes an
+input source and runs it in the current everything. `run_text` is that function, and `.` and
+`eval` differ only in where the text comes from.
+
+**A function body outlives its line, and that is the whole of the difficulty.** Every stage until
+now could assume a parse dies with the text it came from. The tree is already heap-allocated —
+S3 put it there — so the change is a count, not an allocation. What it could *not* be is a
+destructor: `Tree`'s move constructor is implicit, `test_parse.cpp` asserts a frozen tree still
+moves, and declaring `~Tree` would delete that move and fall back to the deleted copy. So the
+count is a plain `mutable u32 refs` with `tree_hold`/`tree_release` beside it, and a stack `Tree`
+— `line_incomplete`, the tests — never touches either.
+
+**The second half of that lifetime is the text, and it is easy to miss.** `Tree::line_` is a
+*view* of the line, not a copy, and `text()` over it is what `jobs` lists. A tree pinned by a
+function outlives its line, so `own_source()` copies the text into the tree and repoints the view
+— called only when `defines()` says a `FuncDef` was added, which `add_node` records as it goes.
+Without it a background job started inside a function would list freed memory, which is the kind
+of bug that shows up as a garbled `jobs` months later.
+
+**Telling `f() { … }` from `f arg` needs one token of lookahead the parser did not have**, and
+`simple()` adds the name to the store on its first iteration with no way to take it back. So
+`pipeline()` eats the name itself and hands it on: to `func_def` if a `(` follows, to
+`simple(name, true)` otherwise. Two orderings are load-bearing. `compound()` keeps first refusal,
+because **every keyword is also a name** — without that, `case x in …` had `case` eaten as a
+function name and forty-nine tests failed at once. And a `(` with anything but `)` after it is
+reported as `syntax error near '('` rather than `expected ')'`, so `echo (x)` still says what it
+said before: it was never a definition.
+
+`(` and `)` cost nothing here, having become tokens at S4 for `case`'s arms. That is twice now
+that stage has paid for itself.
+
+**The body runs on the caller's `Ctx`, which is a deliberate trade.** It is what gives the body
+the caller's capture, keyboard and depth bound for free — so `x=$(f)` works with nothing added,
+and a runaway recursion reports `too deeply nested` rather than overflowing the wasm stack. The
+price is that a function is not a scope: `break` inside one reaches a loop outside it, and its
+variables are the shell's. There is no fork, so the alternative is the save-and-restore checkpoint
+S7 owes `( list )`, and doing it twice is how the two would drift.
+
+**What the call does save is the positional parameters**, and `var.cpp` gained one primitive for
+it: `args_swap` exchanges the whole block and hands back what was there. `$#` is derived from the
+vector's size, so restoring one restores the other.
+
+**`Flow::Return` was almost free.** `loop_step` already passes anything that is not `Break` or
+`Continue` straight through, so a `return` unwinds `while`, `for`, `case`, `if` and `{ }` with no
+change to any of them; only the call site notices it and clears it back to `Normal`. `Ctx::frames`
+counts function calls and sourced files together, so `return` outside both is a silent no-op —
+the rule `break` outside a loop already follows.
+
+**A function is looked up before a builtin and before `/bin`**, which is ksh's order and POSIX's.
+It costs three edits, all at gates `Stage` already had. What it does *not* yet get is a pipe or a
+redirection: the body would write to the shell's own stdout, because `exec_pipeline`'s base stdio
+is still hard-wired, so `f | wc` is refused with the message `{ a; } | wc` has had since S3. S7
+threads the base stdio and lifts both at once.
+
+**`ShIo` still has no `Ctx`, and did not need one.** `.` and `eval` reach the walk through
+`sh_source` and `sh_eval` in `job.h`, over a file-scope pointer to the walk in progress that
+`exec_pipeline` saves and restores around each builtin. That is the shape `loop_break` and
+`shell_exit` have had all along, and it kept `Ctx` private to one file rather than publishing a
+type that two builtins out of sixteen need.
+
+**One test bug worth recording, because it is a property of the feature.** A case proving a
+function shadows `/bin` defined `echo() { true; }` — and a definition outlives its line, so every
+later case in the file silently printed nothing. Both shadowing cases now `unset -f` on the same
+line. A language where definitions persist needs its tests to clean up after themselves, which no
+earlier stage did.
+
+**What the tests prove separately.** `test_parse.cpp` renders `fn(name){body}` as one string
+compare per form — no space needed before `(`, a newline before the body, any compound as the
+body — plus the three refusals. `test/run.mjs` has what the tree cannot show: that `$1` and `$#`
+are the call's and go back afterwards, that a redefinition wins, that `return` carries a status
+out through a loop, that a function shadows both a builtin and `/bin`, that `unset -f` really
+removes one, and that a function defined in a sourced file is still callable after the `.`
+returned.
+
+---
+
 ## A word could run a command
 
 Sixth of the stages in [src/sh/TODO.md](../src/sh/TODO.md): `$( )` and the backtick, the pipe the

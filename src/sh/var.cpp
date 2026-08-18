@@ -192,6 +192,14 @@ bool args_set(Args a)
     return true;
 }
 
+Vec<String> args_swap(Vec<String> next)
+{
+    Vec<String> &v  = argv();
+    Vec<String> old = move(v);
+    v               = move(next);
+    return old;
+}
+
 bool args_shift(usize n)
 {
     Vec<String> &v = argv();

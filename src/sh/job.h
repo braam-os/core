@@ -31,6 +31,17 @@ Task<i32> run_line(Str line, bool interactive);
 // the walk. Outside a loop both are silent no-ops.
 void loop_break(u32 levels, bool cont);
 
+// `return`, the same way. Outside a function or a sourced file it is a no-op.
+void func_return(i32 status);
+
+// `.` and `eval`: both parse a text and run it in the walk already in
+// progress, which is what lets either set a variable or define a function.
+Task<i32> sh_source(Str path, ShIo io);
+Task<i32> sh_eval(Args args, ShIo io);
+
+// `unset -f`. False when there is no such function.
+bool func_unset(Str name);
+
 // Whether the text ended *inside* something — a quote, a `${`, a trailing
 // `&&`, an unclosed `{` — so a reader should take another line before running
 // it. A parse of its own, which is what makes the accumulation re-parsing

@@ -4,7 +4,8 @@
 //   list     := and_or (sep and_or)* [sep]
 //   sep      := ';' | '&' | newline
 //   and_or   := pipeline (('&&' | '||') pipeline)*
-//   pipeline := ['!'] (compound | simple ('|' simple)*)
+//   pipeline := ['!'] (funcdef | compound | simple ('|' simple)*)
+//   funcdef  := name '(' ')' newline* compound
 //   compound := group | if | loop | for | case
 //   group    := '{' list '}'
 //   if       := 'if' list 'then' list ('elif' list 'then' list)* ['else' list] 'fi'
@@ -67,20 +68,21 @@ struct Tree {
     static constexpr u32 MAX_NEST = 16;
 
     enum class Kind : u8 {
-        Nop,   // node 0, so an index of 0 reads as "nothing"
-        Pipe,  // a..b commands, c..d the bytes of the line they came from
-        Seq,   // a, b: an offset and a count into the child list
-        AndOr, // the same, plus c: an offset into the operator list
-        Not,   // ! a
-        Group, // { a }
-        If,    // a, b: b (condition, body) pairs in the child list; c the else
-        While, // a the condition, b the body
-        Until, // the same, run while the condition fails
-        For,   // a the body, b the command holding the name then the words,
-               // c set when there was an `in`
-        Case,  // a, b: b (patterns, body) pairs in the child list, where a
-               // pair is the command holding that arm's patterns then the
-               // body node; c the command holding the word being matched
+        Nop,     // node 0, so an index of 0 reads as "nothing"
+        Pipe,    // a..b commands, c..d the bytes of the line they came from
+        Seq,     // a, b: an offset and a count into the child list
+        AndOr,   // the same, plus c: an offset into the operator list
+        Not,     // ! a
+        Group,   // { a }
+        If,      // a, b: b (condition, body) pairs in the child list; c the else
+        While,   // a the condition, b the body
+        Until,   // the same, run while the condition fails
+        For,     // a the body, b the command holding the name then the words,
+                 // c set when there was an `in`
+        Case,    // a, b: b (patterns, body) pairs in the child list, where a
+                 // pair is the command holding that arm's patterns then the
+                 // body node; c the command holding the word being matched
+        FuncDef, // a the body node, b the command holding the name
     };
 
     enum class Op : u8 { And, Or };
@@ -116,11 +118,22 @@ struct Tree {
     // What text() views. Not copied, so a Tree outliving its text has none.
     void set_source(Str s) { line_ = s; }
 
+    // Copies what set_source only viewed, for a tree that outlives its line.
+    Result<void> own_source();
+
     Result<void> freeze();
 
     // ---- after freeze() ----
 
     bool frozen() const { return frozen_; }
+
+    // Whether any FuncDef was added.
+    bool defines() const { return defines_; }
+
+    // How many function entries hold it. A field and two free functions, not a
+    // destructor: one would delete the implicit move test_parse.cpp needs.
+    // Mutable, so the walk can hold what it was handed as const.
+    mutable u32 refs = 0;
 
     u32 root() const { return root_; }
 
@@ -160,6 +173,7 @@ private:
     Result<void> keep(Str s, Vec<Slice> &into);
 
     Str line_;             // what was parsed, for text() to view
+    String source_;        // a copy of it, once own_source() has been called
     String store_;         // every word's bytes, back to back
     Vec<Slice> words_;     // argv words, contiguous per command
     Vec<Slice> targets_;   // redirection targets
@@ -175,7 +189,12 @@ private:
     usize redir0_   = 0;
     usize assign_n_ = 0; // how many of its words so far are assignments
     bool frozen_    = false;
+    bool defines_   = false;
 };
+
+// A tree a function body pins outlives the line it was parsed from.
+void tree_hold(const Tree *t);
+void tree_release(const Tree *t);
 
 // Parses one text, which may be several lines. An empty one yields a frozen
 // tree whose root is 0. On failure `err.message` names the problem, ready to

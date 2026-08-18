@@ -2060,8 +2060,9 @@ if (mode === "--kernel") {
     s = submit("clear", 9090);
     s = submit("help", 9091);
     const helped = rows(s).filter((line) => line.startsWith("  "));
-    for (const [i, name] of ["break", "cd", "continue", "exit", "export", "fg", "help", "jobs",
-                             "kill", "readonly", "set", "shift", "unset"].entries())
+    for (const [i, name] of [".", "break", "cd", "continue", "eval", "exit", "export", "fg",
+                             "help", "jobs", "kill", "readonly", "return", "set", "shift",
+                             "unset"].entries())
         if (!helped[i] || !helped[i].startsWith(`  ${name} `))
             fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);
     if (!helped.some((line) => line.startsWith("  wc ") && line.includes("count lines")))
@@ -2672,6 +2673,49 @@ if (mode === "--kernel") {
     // slots, so without drain-before-wait this one hangs rather than fails.
     cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "123 1191 7077");
     submit("rm -r /home/c", (gt += 0.01));
+
+    // Functions, `.`, `eval` and `return`. The unit suite has the grammar;
+    // what it cannot see is a body that outlives its line, the positional
+    // parameters going back, and a status carried out by `return`.
+    submit("mkdir /home/fn", (gt += 0.01));
+    submit("echo 'g() { echo sourced $1; }' > /home/fn/lib.sh", (gt += 0.01));
+
+    const fshows = (line, want) => {
+        submit("clear", (gt += 0.005));
+        const got = output(submit(line, (gt += 0.005))).join("|");
+        if (got !== want)
+            fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    };
+
+    fshows("f() { echo $1; }; f hi", "hi");
+    fshows("f() { echo $#; }; f a b c", "3");
+    fshows("f() { echo $1; }; f one; f two", "one|two");
+    fshows("f() { echo in $1; }; set outer; f inner; echo $1", "in inner|outer");
+    fshows("g() { echo one; }; g() { echo two; }; g", "two"); // redefinition
+    // Ahead of a builtin and ahead of /bin. Both are unset again on the same
+    // line: a definition outlives its line, which is the point, and one left
+    // standing would shadow the name for every case after this one.
+    fshows("cd() { echo shadowed; }; cd /tmp; unset -f cd", "shadowed");
+    fshows("echo() { true; }; echo hi; unset -f echo; echo back", "back");
+    fshows("f() { return 3; echo never; }; f; echo $?", "3");
+    fshows("f() { echo a; return 3; echo b; }; f", "a");
+    fshows("f() { while true; do return 7; done; }; f; echo $?", "7");
+    fshows("x=1; f() { x=2; }; f; echo $x", "2"); // not a subshell
+    fshows("f() { echo hi; }; unset -f f; f", "braam: f: not found");
+    fshows("f() { echo hi; }; f | wc",
+           "braam: f: a function cannot be piped or redirected yet");
+    fshows("f() { echo body; }; x=$(f); echo $x", "body"); // through a capture
+    fshows("f() { echo $1; }; for i in p q; do f $i; done", "p|q");
+
+    fshows("eval 'echo from eval'", "from eval");
+    fshows("eval echo a b", "a b");
+    fshows("eval 'x=set'; echo $x", "set"); // eval runs in this shell
+    fshows("eval", "");
+    fshows("return 4; echo still here", "still here"); // outside: a no-op
+
+    fshows(". /home/fn/lib.sh; g there", "sourced there");
+    fshows(". /home/fn/nosuch", "braam: /home/fn/nosuch: not found");
+    submit("rm -r /home/fn", (gt += 0.01));
 
     // exit ends the shell, and nothing runs after it — not even the rest of
     // its own line, which is Flow::Exit end to end. Last, for that reason.
