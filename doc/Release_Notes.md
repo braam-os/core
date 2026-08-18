@@ -7,6 +7,83 @@ of the two needs amending.
 
 ---
 
+## The shell got variables
+
+Second of the stages in [src/sh/TODO.md](../src/sh/TODO.md). `$x`, `${x}`, the `${x-y}` family,
+the specials, assignment as a word the parser knows, field splitting against `IFS`, and `set`,
+`shift`, `unset`, `export` and `readonly`. `sh.wasm` went from 83,485 to 104,292 bytes and the
+staging tree from 552,965 to 588,594 against an unchanged 1 MiB budget. **`kernel.wasm` did not
+move and the syscall ABI did not change** — everything here is inside the process binary, and
+`smoke`'s exact import and export surface stayed green untouched, which is what says so.
+
+**`Field` needed a flag the mark could not carry.** The last stage put the quoting mark out of
+band, one byte per byte, and that was right for everything the mark will ever be asked — except
+one question it cannot be asked at all: *was quoting the reason this field exists?* With x empty,
+`echo "$x"` must pass one empty argument and `echo $x` must pass none, and both are a zero-length
+text beside a zero-length mark. V7 spends its lone `QESC` on exactly this. So `Field` gained a
+`bool quoted`, set by the `'` and `"` arms whether or not they contribute a byte, and the
+splitter keeps an empty field only when it is set. It was harmless while one field was always
+pushed; the moment a word could expand to nothing it was the difference.
+
+**Splitting happens during the walk, not after it.** We know whether a byte came from an unquoted
+expansion at the moment we append it; after the fact we would have to consult the mark to find
+out, and the mark would stop being scratch. So the splitter is one branch in `put_value`, and a
+literal byte of the word never goes through it — which is why `IFS=:` leaves the typed word `a:b`
+alone and splits `$path` in two. That distinction is a `bool literal` threaded through the walk,
+and it also settles `${x-a b}`: the body of an operator is expansion output rather than the
+word's own bytes, so it splits, where the same two characters typed directly would not.
+
+**The expander took callbacks rather than calling the variable table.** `var.cpp` is pure enough
+to have been linked into `tests.wasm` beside `expand.cpp` and called directly, and that would
+have been less code. The seam is there for the two stages that need it: command substitution adds
+a `substitute` callback beside the lookup, and a function body will want a table of its own that
+is not the shell's. Four function pointers now is the shape those want, and the unit tests fill
+them with table literals — which is also what keeps `expand.cpp` clear of every syscall, a fact
+the link into `tests.wasm` enforces rather than promises.
+
+**`x=1 cmd` sets, runs and restores — and a program cannot see it either way.** There is no
+environment anywhere in the wasm ABI: `Sys::Spawn` hands a child three descriptors, an argv and a
+cwd. So an assignment prefix on a program stage is expanded and then has nowhere to go. Rather
+than leak it into the shell or refuse the idiom, the prefix is applied around the one stage that
+can see it — a builtin, and later `read`, `eval` and a function — and the displaced values are
+put back after. `x=1` with no command word is the ordinary case and persists. Per stage, so
+`x=1 a | y=2 b` leaks nothing.
+
+**`${x?}` aborts the line rather than the shell.** V7 ends a non-interactive shell there. Braam
+prints `braam: x: parameter not set` and reports 1 in both modes, because script-entry policy
+belongs to the stage that adds `sh file` and `sh -c` and there is nothing to be gained by
+deciding it early. Expansion runs before anything is opened or spawned, so the line leaves
+nothing behind.
+
+**A command may now have no command word at all**, which two things make reachable: `x=1` alone,
+and a word that expands to nothing. `run_line` indexed `args(i)[0]` unchecked at two sites,
+correct only because the parser guaranteed a word and the expander guaranteed a field. Both
+guarantees are gone. The null command performs its redirections, keeps its assignments and
+reports 0, which is Bourne.
+
+**`${` had to stop ending a word**, or `${x-a b}` would lex as two and `${x-a|b}` as three. The
+lexer gained one arm, and it shares `brace_end` with the expander rather than carrying a copy —
+unlike the quote arms, which are duplicated because each needed a different thing from the same
+rule. `\$` also became escapable inside double quotes, in both, which changes no word boundary
+but makes `echo "\$x"` mean what it says.
+
+**`/bin/export` became `save`.** The builtin and the program wanted one name, and the builtin's
+is not negotiable — it is in every script ever written. The program is the Blob download of
+Concept.md §5.4 and its name never was: `import` and `save` are the pair now. The alternative was
+shipping no `export` builtin at all, which is defensible only until §5.4's paragraph has to
+explain why a standard name is missing.
+
+**What the tests prove separately.** `test_expand.cpp` carries the whole `$` grammar against a
+table-literal shell, including the empty quoted word against the empty unquoted one, `"$@"` with
+no parameters leaving no field where `""` leaves an empty one, and the mark showing that an
+unquoted expansion is *unmarked* — which is what will let a `*` out of a variable glob at S4.
+`test_parse.cpp` renders an assignment prefix in brackets, so `[x=1]{ls}` is one string compare.
+`test/run.mjs` has what the unit suite cannot reach: that a value set at the prompt survives to
+the next line, that `echo a "$e" b` and `echo a $e b` differ by a space, and that `x=two echo hi`
+leaves the shell's x where it was.
+
+---
+
 ## The lexer stopped removing quotes
 
 First of the stages in [src/sh/TODO.md](../src/sh/TODO.md), which is the plan for making

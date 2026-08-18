@@ -56,7 +56,7 @@ reload; `df` reports how much space the browser grants and how much is used. `/p
 running. Where the browser will not store files, the system boots with memory only and says so.
 
 **Access to the browser.** Fetching a URL, WebSockets, the clipboard, the file picker, saving a
-file, and the clock. So `curl` fetches a URL, `chat` talks between two tabs, `import` and `export`
+file, and the clock. So `curl` fetches a URL, `chat` talks between two tabs, `import` and `save`
 move files in and out of the browser, and `pbcopy`/`pbpaste` reach the system clipboard.
 
 **Full-screen programs.** `less` and `edit` are built on a layout layer over the grid of cells.

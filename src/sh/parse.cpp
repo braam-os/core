@@ -17,9 +17,34 @@ Result<void> Pipeline::keep(Str s, Vec<Slice> &into)
     return {};
 }
 
+namespace {
+
+// `name=` on the raw word, before any quote comes off: a name is what a `$`
+// would accept, so `a2=1` assigns and `2a=1` is an ordinary word.
+bool is_assignment(Str w)
+{
+    usize i = 0;
+    for (; i < w.size(); i++) {
+        char c         = w[i];
+        bool name_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+                         (i && c >= '0' && c <= '9');
+        if (!name_char)
+            break;
+    }
+    return i > 0 && i < w.size() && w[i] == '=';
+}
+
+} // namespace
+
 Result<void> Pipeline::add_word(Str w)
 {
-    return keep(w, words_);
+    // An assignment counts only while nothing else has been seen: in `ls x=1`
+    // the second word is an argument.
+    bool leading = words_.size() - argv0_ == assign_n_;
+    TRY_VOID(keep(w, words_));
+    if (leading && is_assignment(w))
+        assign_n_++;
+    return {};
 }
 
 Result<void> Pipeline::add_redirect(Redir kind, Str target)
@@ -36,15 +61,17 @@ Result<void> Pipeline::end_command()
         return Err(Error::Invalid);
 
     Command c;
-    c.argv0  = argv0_;
-    c.argc   = words_.size() - argv0_;
-    c.redir0 = redir0_;
-    c.redirn = redirs_.size() - redir0_;
+    c.argv0   = argv0_;
+    c.argc    = words_.size() - argv0_;
+    c.redir0  = redir0_;
+    c.redirn  = redirs_.size() - redir0_;
+    c.assignn = assign_n_;
     if (!cmds_.push(c))
         return Err(Error::NoMemory);
 
-    argv0_  = words_.size();
-    redir0_ = redirs_.size();
+    argv0_    = words_.size();
+    redir0_   = redirs_.size();
+    assign_n_ = 0;
     return {};
 }
 
@@ -70,7 +97,15 @@ Args Pipeline::args(usize i) const
     if (!frozen_)
         panic("Pipeline: args before freeze");
     const Command &c = cmds_[i];
-    return Args{ Span<const Str>(word_view_.data() + c.argv0, c.argc) };
+    return Args{ Span<const Str>(word_view_.data() + c.argv0 + c.assignn, c.argc - c.assignn) };
+}
+
+Args Pipeline::assigns(usize i) const
+{
+    if (!frozen_)
+        panic("Pipeline: assigns before freeze");
+    const Command &c = cmds_[i];
+    return Args{ Span<const Str>(word_view_.data() + c.argv0, c.assignn) };
 }
 
 Span<const Redirect> Pipeline::redirects(usize i) const
@@ -118,7 +153,7 @@ Result<void> parse(Str line, Pipeline &out, Str &message)
     for (;;) {
         Result<Tok> t = lx.next(w);
         if (t.is_err()) {
-            message = t.error() == Error::Invalid ? "unterminated quote" : "out of memory";
+            message = t.error() == Error::Invalid ? "unterminated quote or ${" : "out of memory";
             return Err(t.error());
         }
 

@@ -5,6 +5,8 @@
 #include "job.h"
 #include "kernel/fmt.h"
 #include "kernel/string.h"
+#include "proc/rt.h"
+#include "var.h"
 
 namespace {
 
@@ -94,6 +96,7 @@ Task<i32> interactive()
 
         if (line.how == LineEnd::Interrupt) {
             status = 130; // 128 + SIGINT, by convention
+            var_status(status);
             continue;
         }
 
@@ -134,5 +137,11 @@ Task<i32> script()
 
 Task<i32> shell(bool want_console)
 {
+    // Planted here, so var.cpp needs no syscall. $$ is this process's pid, so
+    // a top-level /bin/sh reports init's (Concept.md §4).
+    if (!var_init(proc_pid(), "sh")) {
+        co_await write_all(SYS_STDERR, "sh: out of memory\n");
+        co_return 1;
+    }
     co_return want_console ? co_await interactive() : co_await script();
 }

@@ -6,11 +6,11 @@
 Task<i32> proc_main(Args args)
 {
     if (args.size() < 2 || args.size() > 3) {
-        co_await write_all(SYS_STDERR, "usage: export <file> [<name>]\n");
+        co_await write_all(SYS_STDERR, "usage: save <file> [<name>]\n");
         co_return 2;
     }
 
-    Input files(Args{ args.v.subspan(1, 1) }, SYS_STDIN, "export");
+    Input files(Args{ args.v.subspan(1, 1) }, SYS_STDIN, "save");
 
     String data;
     for (;;) {

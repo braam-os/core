@@ -11,6 +11,45 @@ bool is_operator(char c)
 
 } // namespace
 
+usize brace_end(Str s, usize at)
+{
+    if (at + 1 >= s.size() || s[at] != '$' || s[at + 1] != '{')
+        return Str::npos;
+
+    usize depth = 0;
+    for (usize i = at + 1; i < s.size(); i++) {
+        char c = s[i];
+
+        if (c == '\\') {
+            i++;
+            continue;
+        }
+        if (c == '\'') {
+            usize end = s.find('\'', i + 1);
+            if (end == Str::npos)
+                return Str::npos;
+            i = end;
+            continue;
+        }
+        if (c == '"') {
+            usize j = i + 1;
+            for (; j < s.size() && s[j] != '"'; j++)
+                if (s[j] == '\\' && j + 1 < s.size())
+                    j++;
+            if (j >= s.size())
+                return Str::npos;
+            i = j;
+            continue;
+        }
+
+        if (c == '{')
+            depth++;
+        else if (c == '}' && --depth == 0)
+            return i;
+    }
+    return Str::npos;
+}
+
 Result<Tok> Lexer::next(Str &word)
 {
     word = Str();
@@ -60,6 +99,16 @@ Result<Tok> Lexer::next(Str &word)
         if (is_space(c) || is_operator(c))
             break;
 
+        // A `${…}` is one piece of the word however it reads inside, so the
+        // body is walked rather than scanned for separators.
+        if (c == '$' && i_ + 1 < s_.size() && s_[i_ + 1] == '{') {
+            usize end = brace_end(s_, i_);
+            if (end == Str::npos)
+                return Err(Error::Invalid);
+            i_ = end;
+            continue;
+        }
+
         if (c == '\'') {
             usize end = s_.find('\'', i_ + 1);
             if (end == Str::npos)
@@ -71,8 +120,9 @@ Result<Tok> Lexer::next(Str &word)
         if (c == '"') {
             usize j = i_ + 1;
             for (; j < s_.size() && s_[j] != '"'; j++)
-                // Only a quote or a backslash is escapable in here.
-                if (s_[j] == '\\' && j + 1 < s_.size() && (s_[j + 1] == '"' || s_[j + 1] == '\\'))
+                // Only a quote, a backslash or a dollar is escapable in here.
+                if (s_[j] == '\\' && j + 1 < s_.size() &&
+                    (s_[j + 1] == '"' || s_[j + 1] == '\\' || s_[j + 1] == '$'))
                     j++;
             if (j >= s_.size())
                 return Err(Error::Invalid);

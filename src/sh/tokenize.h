@@ -20,6 +20,13 @@ enum class Tok : u8 {
     ErrDGreat, // 2>>
 };
 
+// Where the `${…}` beginning at s[at] — which must be the `$` — ends: the index
+// of its closing `}`, or Str::npos. Nesting counts and a quoted run is skipped,
+// so a space or a `|` in the body does not end the word. The lexer and the
+// expander have to agree about that, so they share this rather than each
+// carrying a copy, as they do for the quotes.
+usize brace_end(Str s, usize at);
+
 struct Lexer {
     explicit Lexer(Str line) : s_(line) {}
 

@@ -1,7 +1,8 @@
 // The shell's grammar: a pipeline of commands, each with redirections.
 //
 //   pipeline := command ('|' command)* ['&']
-//   command  := (word | redirect)+
+//   command  := assign* (word | redirect)+ | assign+ redirect*
+//   assign   := name '=' word, and only ahead of the first ordinary word
 //   redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
 //
 // Words arrive raw — quotes and backslashes still in them, since expand.h
@@ -34,6 +35,7 @@ struct Redirect {
 struct Command {
     usize argv0 = 0, argc = 0;    // slice of the word table
     usize redir0 = 0, redirn = 0; // slice of the redirection table
+    usize assignn = 0;            // leading words of the slice that are name=value
 };
 
 struct Pipeline {
@@ -64,7 +66,12 @@ struct Pipeline {
 
     const Command &operator[](usize i) const { return cmds_[i]; }
 
+    // The command proper, with its assignment prefix taken off, and that
+    // prefix on its own. Either may be empty: `x=1` is a command with no argv
+    // and `ls` one with no assignments.
     Args args(usize i) const;
+
+    Args assigns(usize i) const;
 
     Span<const Redirect> redirects(usize i) const;
 
@@ -86,6 +93,7 @@ private:
     Vec<Str> target_view_; //
     usize argv0_     = 0;  // where the command being built starts
     usize redir0_    = 0;
+    usize assign_n_  = 0; // how many of its words so far are assignments
     bool frozen_     = false;
     bool background_ = false;
 };

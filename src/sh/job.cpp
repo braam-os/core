@@ -6,6 +6,7 @@
 #include "kernel/traits.h"
 #include "kernel/vec.h"
 #include "parse.h"
+#include "var.h"
 
 namespace {
 
@@ -23,6 +24,12 @@ struct Stage {
     bool moved       = false; // its three fds went into a child
 };
 
+// One variable an assignment prefix displaced.
+struct Saved {
+    String name, value;
+    bool was_set = false;
+};
+
 // Everything a running pipeline owns, on the heap rather than in run_line's
 // frame: the allocator's top size class is 512 bytes and a frame past it costs
 // a whole 64 KiB span (Concept.md §8.2), and a Pipeline alone is most of one.
@@ -37,6 +44,10 @@ struct Run {
     Vec<Str> argv;    // views over words, contiguous per command
     Vec<usize> argv0; // where each command's argv starts in argv
     Vec<Str> targets; // one per Redirect, in the order the pipeline lists them
+
+    Vec<Field> avals;   // an assignment prefix's values, one word each
+    Vec<usize> assign0; // where each command's start in avals
+    Vec<Saved> saved;   // what a prefix displaced, until the command is done
 
     Args args(usize i) const
     {
@@ -92,6 +103,81 @@ void drop_entry(u32 id)
         heap_delete(t[i]);
         t.erase(i);
         return;
+    }
+}
+
+// Everything the pipeline holds. An assignment value and a redirection target
+// stay one word; only an argv word may become several, or none.
+Result<void> expand_all(Run *r, ExpandErr &err)
+{
+    const Vars &v = shell_vars();
+    usize n       = r->pl.size();
+
+    for (usize i = 0; i < n; i++) {
+        if (!r->assign0.push(r->avals.size()))
+            return Err(Error::NoMemory);
+        Args a = r->pl.assigns(i);
+        for (usize k = 0; k < a.size(); k++) {
+            Str w = a[k];
+            TRY_VOID(expand_word(w.substr(w.find('=') + 1), v, Split::One, r->avals, err));
+        }
+    }
+
+    for (usize i = 0; i < n; i++) {
+        if (!r->argv0.push(r->words.size()))
+            return Err(Error::NoMemory);
+        Args raw = r->pl.args(i);
+        for (usize k = 0; k < raw.size(); k++)
+            TRY_VOID(expand_word(raw[k], v, Split::Fields, r->words, err));
+    }
+
+    usize argvn = r->words.size();
+    for (usize i = 0; i < n; i++)
+        for (const Redirect &rd : r->pl.redirects(i))
+            TRY_VOID(expand_word(r->pl.target(rd), v, Split::One, r->words, err));
+
+    // The views come after the last append, as parse.h's freeze() does.
+    if (!r->argv.reserve(argvn) || !r->targets.reserve(r->words.size() - argvn))
+        return Err(Error::NoMemory);
+    for (usize k = 0; k < r->words.size(); k++)
+        (k < argvn ? r->argv : r->targets).push(r->words[k].text.str());
+    return {};
+}
+
+// One stage's assignment prefix. With `undo` the displaced values are kept.
+bool apply_assigns(Run *r, usize i, Vec<Saved> *undo, Str &bad_name)
+{
+    Args names = r->pl.assigns(i);
+    usize at   = r->assign0[i];
+
+    for (usize k = 0; k < names.size(); k++) {
+        Str w     = names[k];
+        Str name  = w.substr(0, w.find('='));
+        Str value = r->avals[at + k].text.str();
+        bad_name  = name;
+
+        if (undo) {
+            Saved s;
+            Str old;
+            s.was_set = var_get(name, old);
+            if (!s.name.assign(name) || (s.was_set && !s.value.assign(old)) || !undo->push(move(s)))
+                return false;
+        }
+        if (!var_set(name, value))
+            return false;
+    }
+    return true;
+}
+
+void undo_assigns(Vec<Saved> &undo)
+{
+    while (!undo.empty()) {
+        Saved &s = undo.back();
+        if (s.was_set)
+            var_set(s.name.str(), s.value.str());
+        else
+            var_unset(s.name.str());
+        undo.pop();
     }
 }
 
@@ -348,35 +434,18 @@ Task<i32> run_line(Str line, bool interactive)
     for (usize i = 0; i < n; i++)
         r->stages.push(Stage{});
 
-    // Expansion, before anything is opened or spawned. Argv first, then the
-    // redirection targets, in the order the pipeline lists them.
-    for (usize i = 0; i < n; i++) {
-        if (!r->argv0.push(r->words.size())) {
+    // Expansion, before anything is opened or spawned.
+    ExpandErr xerr;
+    if (Result<void> e = expand_all(r, xerr); e.is_err()) {
+        if (e.error() != Error::Invalid)
             co_await say(SYS_STDERR, "out of memory");
-            co_return 1;
-        }
-        Args raw = r->pl.args(i);
-        for (usize k = 0; k < raw.size(); k++)
-            if (expand_word(raw[k], r->words).is_err()) {
-                co_await say(SYS_STDERR, "out of memory");
-                co_return 1;
-            }
-    }
-    usize argvn = r->words.size();
-    for (usize i = 0; i < n; i++)
-        for (const Redirect &rd : r->pl.redirects(i))
-            if (expand_word(r->pl.target(rd), r->words).is_err()) {
-                co_await say(SYS_STDERR, "out of memory");
-                co_return 1;
-            }
-
-    // The views come after the last append, as parse.h's freeze() does.
-    if (!r->argv.reserve(argvn) || !r->targets.reserve(r->words.size() - argvn)) {
-        co_await say(SYS_STDERR, "out of memory");
+        else if (xerr.name.empty())
+            co_await say(SYS_STDERR, xerr.message);
+        else
+            co_await say2(SYS_STDERR, xerr.name, xerr.message);
+        var_status(1);
         co_return 1;
     }
-    for (usize k = 0; k < r->words.size(); k++)
-        (k < argvn ? r->argv : r->targets).push(r->words[k].text.str());
 
     // Redirections first. Refusing here rather than at the first write is what
     // stops a command running and producing side effects before its
@@ -429,8 +498,20 @@ Task<i32> run_line(Str line, bool interactive)
             bad = 1;
     }
 
-    for (usize i = 0; i < n; i++)
-        r->stages[i].b = builtin_find(r->args(i)[0]);
+    // A stage may have no command word: `x=1` is one, and so is a word that
+    // expanded to nothing. Its redirections are made, its assignments stay.
+    for (usize i = 0; i < n && !bad; i++) {
+        Args a = r->args(i);
+        if (a.size()) {
+            r->stages[i].b = builtin_find(a[0]);
+            continue;
+        }
+        Str who;
+        if (!apply_assigns(r, i, nullptr, who)) {
+            co_await say2(SYS_STDERR, who, "cannot be set");
+            bad = 1;
+        }
+    }
 
     // The keyboard goes back *before* anything is spawned. A child is a
     // scheduler job that runs as soon as this shell next parks, and a
@@ -449,8 +530,10 @@ Task<i32> run_line(Str line, bool interactive)
     // may write into a pipe whose reader is one of these.
     for (usize i = 0; i < n && !bad; i++) {
         Stage &s = r->stages[i];
-        if (s.b)
+        if (s.b || !r->args(i).size())
             continue;
+        // An assignment prefix has nowhere to go: a child gets three
+        // descriptors, an argv and a cwd, and no environment (§4.3).
         Task<Result<u32>> t = spawn(r->args(i), ChildIo{ s.in, s.out, s.err });
         Result<u32> pid     = t ? co_await t : Err(Error::NoMemory);
         if (pid.is_err()) {
@@ -491,10 +574,16 @@ Task<i32> run_line(Str line, bool interactive)
         Stage &s = r->stages[i];
         if (!s.b)
             continue;
-        if (Task<i32> t = s.b->run(r->args(i), ShIo{ s.in, s.out, s.err }))
+        // The prefix is this command's for its turn and then goes back.
+        Str who;
+        if (!apply_assigns(r, i, &r->saved, who)) {
+            co_await say2(SYS_STDERR, who, "cannot be set");
+            s.status = 1;
+        } else if (Task<i32> t = s.b->run(r->args(i), ShIo{ s.in, s.out, s.err }))
             s.status = co_await t;
         else
             s.status = 1;
+        undo_assigns(r->saved);
         // Closed the moment it is done, so whatever reads the other end sees
         // an end of input rather than waiting for a writer that has finished.
         co_await close_stage(s);
@@ -534,6 +623,7 @@ Task<i32> run_line(Str line, bool interactive)
                 if (s.pid)
                     e->pids.push(s.pid);
             g_current = e->id;
+            var_last_bg(e->pids.empty() ? 0 : e->pids[0]);
 
             Buf<32> note;
             note.put('[').put(e->id).put("] ").put(e->pids.empty() ? 0 : e->pids[0]).put('\n');
@@ -554,5 +644,6 @@ Task<i32> run_line(Str line, bool interactive)
     for (u32 fd : r->spare)
         co_await close_fd(fd);
 
+    var_status(status);
     co_return status;
 }

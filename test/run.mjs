@@ -485,9 +485,9 @@ if (mode === "--kernel") {
     s = submit("help", 1050);
     for (const name of ["cat", "cd", "chat", "clear", "curl", "date", "df", "echo", "edit",
                         "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
-                        "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd", "rm",
-                        "sleep",
-                        "tail", "timeout", "touch", "true", "uname", "vmstat",
+                        "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd",
+                        "readonly", "rm", "save", "set", "shift", "sleep",
+                        "tail", "timeout", "touch", "true", "uname", "unset", "vmstat",
                         "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
@@ -672,6 +672,68 @@ if (mode === "--kernel") {
     s = submit("echo a\\ \\ b", 1162);
     if (!rows(s).includes("a  b"))
         fail(`echo a\\ \\ b printed ${JSON.stringify(rows(s))}, expected a  b`);
+
+    // Variables. The unit suite has the expander; what only a real shell shows
+    // is that a value survives to the next line and that the fields reach argv.
+    let vt = 1163;
+    const vrun = (line) => submit(line, (vt += 0.01));
+    const vshows = (line, want) => {
+        vrun("clear");
+        const got = rows(vrun(line));
+        if (!got.includes(want))
+            fail(`${line} printed ${JSON.stringify(got)}, expected ${want}`);
+    };
+
+    vrun("x=one");
+    vshows("echo $x", "one");
+    vshows("echo ${x}s", "ones");
+    vshows("echo ${nosuch-alt}", "alt");
+    vshows("echo ${nosuch?}", "braam: nosuch: parameter not set");
+
+    // Empty against absent, in two spaces: `"$x"` is an argument and `$x` is
+    // not, which is the whole of the field flag.
+    vrun("e=");
+    vshows('echo a "$e" b', "a  b");
+    vshows("echo a $e b", "a b");
+
+    // Splitting against IFS, and quoting turning it off.
+    vrun('two="a  b"');
+    vshows("echo $two", "a b");
+    vshows('echo "$two"', "a  b");
+
+    // The positional parameters and $#.
+    vrun("set p q r");
+    vshows("echo $# $2", "3 q");
+    vrun("shift");
+    vshows("echo $# $*", "2 q r");
+
+    // $? is the last command's — with no `clear` between, since that would be
+    // the last command.
+    vrun("clear");
+    vrun("false");
+    if (!rows(vrun("echo $?")).includes("1"))
+        fail("$? did not carry the last command's status");
+
+    // An assignment prefix does not stay: a child has no environment to have
+    // seen it either way.
+    vrun("x=two echo hi");
+    vshows("echo $x", "one");
+
+    // A command name and a redirection target out of a variable: the argv
+    // words split and the target does not.
+    vrun("c=echo");
+    vshows("$c via", "via");
+    vrun("f=vfile");
+    vrun("echo hi > $f");
+    vshows("cat vfile", "hi");
+    vrun("rm vfile");
+
+    // readonly bites where export cannot.
+    vrun("readonly r=keep");
+    vshows("r=other", "braam: r: cannot be set");
+    vshows("echo $r", "keep");
+    vrun("unset x");
+    vshows("echo a $x b", "a b");
 
     // M5: the shell starts in /home, which is where a redirection lands.
     // `pwd` reads its own cwd through Sys::Chdir now, so this is also the proof
@@ -1321,7 +1383,7 @@ if (mode === "--kernel") {
         fail(`^D on chat left ${JSON.stringify(rows(s))}, expected a bare prompt`);
 
     // M6, third criterion: /import takes what the picker hands over, and
-    // export sends a file back out through the browser.
+    // save sends a file back out through the browser.
     net.reset();
     s = submit("clear", 3040);
     s = submit("import", 3041);
@@ -1333,11 +1395,11 @@ if (mode === "--kernel") {
     if (!rows(s).includes("picked"))
         fail(`the imported file did not read back: ${JSON.stringify(rows(s))}`);
 
-    submit("export /import/notes.txt", 3044);
+    submit("save /import/notes.txt", 3044);
     if (net.saved.length !== 1 || net.saved[0].name !== "notes.txt")
-        fail(`export saved ${JSON.stringify(net.saved.map((f) => f.name))}`);
+        fail(`save saved ${JSON.stringify(net.saved.map((f) => f.name))}`);
     if (new TextDecoder().decode(net.saved[0].bytes) !== "picked\n")
-        fail(`export saved the wrong bytes: ${JSON.stringify(net.saved[0].bytes)}`);
+        fail(`save saved the wrong bytes: ${JSON.stringify(net.saved[0].bytes)}`);
 
     // The clipboard, and the wall clock the kernel's monotonic one cannot give.
     submit("echo copied | pbcopy", 3050);
@@ -1883,7 +1945,8 @@ if (mode === "--kernel") {
     s = submit("clear", 9090);
     s = submit("help", 9091);
     const helped = rows(s).filter((line) => line.startsWith("  "));
-    for (const [i, name] of ["cd", "exit", "fg", "help", "jobs", "kill"].entries())
+    for (const [i, name] of ["cd", "exit", "export", "fg", "help", "jobs", "kill", "readonly",
+                             "set", "shift", "unset"].entries())
         if (!helped[i] || !helped[i].startsWith(`  ${name} `))
             fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);
     if (!helped.some((line) => line.startsWith("  wc ") && line.includes("count lines")))

@@ -1,8 +1,8 @@
 # One binary per program, each its own wasm module (Concept.md §4.1). The recipe
 # itself is cmake/BraamProgram.cmake, which the SDK installs — so a program built
 # out of tree is built the way these are.
-set(BRAAM_BIN_LIST cat chat clear curl date df echo edit export false grep head hog
-                   import less ls mkdir mount pbcopy pbpaste ps pwd rm sh sleep spin tail
+set(BRAAM_BIN_LIST cat chat clear curl date df echo edit false grep head hog
+                   import less ls mkdir mount pbcopy pbpaste ps pwd rm save sh sleep spin tail
                    timeout touch true uname vmstat watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 

@@ -2,10 +2,12 @@
 
 The plan of record for turning `/bin/sh` from a prompt into a language. **What lands is deleted
 from here** — its reasoning moves to [Release_Notes.md](../../doc/Release_Notes.md), which is
-where the *why* lives once it is code. One stage landed so far, recorded there under *"The lexer
-stopped removing quotes"*: quote removal left `Lexer::next` for a new [expand.h](expand.h), which
+where the *why* lives once it is code. Two stages have landed, recorded there under *"The lexer
+stopped removing quotes"* (quote removal left `Lexer::next` for a new [expand.h](expand.h), which
 carries the quoting mark out of band as a `Vec<u8>` beside the text rather than in a bit of the
-byte. What remains is numbered below, once, in the order it should be done.
+byte) and *"The shell got variables"* (the `$` walk, `IFS` splitting, the `Field` flag the mark
+could not carry, and the five variable builtins). What remains is numbered below, once, in the
+order it should be done.
 
 Stages are **S1**…**S10**. A number is a name, not a position: when a stage lands its section is
 deleted and its number retires with it, so the rest keep the numbers they have and a commit
@@ -21,10 +23,9 @@ command  := (word | redirect)+
 redirect := '<' word | '>' word | '>>' word | '2>' word | '2>>' word
 ```
 
-There is no `;`, no `&&`/`||`, no control flow, no variables, no expansion of any kind — `$`,
-`*` and `?` are ordinary word characters — and no way to run a file of commands beyond
-`sh -s` reading stdin a line at a time. Release_Notes.md records this as an explicit
-*non-*decision:
+There is no `;`, no `&&`/`||`, no control flow, no globbing — `*` and `?` are ordinary word
+characters — and no way to run a file of commands beyond `sh -s` reading stdin a line at a time.
+Release_Notes.md records this as an explicit *non-*decision:
 
 > `/bin/sh` has no variables, no `-c`, no globbing and no scripts beyond `sh -s`. None of that
 > was blocked by the shell being kernel code and none of it is blocked now; they were simply
@@ -36,8 +37,8 @@ the `${x-y}` family, positional parameters, command substitution, here-documents
 `/Users/vak/Project/Besm-6/v7besm/cmd/sh/` (≈3,450 lines of code across 29 files).
 
 **Headroom is not the constraint.** `kernel.wasm` does not change — every line of this is in the
-process binary. `sh.wasm` is 83,485 bytes and only `sh` links `src/sh/`; the only budget it
-spends is `rootfs/ = 1048576` against a 552,965-byte tree.
+process binary. `sh.wasm` is 104,292 bytes and only `sh` links `src/sh/`; the only budget it
+spends is `rootfs/ = 1048576` against a 588,594-byte tree.
 
 **And no syscall changes.** Everything scripting needs — pipe, spawn, wait, open, list, stat,
 chdir, getpid — is already in the §4.3 table. That is the concrete proof of the note above.
@@ -54,7 +55,7 @@ Six things in the v7 set do not exist in Braam and must be decided rather than p
 | A compound command in the background — `( … ) &`, `while … done &` | Backgrounding means the shell keeps running while the group runs, and nothing in a process can wait for a sibling task (`Channel::park_sender` panics rather than lose a wakeup). | **Refuse it**: `cannot run a compound command in the background`. `cmd &` on a simple pipeline is unaffected. |
 | `exec cmd` replacing the image | A process is a wasm instance in a worker; there is no re-instantiate-in-place, and `spawn` makes a new pid. | `exec` with **no** command makes its redirections permanent on the shell — that works exactly, and is half of what `exec` is for. `exec cmd` spawns, waits, and exits with the child's status. |
 | `#!` scripts | `exec_meta` in [../user/exec.cpp](../user/exec.cpp) requires `\0asm` plus a `braam` custom section with `PROC_ABI == 9`. A text file can never be exec'd. | `sh file` and `sh < file` only. No `./script.sh`. |
-| `export` reaching a child | There is no environment in the wasm ABI. | `export` records the intent, honoured by `.`, functions and `eval` — same process. Nothing crosses a spawn. The alternative is `PROC_ABI == 10` across `sysabi.h`, `syscall.cpp`, `exec.cpp`, `rt.h`, `web/proc.js`, System_Calls.md and `run.mjs` — a milestone of its own with no consumer, since no program in `/bin` reads an environment and there is no `PATH`, `HOME` or `TERM` to carry. |
+| `export` reaching a child | There is no environment in the wasm ABI. | `export` records the intent, honoured by `.`, functions and `eval` — same process. Taking the name cost `/bin/export` its own, which is now `save`. Nothing crosses a spawn. The alternative is `PROC_ABI == 10` across `sysabi.h`, `syscall.cpp`, `exec.cpp`, `rt.h`, `web/proc.js`, System_Calls.md and `run.mjs` — a milestone of its own with no consumer, since no program in `/bin` reads an environment and there is no `PATH`, `HOME` or `TERM` to carry. |
 | `trap … <signal>` | There are no signals, and `CancelState::cancelled` ([../kernel/sched.h](../kernel/sched.h)) is a **sticky** bool: once ^C sets it, every subsequent await returns `Err(Cancelled)` at once. | `trap … 0` (EXIT) works on any normal exit. `trap … 2` (INT) works in an **interactive** shell, where ^C is an ordinary key and the shell was never cancelled — it fires when a stage reports 130. In a *script* shell the process itself is cancelled, so the handler could neither spawn nor write: accepted, never fires. `trap '' INT` (ignore) is impossible outright. |
 
 Two further gaps this work **creates** and must record:
@@ -80,7 +81,6 @@ moves to Release_Notes.md when the stage lands and this section is deleted.
 
 | # | Stage | Days |
 |---|---|---|
-| S1 | Variables and `$` | 2.5 |
 | S2 | Lists and the node arena | 3.0 |
 | S3 | Control flow | 2.0 |
 | S4 | Globbing and `case` | 2.0 |
@@ -91,52 +91,9 @@ moves to Release_Notes.md when the stage lands and this section is deleted.
 | S9 | Entry points | 1.0 |
 | S10 | Integration, docs, budget | 2.0 |
 
-**21 days, call it 24 — five working weeks.** The two places it will go over are the
+**18.5 days, call it 21 — four working weeks.** The two places it will go over are the
 capture/deadlock reasoning in S5 and the here-doc/fd bookkeeping in S7. A
-minimum-credible slice (S1–S3, plus `test` and `sh file`) is **~9 days** and is most of the utility.
-
-### S1. Variables and `$`
-
-**Scope.** A new `var.{h,cpp}`: the variable table, assignment as a word the parser recognises,
-`$x` and `${x}`, the `${x-y}` `${x=y}` `${x?y}` `${x+y}` family, the specials `$?` `$$` `$#`
-`$0`–`$9` `$*` `$@` `$!`, `IFS`, and the `set` / `shift` / `unset` / `export` / `readonly`
-builtins. `$` expands inside `"…"` and not inside `'…'`, which is the whole reason the quotes
-survive the parse.
-
-**And field splitting, which the first stage deferred.** `expand_word` pushes exactly one field
-today and says so. That was right: a lexer word is already one field, because the lexer split
-the line on unquoted whitespace, and nothing could split further until `$` existed to expand
-into a separator. It exists now, so splitting against `IFS` lands here. Split **during** the
-walk, not after it — we know whether a byte came from an unquoted expansion at the moment we
-append it, and after the fact we would have to consult the mask to find out. That is what keeps
-the mask needed only by the glob matcher and by `case`, and keeps it scratch, discarded with the
-field.
-
-**The invariant this stage must add: `Field` cannot express the empty quoted word.** `x=""; echo
-"$x"` must produce one empty argument, and `echo $x` must produce none. Both are a zero-length
-`text` with a zero-length `mark`, so the out-of-band form has nowhere to put the distinction —
-this is exactly what v7 spends its lone-`QESC` on and what the parallel-array form gives up.
-Harmless today only because one field is always pushed. So `Field` gains a flag (a `bool quoted`
-meaning "quoting made this field exist"), set when a quoted run contributed to it, and the
-splitter keeps a zero-length field only when the flag is set. Adding it is a one-line change to
-[expand.h](expand.h) and one to the `'` and `"` arms; forgetting it is a bug that only appears
-once something can expand to nothing.
-
-**Files.** new `var.{h,cpp}`; [expand.h](expand.h), [expand.cpp](expand.cpp) (splitting, the
-flag, the `$` walk); [tokenize.cpp](tokenize.cpp) (`$` and `${…}` are word characters already,
-but `${` must not end a word); [job.cpp](job.cpp) (`Run` already holds a `Vec<Field>` per stage,
-so N fields per raw word need no new layout); `builtin/` and `builtin/table.cpp` for the five
-new builtins.
-
-**Tests.** `test_expand.cpp` — `$x` in and out of quotes, the `${x-y=?+}` family, `$@` vs `$*`
-inside quotes, a non-default `IFS`, **the empty quoted word against the empty unquoted one**,
-and the quoted-metacharacter mask. The pure half takes a "look up a name" callback so none of it
-reaches a syscall; the callbacks are table literals in the test. In
-[../../test/run.mjs](../../test/run.mjs): `x=1; echo $x` and `echo "$nosuch"` producing an empty
-line rather than none.
-
-**Done when** a variable set at the prompt survives to the next command, `"$x"` and `$x` differ
-on the empty value, and `expand.cpp` still links into `tests.wasm`.
+minimum-credible slice (S2–S3, plus `test` and `sh file`) is **~7 days** and is most of the utility.
 
 ### S2. Lists and the node arena
 
@@ -432,17 +389,17 @@ budget change.
 
 ### Size
 
-Calibrated against the existing binary rather than guessed per stage: `sh.wasm` is 83,485 bytes
-over 1,984 lines, less the 4,574-byte baseline `true` costs — ≈40 bytes of wasm per line. Pure
-logic (~1,600 more lines of parse/expand/match/var) runs nearer 25 B/line, coroutine-heavy code
-(~1,300 lines of job/builtins/shell) nearer 45, plus ~45 new coroutine ramps at ~300 bytes.
+Calibrated against the binary rather than guessed per stage, and re-measured after S1: the
+first stage cost 20,807 bytes over 1,017 new lines — ≈20 bytes of wasm per line, since it is
+nearly all pure logic. Coroutine-heavy code (job, builtins, shell) runs nearer 45, plus ~45 new
+coroutine ramps at ~300 bytes.
 
-- **`sh.wasm`: 83,485 → ~195,000 bytes, 2.3×.**
-- **Staging tree: 552,965 → ~665,000 of 1,048,576 — 63%.** No budget change needed.
+- **`sh.wasm`: 104,292 → ~185,000 bytes.**
+- **Staging tree: 588,594 → ~670,000 of 1,048,576 — 64%.** No budget change needed.
 - **`kernel.wasm` does not move at all.**
 
-~2,900 new/changed lines of shell C++ (`src/sh/` 1,984 → ~4,900), ~1,000 of `test/unit/`, ~300 of
-`test/run.mjs`, ~420 of documentation. The v7 reference is 3,710 lines of C for the same feature
+~1,900 more lines of shell C++ (`src/sh/` 3,001 → ~4,900), ~800 of `test/unit/`, ~250 of
+`test/run.mjs`, ~380 of documentation. The v7 reference is 3,710 lines of C for the same feature
 set while doing its own memory management, `setjmp` control flow and string library.
 
 ---
@@ -496,10 +453,9 @@ M7's depth.
   was already there, why a here-doc is a file and not a pipe, why `test` is a builtin, why the
   empty quoted word needed a flag the mask could not carry, the six impossibilities, and that
   **the syscall ABI did not change**.
-- **[CLAUDE.md](../../CLAUDE.md)** — the "Known gaps" bullet "no variables, no `-c`, no globbing
-  and no scripts beyond `sh -s`" is replaced by the residual gaps: no subshell isolation, no
-  compound in the background, no environment therefore no working `export`, no `#!`, no `trap`
-  that can ignore `^C`, no interrupting an all-builtin loop.
+- **[CLAUDE.md](../../CLAUDE.md)** — the "Known gaps" bullet, which S1 has already begun, gains
+  the rest of the residual gaps: no subshell isolation, no compound in the background, no `#!`,
+  no `trap` that can ignore `^C`, no interrupting an all-builtin loop.
 - **[Programming_Manual.md](../../doc/Programming_Manual.md)** — a short section on writing a
   script, since that becomes something an SDK user can do.
 - New builtins get their one-line usage in `builtin/table.cpp`; `rootfs/share/help` only decorates

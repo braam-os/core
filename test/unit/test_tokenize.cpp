@@ -111,7 +111,17 @@ void test_tokenize()
     CHECK(lexed("echo 2") == "{echo}{2}");
 
     // An unclosed quote, or a line ending in a backslash, is an error.
+    // A `${…}` is one piece of the word: what is in it is the expander's, so a
+    // separator in there does not end the word.
+    CHECK(lexed("echo ${x}") == "{echo}{${x}}");
+    CHECK(lexed("echo ${x-a b}") == "{echo}{${x-a b}}");
+    CHECK(lexed("echo ${x-a|b}") == "{echo}{${x-a|b}}");
+    CHECK(lexed("echo ${x-${y}}z") == "{echo}{${x-${y}}z}");
+    CHECK(lexed("echo ${x-'}'}") == "{echo}{${x-'}'}}");
+    CHECK(lexed("echo $x|b") == "{echo}{$x}|{b}");
+
     CHECK(lexed("echo 'a") == "{echo}!");
     CHECK(lexed("echo \"a") == "{echo}!");
     CHECK(lexed("echo a\\") == "{echo}!");
+    CHECK(lexed("echo ${x") == "{echo}!");
 }

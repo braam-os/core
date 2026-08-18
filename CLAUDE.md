@@ -343,7 +343,10 @@ change to argue in Concept.md first.
 - **`kill <pid>` is gone; `kill %n` is not.** `Sys::Kill` refuses anything not a child of the caller.
 - **No `/proc/jobs`.** The job table is the shell process's own memory. The stages are still tasks,
   so `/proc/<pid>` lists them — which is how the shell notices a background job finished.
-- **The shell has no variables, no `-c`, no globbing and no scripts beyond `sh -s`.**
+- **The shell has no `-c`, no globbing and no scripts beyond `sh -s`.** It has variables now,
+  but **`export` reaches no child**: there is no environment anywhere in the wasm ABI, so it
+  records an intent that only this process can honour. `/bin/export` was renamed `save` to
+  give the builtin its name.
 - **Two fidelity losses the worker costs (§4.3):** a binary that will not instantiate reads as a
   crash rather than a refusal, and `Sys::Now` is relative (nothing calls `proc_now()`).
 - **A host that cannot make a nested worker cannot run anything**, and says so once a second rather

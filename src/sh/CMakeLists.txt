@@ -9,16 +9,20 @@
 add_library(braam_sh STATIC
     builtin/cd.cpp
     builtin/exit.cpp
+    builtin/export.cpp
     builtin/fg.cpp
     builtin/help.cpp
     builtin/jobs.cpp
     builtin/kill.cpp
+    builtin/set.cpp
     builtin/table.cpp
+    builtin/unset.cpp
     edit.cpp
     expand.cpp
     job.cpp
     parse.cpp
     shell.cpp
-    tokenize.cpp)
+    tokenize.cpp
+    var.cpp)
 
 target_link_libraries(braam_sh PUBLIC braam_proc braam_flags)

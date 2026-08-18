@@ -845,7 +845,7 @@ the `Fs` above, a syscall or a `/proc` write to reach it, and an answer to what 
 should see — the namespace question §5.1 leaves open.
 
 The universally available escape hatch is the boring one, and it is built: `<input type="file">`
-for import and a Blob download for export, as `/import` and the `import`/`export` commands.
+for import and a Blob download for export, as `/import` and the `import`/`save` commands.
 Both live on the **page** rather than in the worker, because a file picker and a download need
 the DOM. The picker opens inside the transient activation of the keystroke that ran the command,
 which is why `import` works without a button of its own.
@@ -968,7 +968,7 @@ frame buffer.
 ### 8.5 Safari's 7-day eviction is a real hazard
 With cross-site tracking prevention on, an origin that sees no user interaction for seven days
 of browser use has all script-created data deleted. Mitigations: request persistence, encourage
-Add to Home Screen (installed web apps are exempt from the ITP timer), and make `export` easy.
+Add to Home Screen (installed web apps are exempt from the ITP timer), and make `save` easy.
 
 ---
 

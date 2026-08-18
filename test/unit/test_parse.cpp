@@ -23,8 +23,8 @@ Str name_of(Redir k)
     return "?";
 }
 
-// Renders a parsed pipeline: argv words in braces, redirections as operator
-// plus target, stages separated by '|'.
+// Renders a parsed pipeline: an assignment prefix in brackets, argv words in
+// braces, redirections as operator plus target, stages separated by '|'.
 Str shape(Str line)
 {
     Pipeline pl;
@@ -45,6 +45,12 @@ Str shape(Str line)
     for (usize c = 0; c < pl.size(); c++) {
         if (c)
             put("|");
+        Args v = pl.assigns(c);
+        for (usize i = 0; i < v.size(); i++) {
+            put("[");
+            put(v[i]);
+            put("]");
+        }
         Args a = pl.args(c);
         for (usize i = 0; i < a.size(); i++) {
             put("{");
@@ -87,13 +93,27 @@ void test_parse()
     CHECK(shape("echo 'a b' c") == "{echo}{'a b'}{c}");
     CHECK(shape("echo \"a|b\"") == "{echo}{\"a|b\"}");
 
+    // An assignment is a word the parser knows: leading, and on the raw text,
+    // so a name is what a `$` would take.
+    CHECK(shape("x=1 ls") == "[x=1]{ls}");
+    CHECK(shape("x=1 y=2 ls a") == "[x=1][y=2]{ls}{a}");
+    CHECK(shape("x=1") == "[x=1]");
+    CHECK(shape("x= ls") == "[x=]{ls}");
+    CHECK(shape("a2=1 ls") == "[a2=1]{ls}");
+    CHECK(shape("_x=1 ls") == "[_x=1]{ls}");
+    CHECK(shape("ls x=1") == "{ls}{x=1}");   // not leading
+    CHECK(shape("2a=1 ls") == "{2a=1}{ls}"); // not a name
+    CHECK(shape("=1 ls") == "{=1}{ls}");
+    CHECK(shape("x=1 | y=2") == "[x=1]|[y=2]");
+    CHECK(shape("x=1 > f") == "[x=1]>{f}");
+
     CHECK(shape("| ls") == "!syntax error near '|'");
     CHECK(shape("ls |") == "!syntax error: expected a command");
     CHECK(shape("ls | | wc") == "!syntax error near '|'");
     CHECK(shape("ls >") == "!syntax error: expected a file name");
     CHECK(shape("ls > | wc") == "!syntax error: expected a file name");
     CHECK(shape("> f") == "!syntax error: expected a command");
-    CHECK(shape("echo 'a") == "!unterminated quote");
+    CHECK(shape("echo 'a") == "!unterminated quote or ${");
     CHECK(shape("a|b|c|d|e|f|g|h|i") == "!too many commands in a pipeline");
 
     // `&` ends the line, and it is the pipeline that carries the flag rather
