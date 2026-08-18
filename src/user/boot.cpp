@@ -50,7 +50,10 @@ Task<bool> ask(Str question, const u32 &pid)
     line.put("braam: ").put(question).put(" [y/N] ");
     if (screen().cursor_x != 0)
         screen_newline();
+    // Bright white for the question, back to the default for the answer.
+    screen_style(COLOR_WHITE | COLOR_BRIGHT, COLOR_BLACK, 0);
     screen_write(line.str());
+    screen_style(COLOR_WHITE, COLOR_BLACK, 0);
 
     KeyInput keys(pid);
     if (!keys.ok()) {
