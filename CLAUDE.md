@@ -34,6 +34,12 @@ the three CTest cases pass.
   `src/kernel/sysabi.h` or `web/proc.js` must keep it true.
 - **[doc/Programming_Manual.md](doc/Programming_Manual.md)** is the SDK's
   user-facing guide.
+- **[doc/Package_Management.md](doc/Package_Management.md)** is the policy
+  `/bin/pkg` must satisfy, written before the code: what a package has to prove,
+  and how the signing keys are held. It is *derived* from nothing — it states
+  policy Concept.md does not carry — so a change to the trust model, the roles,
+  the algorithms or the verification order belongs there first. `/bin/pkg` does
+  not exist yet.
 
 ## Build
 

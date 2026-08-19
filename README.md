@@ -170,6 +170,8 @@ installs.
   to the kernel.
 - [doc/Programming_Manual.md](doc/Programming_Manual.md) is for writing a
   program of your own, outside this repository.
+- [doc/Package_Management.md](doc/Package_Management.md) is the policy for
+  signing and checking packages, and for looking after the keys.
 
 ## Status
 

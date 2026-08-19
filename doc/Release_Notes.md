@@ -7,6 +7,98 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## A package policy, written before the package manager
+
+`/bin/pkg` will be the first thing in the system that fetches bytes from
+somewhere else and writes them into the store. `curl` fetches and prints; the
+boot unpack writes, but only what the origin served. Nothing in the tree has
+ever had to decide whether to believe a stranger.
+
+**The policy went first because the expensive decisions are the ones that cannot
+be taken back.** A key generated on a networked machine is never afterwards an
+offline key, and a repository trusted once without a signature cannot be
+un-trusted retroactively. Writing `pkg` first and adding signatures afterwards
+would have meant a key ceremony performed under pressure, which is the same as
+no ceremony. [Package_Management.md](Package_Management.md) is the result.
+
+**Two roles, not TUF's four.** TUF's *snapshot* role stops a mix of metadata
+files that never coexisted and its *timestamp* role bounds replay without
+forcing the larger, rarely re-signed files to expire quickly. Both answer
+problems a busy multi-writer repository has. There is one index here, published
+whole by one writer, and it carries its own version and its own expiry — so both
+properties come from the index itself and a second role would sign a restatement
+of it. What that costs is written down rather than hidden: there is no
+arrangement in which an attacker must steal two independently held online keys,
+and one expiry now sets both the re-signing interval and the replay window. PEP
+480's per-author keys arrive as a delegation from the index role, which is a
+change to what the index carries and not a new trust anchor — that is the
+property that makes the reduction reversible, and it is why it was acceptable.
+
+**The verifier is allowed to be the host's, and that is not a concession.**
+The first instinct was SHA-256 and Ed25519 in freestanding C++, linked into
+`pkg.wasm`: self-contained, no ABI change, no browser variance, and about 15 KiB
+against the archive's budget rather than the kernel's. It was rejected on the
+observation that **the host is already inside the trusted base without
+qualification.** `web/` hands the kernel every byte of `kernel.wasm`, every byte
+of `rootfs.zip` and every process image, and only JS can call a process's
+exports (§4.3). A host willing to lie about `crypto.subtle.verify` has the
+shorter path of supplying a different `pkg.wasm` — so a wasm verifier would be
+guarding a door in a wall that is not there, at the price of two cryptographic
+implementations in the tree to keep correct. `crypto.subtle` returns promises,
+so it is §2.2's convention already: enum values on each side of `host_svc`, and
+the six-import surface `test/run.mjs` asserts does not move.
+
+**A missing algorithm refuses rather than degrades.** WebCrypto's Ed25519
+arrived much later in Chrome than in Safari or Firefox, so the availability
+question is real. The answer is §5.3's: a capability that is absent is reported,
+not worked around. A `pkg` that installs without checking is not a weaker `pkg`;
+it is `curl` with extra steps, and the system has `curl`. For the same reason
+there is no `--force`, `--insecure` or `--no-verify` in any form — a flag that
+skips the check is the flag an attacker's instructions tell the user to pass.
+
+**The anchor lives in `rootfs.zip`, which turns an accident into the recovery
+path.** Every signature chain terminates in something believed without proof,
+and PEP 458's answer is that the package manager ships the root metadata. Here
+the archive is already that: built from the tree, packed by `tools/pack.py`,
+served from the origin over the same TLS as `kernel.wasm`. Putting the anchor in
+`/share/pkg/` means the boot unpack — which deletes each top-level directory the
+archive carries before rewriting it — **re-pins it at every version change**, so
+it cannot be poisoned in the store for good. §5.2's "the archive, not the store,
+is what the system recovers from" turned out to cover the trust anchor too, and
+it is what makes the worst case survivable: replacing an anchor out of band
+means cutting a release, and releases already exist. The same behaviour is why a
+*locally* trusted key under `/share` is wiped, which is recorded as a cost.
+
+**Packages are not signed; the index is.** apk v2 signs each `.apk`
+individually. TUF names targets by hash from signed metadata. The second was
+chosen for revocation: withdrawing a package costs a re-signed index and no key
+operation at all, whereas a per-package signature has to be reasoned about for
+as long as a copy of the file exists anywhere. Signing the set rather than each
+entry is what makes "these versions, together" the thing attested — otherwise an
+attacker can pair a real signature for a new package with a real signature for
+an old one, in a combination the publisher never produced.
+
+**A rejected third option was apk's trusted-key directory** — a folder of public
+keys, trust meaning presence in it. It is much less work and it was turned down
+for what it lacks rather than what it has: no version and no expiry anywhere,
+so neither rollback nor freeze is detectable, and an attacker who can answer for
+the network can serve last year's index for ever.
+
+**What the document deliberately does not claim.** `/bin` is writable, OPFS
+stores no per-file mode, and `rm /bin/sh` already works, so the property on
+offer is "`pkg` installs only what it checked" and not "only checked code runs".
+The
+second needs a privilege boundary the system does not have, and a policy that
+implied it would be worse than one that admits it. The other admissions are in
+that document's last section: nothing re-checks the store after install, a
+version change erases what `pkg` put in `/bin`, the wall clock is the user's,
+and a repository that does not send `Access-Control-Allow-Origin` is unreachable
+rather than insecure.
+
+Nothing is built. Concept.md §6 gains the service as **unbuilt**, and the next
+commit is `pkg`'s design — which should need no decision this policy declined to
+make.
+
 ## Files have a modification time
 
 The filesystem stored `{kind, size}` and nothing else. The section on `ls`,

@@ -9,12 +9,15 @@ do. It changes only when a design decision changes, in the same commit as the
 code. Its section numbers are cited from source comments — amend a section, do
 not renumber it.
 
-The other three documents are subordinate to this one.
+The other documents are subordinate to this one.
 [Release_Notes.md](Release_Notes.md) says *why* the code is the way it is, and
 holds the milestones M0–M9 with the criteria they were accepted against.
 [System_Calls.md](System_Calls.md) walks §4.3's kernel↔process mechanism end to
-end, with the operation table in full.
+end, with the operation table in full. [Shell.md](Shell.md) is the manual for
+`/bin/sh` and §4.5's language.
 [Programming_Manual.md](Programming_Manual.md) is the SDK's guide.
+[Package_Management.md](Package_Management.md) is the policy a package manager
+must satisfy: what a package must prove, and how the signing keys are held.
 
 ---
 
@@ -1183,6 +1186,13 @@ an enum value on each side.
   host, which is this convention exactly, so they are operations here rather
   than an interface of their own; `aux` in the request record is the pid they
   name.
+- **A digest and a signature check** — `crypto.subtle`, for the hash of a
+  downloaded package and the signature over the index that names it.
+  **Unbuilt**: nothing needs it until `/bin/pkg` exists, and what it must
+  guarantee is [Package_Management.md](Package_Management.md). It belongs here
+  and not in wasm because WebCrypto is a promise, so it is this convention
+  already — and because the host is inside the trusted base unconditionally, a
+  verifier there widens nothing.
 
 Every one of them is a promise on the host side, so every one takes a wake token
 and §2.2 is untouched. The wall clock is the near miss — `Date.now()` is as
@@ -1220,7 +1230,9 @@ headers.
 doc/Concept.md          this document
 doc/Release_Notes.md    reasoning behind the code, and M0–M9's acceptance criteria
 doc/System_Calls.md     the kernel↔process mechanism, end to end (§4.3)
+doc/Shell.md            the manual for /bin/sh: grammar, expansions, builtins, jobs (§4.5)
 doc/Programming_Manual.md  the SDK's guide
+doc/Package_Management.md  package signing and key-management policy (§6)
 Makefile                wrapper: all, run, serve, install, release, clean
 CMakeLists.txt          the build
 cmake/                  the wasm32-unknown-unknown toolchain file, BraamProgram.cmake
