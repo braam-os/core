@@ -81,7 +81,8 @@ struct SchedStats {
 SchedStats sched_stats();
 
 // `name` is stored as a view, so it must outlive the task: a literal, or a
-// stage's argv[0] out of the job's word store — never a local.
+// stage's argv[0] out of the job's word store — never a local. Returns 0 on
+// failure, an exhausted pid space among them.
 u32 sched_spawn(Task<i32> t, Str name = {});
 void sched_cancel(u32 pid);
 bool sched_alive(u32 pid);

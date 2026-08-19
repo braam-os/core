@@ -7,6 +7,51 @@ of the two needs amending.
 
 ---
 
+## The pid counter saturates rather than wraps
+
+`sched_spawn` refuses to spawn once `next_pid` has come back round to 0, instead of handing that
+0 out and carrying on.
+
+Nothing reaches this. The counter is a `u32` and only a spawn advances it; a page would have to
+run for days doing nothing but parking syscalls. But it moves faster than it reads: since each
+parked syscall gets a scheduler job of its own, the counter advances at *syscall* rate rather
+than at process rate, and bulk I/O through a pipeline burns a pid per `SYS_CHUNK` per stage —
+about 1,500 for a quarter of a megabyte through three processes. Fast-path calls (`sysfast`) park
+nothing and cost none. What used to be "one pid per program you ran" is now a number with a
+plausible growth rate behind it, which is reason enough to say what happens at the end of it.
+
+The wrap would have been silent and would have handed out the one value the whole system reads as
+*nobody*: `sched_spawn`'s failure return, `tty_keys_owner()`'s "unclaimed", `SYS_WAIT_ANY`,
+`Fg(0)`, `link.pid = 0`. A `Proc` whose child was pid 0 would wait on a child it could not name.
+
+Two ways to not wrap. Restart the counter at 1 and skip pids still in use, which is what a system
+with a small pid space does — but pids are never reused here, and a good deal depends on that: a
+process's exit status is recorded on its parent's record by a destructor that finds the parent by
+pid, long after the parent might have been replaced by a namesake. Or stop. Stopping costs one
+comparison, needs no free-pid scan, and lands on a path every caller already handles, since a
+spawn can already fail for want of memory. The pid space is a resource like any other and running
+out of it is an out-of-resources failure, not a wrap.
+
+Not sixteen bits with reuse, which is the other way to never wrap. Sixteen bits is about half a
+second of piped I/O at the rate above, so recycling would be the steady state rather than an edge,
+and three places would then be wrong within seconds of each other: the shell reaps a background
+job by asking whether `/proc/<pid>` still exists (`alive` in `job.cpp`) and would find a stranger
+and report its job as still running; `console_fg_has(pid)` compares bare pids, so `^C` would aim
+at whatever inherited the number; and the destructor that reports an exit status calls
+`proc_find(parent)` deliberately *after* the parent may be gone, relying on that lookup failing.
+All three are designs in which a failed lookup means *gone*, and non-reuse is what makes it mean
+that. Skipping pids that are currently live does not help — every one of those is a pid held
+across the death of the task it named, which is exactly what skipping cannot see. Nothing stores
+a pid narrowly (`sysabi.h` is `u32` throughout) so the narrower space buys no memory either.
+
+`ps` computes the PID and PPID column widths from the table it just read, instead of the constant
+5. The counter now advances per parked syscall, so a session passes 99,999 in about half a minute
+of piped I/O, and `put_right` writes anything wider than its column whole — every row after that
+would shift right and the table would stop being one. The width is the widest value **plus one**:
+the two columns are adjacent with nothing but their padding between them, so at exactly full
+width `100070` and `100068` print as `100070100068`. The old constant hid that by being one wider
+than any pid it ever saw.
+
 ## WORKER was the CWD column saying it twice
 
 `ps` has ten columns rather than eleven and `/proc/tasks` twelve fields rather than thirteen: the

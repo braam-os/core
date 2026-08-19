@@ -17,9 +17,26 @@ namespace {
 
 // A row inside eighty columns, the cwd taking whatever is left. NAME holds the
 // longest a syscall server carries — a binary's path, /bin/timeout — and one
-// space.
+// space. The two pid columns are minimums, widened to fit.
 constexpr usize W_PID = 5, W_PPID = 5, W_NAME = 13, W_STAT = 5;
 constexpr usize W_WAIT = 6, W_CALLS = 6, W_FDS = 4, W_MEM = 6, W_AGE = 8;
+
+// The two pid columns, over every row: the widest value plus one, since nothing
+// but the padding separates them.
+void pid_widths(Str rest, usize &w_pid, usize &w_ppid)
+{
+    Str line;
+    while (next_line(rest, line)) {
+        Str pid = next_field(line);
+        for (usize i = 0; i < 4; i++) // name, state, wait, flags
+            next_field(line);
+        Str ppid = next_field(line);
+        if (pid.size() + 1 > w_pid)
+            w_pid = pid.size() + 1;
+        if (ppid != "0" && ppid.size() + 1 > w_ppid) // 0 prints as a dash
+            w_ppid = ppid.size() + 1;
+    }
+}
 
 // R ready, S waiting, C cancelled — then what the task holds, which /proc has
 // already packed into a word of its own.
@@ -121,8 +138,11 @@ Task<i32> proc_main(Args args)
         co_return 1;
     }
 
+    usize w_pid = W_PID, w_ppid = W_PPID;
+    pid_widths(r.value().str(), w_pid, w_ppid);
+
     Buf<128> head;
-    head.put_right("PID", W_PID).put_right("PPID", W_PPID).put(' ');
+    head.put_right("PID", w_pid).put_right("PPID", w_ppid).put(' ');
     head.put_left("NAME", W_NAME).put_left("STAT", W_STAT);
     head.put_left("WAIT", W_WAIT);
     head.put_right("CALLS", W_CALLS).put_right("FDS", W_FDS);
@@ -155,8 +175,8 @@ Task<i32> proc_main(Args args)
         put_stat(stat, state, flags);
 
         Buf<128> out;
-        out.put_right(pid, W_PID);
-        put_count(out, ppid, ppid != "0", W_PPID);
+        out.put_right(pid, w_pid);
+        put_count(out, ppid, ppid != "0", w_ppid);
         out.put(' ');
         put_name(out, name, W_NAME);
         out.put_left(stat.str(), W_STAT);

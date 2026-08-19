@@ -149,7 +149,12 @@ u32 sched_spawn(Task<i32> t, Str name)
         return 0;
 
     Sched &s = sched();
-    Job *j   = static_cast<Job *>(heap_alloc(sizeof(Job)));
+
+    // The counter saturates at 0: an exhausted pid space is a spawn failure.
+    if (!s.next_pid)
+        return 0;
+
+    Job *j = static_cast<Job *>(heap_alloc(sizeof(Job)));
     if (!j)
         return 0;
     new (j) Job();
