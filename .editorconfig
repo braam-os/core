@@ -1,0 +1,11 @@
+# https://editorconfig.org — the C++ line limit lives in .clang-format.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+
+[*.md]
+indent_style = space
+max_line_length = 80
