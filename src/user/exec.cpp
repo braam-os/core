@@ -81,7 +81,6 @@ bool argv_payload(String &out, Str lead, Args args, Str env)
 
 Task<void> say(Stream err, Str who, Str what)
 {
-    co_await err.write("braam: ");
     co_await err.write(who);
     co_await err.write(": ");
     co_await err.write(what);
@@ -276,7 +275,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, Str env, b
     Proc *p = heap_new<Proc>(exe.pid, io);
     if (!p || !proc_add(p)) {
         heap_delete(p);
-        co_await io.err.write("braam: out of memory\n");
+        co_await io.err.write("out of memory\n");
         co_return 1;
     }
     p->depth     = exe.depth;
@@ -285,7 +284,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, Str env, b
     if (!p->cwd.assign(cwd.empty() ? vfs_cwd() : cwd) || !p->env.assign(env)) {
         proc_remove(p);
         proc_release(p);
-        co_await io.err.write("braam: out of memory\n");
+        co_await io.err.write("out of memory\n");
         co_return 1;
     }
 

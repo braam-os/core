@@ -208,6 +208,5 @@ void tree_hold(const Tree *t);
 void tree_release(const Tree *t);
 
 // Parses one text, which may be several lines. An empty one yields a frozen
-// tree whose root is 0. On failure `err.message` names the problem, ready to
-// print after "braam: ".
+// tree whose root is 0. On failure `err.message` names the problem, ready to print.
 Result<void> parse(Str line, Tree &out, ParseErr &err);

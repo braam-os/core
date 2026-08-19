@@ -433,7 +433,7 @@ Task<void> trace(const Run *r, usize n, u32 fd)
 Task<void> say(u32 fd, Str what)
 {
     String line;
-    if (line.assign("braam: ") && line.append(what) && line.push('\n'))
+    if (line.assign(what) && line.push('\n'))
         if (Task<Result<void>> t = write_all(fd, line.str()))
             co_await t;
 }
@@ -441,8 +441,7 @@ Task<void> say(u32 fd, Str what)
 Task<void> say2(u32 fd, Str what, Str why)
 {
     String line;
-    if (line.assign("braam: ") && line.append(what) && line.append(": ") && line.append(why) &&
-        line.push('\n'))
+    if (line.assign(what) && line.append(": ") && line.append(why) && line.push('\n'))
         if (Task<Result<void>> t = write_all(fd, line.str()))
             co_await t;
 }
@@ -1984,7 +1983,7 @@ Task<i32> sh_exec(Args args, ShIo io)
 Task<i32> sh_source(Str path, ShIo io)
 {
     if (!g_ctx) {
-        co_await write_all(io.err, "braam: . outside a command\n");
+        co_await write_all(io.err, ". outside a command\n");
         co_return 1;
     }
 
@@ -1992,7 +1991,7 @@ Task<i32> sh_source(Str path, ShIo io)
     if (Task<Result<String>> t = read_file(path))
         text = co_await t;
     if (text.is_err()) {
-        if (Task<void> e = errln("braam", path, text.error()))
+        if (Task<void> e = errln(path, Str(), text.error()))
             co_await e;
         co_return text.error() == Error::NotFound ? 127 : 1;
     }
@@ -2004,7 +2003,7 @@ Task<i32> sh_source(Str path, ShIo io)
 Task<i32> sh_eval(Args args, ShIo io)
 {
     if (!g_ctx) {
-        co_await write_all(io.err, "braam: eval outside a command\n");
+        co_await write_all(io.err, "eval outside a command\n");
         co_return 1;
     }
 

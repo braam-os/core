@@ -538,7 +538,7 @@ if (mode === "--kernel") {
         fail(`the $ after a status is colour ${cell(s, dollar, s.cursor_y).fg}, expected white`);
 
     s = submit("nosuch", 1070);
-    if (!rows(s).some((line) => line.startsWith("braam: nosuch: not found")))
+    if (!rows(s).some((line) => line.startsWith("nosuch: not found")))
         fail(`an unknown command said nothing: ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes(prompt(127)))
         fail(`an unknown command left ${row(s, s.cursor_y)}, expected ${prompt(127)}`);
@@ -690,7 +690,7 @@ if (mode === "--kernel") {
     vshows("echo $x", "one");
     vshows("echo ${x}s", "ones");
     vshows("echo ${nosuch-alt}", "alt");
-    vshows("echo ${nosuch?}", "braam: nosuch: parameter not set");
+    vshows("echo ${nosuch?}", "nosuch: parameter not set");
 
     // Empty against absent, in two spaces: `"$x"` is an argument and `$x` is
     // not, which is the whole of the field flag.
@@ -772,7 +772,7 @@ if (mode === "--kernel") {
 
     // readonly bites where export cannot.
     vrun("readonly r=keep");
-    vshows("r=other", "braam: r: cannot be set");
+    vshows("r=other", "r: cannot be set");
     vshows("echo $r", "keep");
     vrun("unset x");
     vshows("echo a $x b", "a b");
@@ -954,7 +954,7 @@ if (mode === "--kernel") {
     // A redirection that cannot be opened stops the command before it runs.
     // /proc is the read-only mount now that the store holds everything else.
     s = submit("echo hi > /proc/uptime", 1174);
-    if (!rows(s).some((line) => line.startsWith("braam: /proc/uptime: ")))
+    if (!rows(s).some((line) => line.startsWith("/proc/uptime: ")))
         fail(`a read-only redirection said nothing: ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes(prompt(1)))
         fail(`a refused redirection left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
@@ -1445,7 +1445,7 @@ if (mode === "--kernel") {
     addr = instance.exports.resize(60, 16);
     run(3000);
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.startsWith("braam: this browser has no OPFS")))
+    if (!rows(s).some((line) => line.startsWith("this browser has no OPFS")))
         fail(`booting without OPFS said nothing: ${JSON.stringify(rows(s))}`);
     if (store.unpacks !== 0)
         fail("a system with no store unpacked into it anyway");
@@ -1876,7 +1876,7 @@ if (mode === "--kernel") {
     // so differently from a name that is not there at all.
     s = submit("clear", 9030);
     s = submit("/share/motd", 9031);
-    if (!rows(s).some((line) => line.startsWith("braam: /share/motd: not executable")))
+    if (!rows(s).some((line) => line.startsWith("/share/motd: not executable")))
         fail(`a non-binary was not refused: ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes(prompt(126)))
         fail(`a non-binary left ${row(s, s.cursor_y)}, expected ${prompt(126)}`);
@@ -2501,7 +2501,7 @@ if (mode === "--kernel") {
     if (run(9075.2) !== -1)
         fail("dropping the workers left the kernel with work to do");
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
+    if (!rows(s).some((line) => line.startsWith("the shell died")))
         fail(`dropping the workers said ${JSON.stringify(rows(s))}`);
     // A bare prompt, not `spin`'s status: the shell that would have printed it
     // died in the same breath, and its replacement has no line to report.
@@ -2568,7 +2568,7 @@ if (mode === "--kernel") {
     run(11078); // the timer fires, the child exits, and the shell steps to collect it
 
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
+    if (!rows(s).some((line) => line.startsWith("the shell died")))
         fail(`a shell whose worker went away said ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt())
         fail(`the replacement shell left ${row(s, s.cursor_y)}, expected a bare prompt`);
@@ -2644,7 +2644,7 @@ if (mode === "--kernel") {
         fail(`the pool holds ${net.proc.pooled()} workers, expected one before the break`);
     net.broken = true;
     s = submit("pwd | cat", 13087);
-    if (!rows(s).some((line) => line.startsWith("braam: /bin/cat: crashed")))
+    if (!rows(s).some((line) => line.startsWith("/bin/cat: crashed")))
         fail(`a worker that never loaded printed ${JSON.stringify(rows(s))}`);
     if (row(s, s.cursor_y) !== prompt(132))
         fail(`a crashed process left ${row(s, s.cursor_y)}, expected ${prompt(132)}`);
@@ -2685,10 +2685,10 @@ if (mode === "--kernel") {
     press("x".codePointAt(0));
     run(13089.5);
     s = descriptor(addr);
-    if (!rows(s).some((line) => line.startsWith("braam: the shell died")))
+    if (!rows(s).some((line) => line.startsWith("the shell died")))
         fail(`losing the workers said ${JSON.stringify(rows(s))}`);
 
-    const WAIT_LINE = "braam: /bin/sh: no worker, retrying";
+    const WAIT_LINE = "/bin/sh: no worker, retrying";
     const waiting = (d) => rows(d).filter((line) => line === WAIT_LINE).length;
     if (waiting(s) !== 1)
         fail(`a host with no worker said ${JSON.stringify(rows(s))}`);
@@ -2780,7 +2780,7 @@ if (mode === "--kernel") {
     cshows("echo $(echo hi | wc)", "1 1 3");
     cshows("echo $(pwd)/x", "/home/x"); // no trailing newline in the value
     cshows("echo $(jobs)done", "done"); // a builtin down the same pipe
-    cshows("echo $(nosuchcmd) after", "braam: nosuchcmd: not found|after");
+    cshows("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
     // The many-writes case: 7,707 bytes is sixteen chunks against eight
@@ -2815,7 +2815,7 @@ if (mode === "--kernel") {
     fshows("f() { echo a; return 3; echo b; }; f", "a");
     fshows("f() { while true; do return 7; done; }; f; echo $?", "7");
     fshows("x=1; f() { x=2; }; f; echo $x", "2"); // not a subshell
-    fshows("f() { echo hi; }; unset -f f; f", "braam: f: not found");
+    fshows("f() { echo hi; }; unset -f f; f", "f: not found");
     fshows("f() { echo hi; }; f | wc", "1 1 3"); // S7 lifted the refusal
     fshows("f() { echo body; }; x=$(f); echo $x", "body"); // through a capture
     fshows("f() { echo $1; }; for i in p q; do f $i; done", "p|q");
@@ -2827,7 +2827,7 @@ if (mode === "--kernel") {
     fshows("return 4; echo still here", "still here"); // outside: a no-op
 
     fshows(". /home/fn/lib.sh; g there", "sourced there");
-    fshows(". /home/fn/nosuch", "braam: /home/fn/nosuch: not found");
+    fshows(". /home/fn/nosuch", "/home/fn/nosuch: not found");
     submit("rm -r /home/fn", (gt += 0.01));
 
     // Redirection completion: here-documents, `>&`, `exec` and the base stdio
@@ -2879,13 +2879,13 @@ if (mode === "--kernel") {
     // A compound may be redirected now, though not yet piped.
     rfile("{ echo a; echo b; } > /home/rd/c", "/home/rd/c", "a|b");
     rfile("for i in p q; do echo $i; done > /home/rd/d", "/home/rd/d", "p|q");
-    rshows("{ echo x; } | wc", "braam: syntax error: a compound command cannot be piped yet");
+    rshows("{ echo x; } | wc", "syntax error: a compound command cannot be piped yet");
 
     // `( … )` runs here and puts back what it moved.
     rshows("(cd /bin; pwd); pwd", "/bin|/home");
     rshows("s=out; (s=in; echo $s); echo $s", "in|out");
     rshows("set -- z; (set -- a b; echo $#); echo $#", "2|1");
-    rshows("(q() { echo n; }); q", "braam: q: not found");
+    rshows("(q() { echo n; }); q", "q: not found");
     // A redefinition inside one is put back too, not just a new name.
     rshows("p() { echo old; }; (p() { echo new; }); p", "old");
     rshows("(exit 3); echo $?", "3");
@@ -2966,7 +2966,7 @@ if (mode === "--kernel") {
     tshows("(set -e; while false; do echo x; done; echo loop)", "loop");
     tshows("(set -eu; echo $-)", "eu");
     tshows("(set -e); echo -$-", "-");
-    tshows("(set -u; echo $nosuch); echo on", "braam: nosuch: parameter not set|on");
+    tshows("(set -u; echo $nosuch); echo on", "nosuch: parameter not set|on");
     tshows("(set -u; echo ${nosuch-ok})", "ok"); // the operators ask first
     tshows("(set -x; echo hi)", "+ echo hi|hi");
     tshows("(set -x; x=1 echo hi)", "+ x=1 echo hi|hi");
@@ -3064,10 +3064,10 @@ if (mode === "--kernel") {
     sshows("sh -z", "usage: sh [-eux] [-s | -c <command> | <file>] [<arg>...]");
     sshows("sh -c", "usage: sh [-eux] [-s | -c <command> | <file>] [<arg>...]");
     // Parsed whole, as `.` is: a syntax error anywhere runs none of it.
-    sshows("sh /home/s9/bad.sh; echo $?", "braam: syntax error: expected 'then'|2");
+    sshows("sh /home/s9/bad.sh; echo $?", "syntax error: expected 'then'|2");
     // ${x?} ends a script, which is what S9 decided and v7 does. The line it
     // is on is the second, so `start` printed and `never` did not.
-    sshows("sh /home/s9/q.sh; echo $?", "start|braam: nosuch: is unset|1");
+    sshows("sh /home/s9/q.sh; echo $?", "start|nosuch: is unset|1");
 
     // A #! file is executable, and the interpreter is what instantiates.
     submit("cd /home/s9", (s9t += 0.01));
@@ -3089,13 +3089,13 @@ if (mode === "--kernel") {
 
     // The refusals. A missing interpreter is 126 and not 127: the file is
     // there, and the interpreter is part of what makes it executable.
-    sshows("./plain.sh; echo $?", "braam: ./plain.sh: not executable|126");
-    sshows("./gone.sh; echo $?", "braam: ./gone.sh: not executable|126");
-    sshows("./nest.sh; echo $?", "braam: ./nest.sh: not executable|126"); // one level only
-    sshows("./nosuch.sh; echo $?", "braam: ./nosuch.sh: not found|127");
+    sshows("./plain.sh; echo $?", "./plain.sh: not executable|126");
+    sshows("./gone.sh; echo $?", "./gone.sh: not executable|126");
+    sshows("./nest.sh; echo $?", "./nest.sh: not executable|126"); // one level only
+    sshows("./nosuch.sh; echo $?", "./nosuch.sh: not found|127");
     // A chain of spawns stops at SYS_PROC_DEPTH; every level above the deepest
     // one returns its status, so the error is printed once.
-    sshows("sh /home/s9/deep.sh; echo $?", "braam: sh: too many processes|126");
+    sshows("sh /home/s9/deep.sh; echo $?", "sh: too many processes|126");
 
     // /proc names the job by the word the caller typed, not by the interpreter
     // the kernel went on to instantiate, so ps, jobs and kill %n still point at
@@ -3226,7 +3226,7 @@ if (mode === "--kernel") {
         fail(`the list before exit printed ${JSON.stringify(rows(s))}`);
     if (rows(s).includes("never"))
         fail("a command ran after exit on the same line");
-    if (!rows(s).some((line) => line.startsWith("braam: the shell exited")))
+    if (!rows(s).some((line) => line.startsWith("the shell exited")))
         fail(`exit said nothing: ${JSON.stringify(rows(s))}`);
     s = submit("echo after", 14499);
     if (rows(s).includes("after"))

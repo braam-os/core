@@ -436,7 +436,7 @@ $ x=1; export x; sh -c 'echo $x'
 $ set -- p q; echo $# $2
 2 q
 $ readonly r=keep; r=other
-braam: r: cannot be set
+r: cannot be set
 ```
 
 ---
@@ -739,8 +739,8 @@ trap -- 'echo bye' 0
 crosses a process boundary, so a stage reporting 130 stops the rest of the text — and a program
 that exits 130 of its own accord does the same, which is the price of having no other channel.
 
-The runtime's own diagnostics are `braam: <what>` and `braam: <what>: <why>`; a builtin's are
-`<name>: <what>: <why>`.
+The runtime's own diagnostics are `<what>` and `<what>: <why>`; a builtin's are
+`<name>: <what>: <why>`. Nothing is prefixed with the system's name: everything here is Braam.
 
 A failed expansion ends a **non-interactive** shell rather than letting a script run past a
 hole; at a prompt it abandons the line and asks again.

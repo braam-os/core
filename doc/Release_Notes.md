@@ -7,6 +7,37 @@ of the two needs amending.
 
 ---
 
+## The `braam:` prefix is gone
+
+Everything the system writes to its own screen used to begin `braam:` — the shell's `say` and
+`say2`, `exec`'s `<path>: crashed` and `no worker, retrying`, and every line boot and init print.
+It says nothing: there is one system on that screen and it has already named itself in the banner
+one row above. `braam: sh: too many processes` is now `sh: too many processes`, and
+`braam: the shell died (status 132)` is `the shell died (status 132)`.
+
+**What the prefix was actually drawing** is the line between the runtime speaking and a builtin
+speaking, which Shell.md still records: a builtin says `<name>: <what>: <why>` and names itself,
+because several of them can fail the same way and the name is the only thing that says which one
+did. The runtime is not one of several. Where its message names a path or a command word, that
+word is what the reader needs and now leads the line; where it does not, the sentence was always
+the whole message.
+
+**It is kept where the terminal is not the destination.** `panic()` goes through `host_log` to
+the browser console, and `web/braam.js`, `web/render.js` and `web/worker.js` throw or report to
+the embedding page — text landing among everything else that page logs, where the prefix is the
+only thing saying who spoke. The rule is the destination, not the severity: on the Braam screen
+nothing needs telling, off it everything does.
+
+`sh_source` was the one caller that had to change shape rather than lose a literal: it printed
+through `errln("braam", path, err)`, whose first argument is the speaker, and now passes the path
+as the speaker with an empty middle — the form `errln` already had for a program naming a file.
+
+`kernel.wasm` 151,542 → 151,028: seven bytes of literal in a dozen places, and one `write` per
+diagnostic in `exec`.
+
+Notes below this one quote the old prefix in their examples. They are what was true when they
+were written and are left alone.
+
 ## Sixteen deep, and saying so
 
 `SYS_PROC_DEPTH` is 16, from 8, and a spawn refused by either bound now prints

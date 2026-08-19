@@ -47,7 +47,7 @@ void say(Str s)
 Task<bool> ask(Str question, const u32 &pid)
 {
     Buf<96> line;
-    line.put("braam: ").put(question).put(" [y/N] ");
+    line.put(question).put(" [y/N] ");
     if (screen().cursor_x != 0)
         screen_newline();
     // Bright white for the question, back to the default for the answer.
@@ -97,7 +97,7 @@ Task<void> unpack_if_stale(const u32 &pid)
 
     if (!stored.empty()) {
         Buf<128> line;
-        line.put("braam: the stored image is ")
+        line.put("the stored image is ")
             .put(stored.str())
             .put(" and this kernel is ")
             .put(BRAAM_VERSION);
@@ -106,7 +106,7 @@ Task<void> unpack_if_stale(const u32 &pid)
         if (Task<bool> t = ask("replace /bin and /share?", pid))
             yes = co_await t;
         if (!yes) {
-            say("braam: keeping the stored image");
+            say("keeping the stored image");
             co_return;
         }
     }
@@ -115,12 +115,12 @@ Task<void> unpack_if_stale(const u32 &pid)
     if (Task<Result<u32>> t = storage_unpack(BRAAM_VERSION))
         r = co_await t;
     if (r.is_err()) {
-        say("braam: the root archive would not unpack — /bin is empty and there is no shell");
+        say("the root archive would not unpack — /bin is empty and there is no shell");
         co_return;
     }
 
     Buf<96> line;
-    line.put("braam: unpacked ").put(r.value()).put(" files");
+    line.put("unpacked ").put(r.value()).put(" files");
     say(line.str());
 }
 
@@ -138,7 +138,7 @@ Task<void> make_dirs()
             Result<void> r = co_await t;
             if (r.is_err() && r.error() != Error::Exists) {
                 Buf<96> line;
-                line.put("braam: ").put(d).put(": ").put(error_name(r.error()));
+                line.put(d).put(": ").put(error_name(r.error()));
                 say(line.str());
             }
         }
@@ -281,7 +281,7 @@ Task<void> show_host(const StorageBackend &b)
 void no_shell(Error e)
 {
     Buf<160> line;
-    line.put("braam: ").put(SHELL).put(": ");
+    line.put(SHELL).put(": ");
     switch (e) {
     case Error::NotFound:
         line.put("not in the store");
@@ -328,8 +328,8 @@ Task<bool> boot_filesystem(const u32 &pid)
             b = r.value();
     }
     if (!b.opfs || !b.sync) {
-        say("braam: this browser has no OPFS — Braam cannot run here");
-        say("braam: private browsing usually explains it; try an ordinary window");
+        say("this browser has no OPFS — Braam cannot run here");
+        say("private browsing usually explains it; try an ordinary window");
         co_return false;
     }
 
@@ -340,7 +340,7 @@ Task<bool> boot_filesystem(const u32 &pid)
 
     Fs *root = heap_new<OpfsFs>();
     if (!root || vfs_mount("/", root).is_err()) {
-        say("braam: no root filesystem");
+        say("no root filesystem");
         co_return false;
     }
 
@@ -349,7 +349,7 @@ Task<bool> boot_filesystem(const u32 &pid)
     // process like any other (Concept.md §5.1).
     if (Fs *proc = procfs_create())
         if (vfs_mount("/proc", proc).is_err())
-            say("braam: /proc would not mount");
+            say("/proc would not mount");
 
     if (Task<void> t = unpack_if_stale(pid))
         co_await t;
@@ -431,10 +431,10 @@ Task<i32> init_task(const u32 &pid)
                         r = co_await t;
                     if (r.is_ok())
                         continue;
-                    say("braam: the root archive would not unpack");
+                    say("the root archive would not unpack");
                 }
             }
-            say("braam: there is no prompt — reload once the store is repaired");
+            say("there is no prompt — reload once the store is repaired");
             co_return 1;
         }
         // Init's own, and every replacement takes it again: the record under it
@@ -461,7 +461,7 @@ Task<i32> init_task(const u32 &pid)
         {
             Task<i32> t = exec_process(exe, args, stdio_console(), Str(), env.str(), &died);
             if (!t) {
-                say("braam: /bin/sh would not start");
+                say("/bin/sh would not start");
                 co_return 1;
             }
             status = co_await t;
@@ -478,7 +478,7 @@ Task<i32> init_task(const u32 &pid)
         // spawn waits for one rather than returning.
         tries = sched_now() - started >= RESPAWN_FLOOR_MS ? 1 : tries + 1;
         if (tries >= RESPAWN_TRIES) {
-            say("braam: the shell will not stay up — reload to start again");
+            say("the shell will not stay up — reload to start again");
             co_return status;
         }
 
@@ -488,14 +488,14 @@ Task<i32> init_task(const u32 &pid)
         console_fg_clear();
 
         Buf<96> line;
-        line.put("braam: the shell died (status ").put(status).put(") — starting another");
+        line.put("the shell died (status ").put(status).put(") — starting another");
         say(line.str());
     }
 
     // The user's own `exit`, and there is no getty to start another. Say so
     // rather than leave a prompt that never comes back, and carry the status.
     Buf<96> line;
-    line.put("braam: the shell exited (status ").put(status).put(") — reload to start again");
+    line.put("the shell exited (status ").put(status).put(") — reload to start again");
     say(line.str());
     co_return status;
 }

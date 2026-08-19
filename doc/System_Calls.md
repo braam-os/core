@@ -255,7 +255,7 @@ a wrong answer. The two refusals are **different errors**, because they call for
 `Err(Invalid)` is a file that was never a program — no `braam` section, or bytes that are not a
 module — while `Err(Unsupported)` is a section of ours carrying somebody else's number, which is a
 stale binary and wants saying so. `exec_resolve` propagates both, so a typed command reads
-`braam: <name>: built for another process ABI` and a `/bin/sh` that will not resolve names the
+`<name>: built for another process ABI` and a `/bin/sh` that will not resolve names the
 number this kernel speaks.
 
 `Err(Invalid)` now means a file that was never a program **and had no `#!` line either**. A file
