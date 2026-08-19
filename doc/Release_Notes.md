@@ -7,6 +7,24 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## 0.3 — A shell with a language, and files with names of their own
+
+`BRAAM_VERSION_BASE` moves to 0.3; the commit count and the hash behind it carry
+on unedited. The base is the only number anyone chooses, and it moves when what
+the system *is* has changed rather than when enough commits have piled up. 0.2
+was one program model and a shell that had become an ordinary process. 0.3 is
+that shell grown into a language — variables, command substitution, globbing,
+functions, `if`, `while`, `until`, `for`, `case`, and a file run by `#!` — over
+a filesystem that now answers about what it holds: modification times, symbolic
+links, a rename, and `PATH` searched by the kernel rather than by whoever asked.
+
+**Nothing in the numbering forces the move**, which is why it is written down. A
+commit count cannot say that the shell stopped reading commands and started
+interpreting them, and a hash says less than that. The base is the one place a
+difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
+written against 0.2's shell was a list of commands, and one written against
+0.3's may be a program.
+
 ## `help` is a document, and `less` is a `cat` off a terminal
 
 `help` was the twenty-seventh builtin: it printed the table with a usage string
