@@ -182,14 +182,27 @@ template <class T> struct Task {           // lazy, movable, awaitable
     struct promise_type { ... };           // symmetric transfer on final_suspend
 };
 
-struct Waker { u32 token; };               // handed to JS, comes back later
+struct Waiter {                            // a suspension record, in the frame
+    std::coroutine_handle<> h;
+    CancelState *cancel;
+    u32 token;                             // handed to JS, comes back later
+    u32 payload_ptr, payload_len;          // what wake() delivered
+    ...                                    // and which queue it is registered in
+};
+
+struct Wake { ... };                       // co_await: until wake(token) arrives
+struct Sleep { ... };                      // co_await: until a deadline passes
 ```
 
-The scheduler is a ready queue of `std::coroutine_handle<>` plus a
-`HashMap<u32, coroutine_handle<>>` of suspended tasks keyed by wake token. An
-awaitable's `await_suspend` allocates a token, registers the handle, and calls a
-JS import that tells the host "notify me on token N". `tick()` is the only thing
-that ever resumes a coroutine.
+The scheduler is a ready queue of `std::coroutine_handle<>`, a timer queue, and
+a `HashMap<u32, Waiter *>` of suspended tasks keyed by wake token. The `Waiter`
+lives in the suspended coroutine's own frame, so registering costs no allocation
+and `wake()` has somewhere to put its payload. A `Wake` takes its token in its
+*constructor*, before the `co_await`, which is how an async import can tell the
+host "notify me on token N" and only then suspend; `await_suspend` registers the
+`Waiter` and the destructor deregisters it (§8.1). A token alone cannot say
+what it is for, so the `Waiter` carries that too (§3.6). `tick()` is the only
+thing that ever resumes a coroutine.
 
 ### 3.4 The JS boundary
 
