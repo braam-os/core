@@ -285,7 +285,12 @@ kinds of thing run a command:
   anything else, but runs **in its turn rather than alongside**, since nothing
   inside a process can wait for a sibling task — so it must buffer its output
   and write it once, or it fills an eight-slot pipe and parks with nobody left
-  to drain it.
+  to drain it. It may still have a *child*: `exec <command>` spawns one and
+  leaves with its status, and `help` spawns `less` when the console is too short
+  for its listing. The keyboard is free while a builtin runs — the shell gives
+  it back before it spawns — and a builtin-only pipeline armed no foreground, so
+  `Sys::Fg`'s "nobody is in front" clause lets the builtin put its own child
+  there.
 - **A process in a worker of its own** — address-space, capability, descriptor
   and memory-cap isolation plus a real kill switch, since wasm cannot be
   preempted. **This is what every program gets and the only thing one can get**:

@@ -234,6 +234,10 @@ Task<i32> call_func(Ctx &cx, const FuncEntry *fn, Args a);
 // through job.h without Ctx leaving this file.
 Ctx *g_ctx;
 
+// Whether the pipeline a builtin is running inside was handed the terminal.
+// Set beside g_ctx and restored with it.
+bool g_handed;
+
 // Everything the pipeline holds. An assignment value and a redirection target
 // stay one word; only an argv word may become several, or none — and only an
 // argv word is globbed, since the other two are one field by definition.
@@ -976,13 +980,16 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
             s.status    = t ? co_await t : 1;
             cx.base     = was;
         } else {
-            Ctx *outer = g_ctx;
-            g_ctx      = &cx;
+            Ctx *outer  = g_ctx;
+            bool was_fg = g_handed;
+            g_ctx       = &cx;
+            g_handed    = handed;
             if (Task<i32> t = s.b->run(r->args(i), ShIo{ s.in, s.out, s.err }))
                 s.status = co_await t;
             else
                 s.status = 1;
-            g_ctx = outer;
+            g_ctx    = outer;
+            g_handed = was_fg;
         }
         undo_assigns(r->saved);
         // Closed the moment it is done, so whatever reads the other end sees
@@ -1839,6 +1846,11 @@ Task<i32> exec_node(Ctx &cx, const Tree &tree, u32 n)
 bool sh_interactive()
 {
     return g_ctx && g_ctx->interactive;
+}
+
+bool sh_foreground()
+{
+    return g_handed;
 }
 
 u32 sh_flags()

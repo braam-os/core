@@ -30,6 +30,10 @@ Task<i32> run_line(Str line, bool interactive);
 // has no other way to ask. False outside a walk.
 bool sh_interactive();
 
+// Whether the pipeline being run was handed the terminal: interactive, and not
+// a `&` one. What a builtin asks before it runs a program on the console.
+bool sh_foreground();
+
 // `set -e -x -u`. Three letters of this process's own state, so they go back
 // with everything else around a `( … )`.
 constexpr u32 SH_ERREXIT = 1;

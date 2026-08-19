@@ -1,3 +1,4 @@
+#include "cmd/sh/job.h"
 #include "cmd/sh/var.h"
 #include "decl.h"
 #include "kernel/fmt.h"
@@ -42,6 +43,88 @@ bool put(String &out, Str name, Str usage, usize width)
         b.put(' ');
     b.put("  ").put(usage).put('\n');
     return out.append(b.str());
+}
+
+// Spawns the pager and feeds it the listing, reporting its status. -1 when
+// there was none to spawn, which is the caller's cue to write the text itself.
+Task<i32> run_pager(Str text, ShIo io)
+{
+    Result<Piped> p = Err(Error::NoMemory);
+    if (Task<Result<Piped>> t = make_pipe())
+        p = co_await t;
+    if (p.is_err())
+        co_return -1;
+
+    // The word, not the path: the kernel searches PATH for it as it does for
+    // anything else. A null env hands the child the shell's own.
+    Str words[1] = { "less" };
+    Args cmd{ Span<const Str>(words, 1) };
+
+    // A spawn *moves* anything from SYS_FD_MIN up, so a redirected stderr
+    // (`help 2>log`) would leave the shell's stage without one. The pager's
+    // own diagnostics go to the console instead.
+    u32 err = io.err < SYS_FD_MIN ? io.err : SYS_STDERR;
+
+    Result<u32> pid = Err(Error::NoMemory);
+    if (Task<Result<u32>> t = spawn(cmd, ChildIo{ u32(p.value().r), io.out, err }))
+        pid = co_await t;
+    if (pid.is_err()) {
+        co_await close_fd(u32(p.value().r));
+        co_await close_fd(u32(p.value().w));
+        co_return -1;
+    }
+
+    // In front, so ^C reaches the pager. less has no ^C of its own.
+    if (Task<Result<void>> t = set_fg(pid.value()))
+        co_await t;
+
+    if (Task<Result<void>> t = write_all(u32(p.value().w), text))
+        co_await t;
+    // The close is what gives less its end of input, and it reads to the end
+    // before it paints.
+    co_await close_fd(u32(p.value().w));
+
+    Result<Exited> done = Err(Error::NoMemory);
+    if (Task<Result<Exited>> t = wait_child(pid.value()))
+        done = co_await t;
+    if (Task<Result<void>> t = set_fg(0))
+        co_await t;
+    co_return done.is_ok() ? done.value().status : 1;
+}
+
+// The listing to the pager when the console cannot hold it, and straight to
+// the output otherwise. A pipe, a redirection and a `$( )` are not a console,
+// so each of those prints plainly and `help | cat` is the way to ask for it.
+Task<i32> put_out(Str text, ShIo io)
+{
+    i32 status = -1;
+
+    // Not in the foreground — `help &`, or any non-interactive shell — and the
+    // keyboard is somebody else's, so there is nothing to page with. stdout
+    // stays one of the three the shell was given, which a spawn passes through
+    // rather than moves; a console is only ever reached through those.
+    if (sh_foreground() && io.out < SYS_FD_MIN) {
+        Result<TtyInfo> tty = Err(Error::Unsupported);
+        if (Task<Result<TtyInfo>> t = tty_of(io.out))
+            tty = co_await t;
+        if (tty.is_err() && tty.error() == Error::Cancelled)
+            co_return 130;
+
+        usize lines = 0;
+        for (usize i = 0; i < text.size(); i++)
+            lines += text[i] == '\n';
+
+        // The prompt that follows needs a row of its own, so an exact fit pages.
+        if (tty.is_ok() && tty.value().console && lines >= tty.value().at.rows)
+            if (Task<i32> t = run_pager(text, io))
+                status = co_await t;
+    }
+
+    if (status >= 0)
+        co_return status;
+    if (Task<Result<void>> t = write_all(io.out, text))
+        co_return (co_await t).is_ok() ? 0 : 1;
+    co_return 1;
 }
 
 } // namespace
@@ -109,7 +192,7 @@ Task<i32> builtin_help(Args args, ShIo io)
             co_return 1;
     }
 
-    if (Task<Result<void>> t = write_all(io.out, out.str()))
-        co_return (co_await t).is_ok() ? 0 : 1;
+    if (Task<i32> t = put_out(out.str(), io))
+        co_return co_await t;
     co_return 1;
 }

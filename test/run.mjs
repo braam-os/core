@@ -478,8 +478,11 @@ if (mode === "--kernel") {
     if (pasted("a\r\nb\tc").join() !== [97, KEY.ENTER, 98, KEY.TAB, 99].join())
         fail(`pasted() gave [${pasted("a\r\nb\tc")}]`);
 
-    submit("clear", 1045); // the builtins and the programs need a tall grid
-    addr = instance.exports.resize(100, 64);
+    // The builtins and the programs need a tall grid, and one taller than the
+    // listing: `help` pages through less when the console cannot hold it, and
+    // what this case is about is the listing.
+    submit("clear", 1045);
+    addr = instance.exports.resize(100, 96);
     if (addr === 0)
         fail("the resize before help failed");
     s = submit("help", 1050);
@@ -1983,8 +1986,8 @@ if (mode === "--kernel") {
     if (!rows(s).includes(prompt(126)))
         fail(`a non-binary left ${row(s, s.cursor_y)}, expected ${prompt(126)}`);
 
-    // help lists what is runnable.
-    addr = instance.exports.resize(100, 64);
+    // help lists what is runnable. Taller than the listing, so it does not page.
+    addr = instance.exports.resize(100, 96);
     s = submit("clear", 9040);
     s = submit("help", 9041);
     for (const name of ["echo", "hog", "sleep", "spin", "tail", "wc"])
@@ -2244,7 +2247,7 @@ if (mode === "--kernel") {
     // The builtins are the shell's own state, so they are not files: `cd` is
     // not in /bin and never resolves through it, and `help` prints them ahead
     // of everything else, with the usage line the table carries.
-    addr = instance.exports.resize(100, 64);
+    addr = instance.exports.resize(100, 96);
     s = submit("clear", 9090);
     s = submit("help", 9091);
     const helped = rows(s).filter((line) => line.startsWith("  "));
@@ -2262,6 +2265,76 @@ if (mode === "--kernel") {
         if (helped.filter((line) => line.startsWith(`  ${name} `)).length !== 1)
             fail(`help listed ${name} more than once: ${JSON.stringify(helped)}`);
     addr = instance.exports.resize(60, 16);
+
+    // Back on a grid the listing does not fit: help hands it to less, which is
+    // a child of the shell process and takes the keys the builtin loop has
+    // already given back. `q` returns the screen and the prompt is fresh.
+    s = submit("clear", 9240);
+    s = submit("help", 9241);
+    if (!rows(s).some((line) => line.includes("q quits")))
+        fail(`help did not page a listing taller than the grid: ${JSON.stringify(rows(s))}`);
+    press("q".codePointAt(0));
+    run(9242);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`the pager did not give the screen back: ${JSON.stringify(rows(s))}`);
+
+    // The tty test is the whole rule, so a pipe prints plainly on the same grid
+    // — which is what makes `help | cat` the way to ask for the raw listing.
+    s = submit("clear", 9243);
+    s = submit("help | cat", 9244);
+    if (rows(s).some((line) => line.includes("q quits")))
+        fail(`help paged into a pipe: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith("  wc ")))
+        fail(`help | cat did not print the listing: ${JSON.stringify(rows(s))}`);
+
+    // A redirected stderr does not stop stdout being a console, so this pages —
+    // and the spawn must not carry the shell's own descriptor for it into the
+    // child, which would leave the stage without one to close.
+    s = submit("clear", 9245);
+    s = submit("help 2>/home/pager.err", 9246);
+    if (!rows(s).some((line) => line.includes("q quits")))
+        fail(`help with a redirected stderr did not page: ${JSON.stringify(rows(s))}`);
+    press("q".codePointAt(0));
+    run(9247);
+    s = submit("wc /home/pager.err", 9248);
+    if (!words(s).includes("0"))
+        fail(`the pager wrote to the redirected stderr: ${JSON.stringify(output(s))}`);
+    s = submit("rm /home/pager.err", 9249);
+
+    // A pager that will not spawn costs the paging and not the listing.
+    s = submit("mv /bin/less /bin/less.hidden", 9250);
+    s = submit("clear", 9251);
+    s = submit("help", 9252);
+    if (rows(s).some((line) => line.includes("q quits")))
+        fail(`something paged with no less to spawn: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith("  wc ")))
+        fail(`help lost its listing with no pager: ${JSON.stringify(rows(s))}`);
+    s = submit("mv /bin/less.hidden /bin/less", 9253);
+    s = submit("ls /bin", 9254);
+    if (!words(s).includes("less"))
+        fail(`less was not put back: ${JSON.stringify(output(s))}`);
+
+    // The keyboard belongs to the prompt, not to a background job, so a pager
+    // spawned there would fail its claim and take the listing down with it.
+    // This is what sh_foreground() is for: `&` is not the interactive flag.
+    s = submit("clear", 9255);
+    s = submit("help &", 9256);
+    run(9257);
+    s = descriptor(addr);
+    if (rows(s).some((line) => line.includes("q quits")))
+        fail(`a backgrounded help paged: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith("  wc ")))
+        fail(`a backgrounded help printed nothing: ${JSON.stringify(rows(s))}`);
+
+    // Nor does a shell that is not interactive, whatever its stdout is: a
+    // script must not stop at a pager.
+    s = submit("clear", 9258);
+    s = submit("sh -c help", 9259);
+    if (rows(s).some((line) => line.includes("q quits")))
+        fail(`a non-interactive help paged: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith("  wc ")))
+        fail(`sh -c help printed nothing: ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 9092);
     s = submit("ls /bin", 9093);

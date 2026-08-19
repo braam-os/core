@@ -567,6 +567,10 @@ A builtin is an ordinary pipeline stage and redirects like anything else, so
 `help | grep ls` works — but it runs **in its turn** rather than alongside, so
 it buffers its output and writes it once.
 
+It may still have a *child*: what it cannot wait for is a sibling. `exec
+<command>` spawns one and leaves with its status, and `help` spawns `less` when
+the console is too short for its listing.
+
 Unless said otherwise, a usage error prints `usage: …` on standard error and
 exits **2**.
 
@@ -675,6 +679,21 @@ Lists the builtins with the usage lines the table carries, then every program on
 `PATH` that a builtin does not shadow, with the usage line `/share/help` carries
 for it. One line per name, the first directory naming it winning, which is the
 order the kernel searches them in.
+
+**It pages when the console cannot hold it.** The listing runs to sixty-odd
+lines and grows with every program added, so `help` hands it to `less` when
+standard output is the terminal and the listing is at least as tall as the grid
+— the prompt that follows needs a row of its own. What it reports is then the
+pager's status, so an auto-paged `help` is exactly `help | less`, `^C` and its
+130 included.
+
+The tty test is the whole rule and there is nothing to turn off: a pipe, a
+redirection and a `$( )` are none of them a terminal, so `help | grep ls`,
+`help > f` and `x=$(help)` print plainly, and **`help | cat` is how to ask for
+the listing unpaged**. So does a screen with room for it, a `help &` — the
+keyboard belongs to the prompt, not to a background job — and a shell that is
+not interactive, which is what keeps a script from stopping at a pager. A
+`/bin/less` that will not run costs the paging and not the listing.
 
 ### `jobs`
 

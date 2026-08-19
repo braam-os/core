@@ -7,6 +7,72 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## `help` pages, and the tty test is the whole rule
+
+The listing had outgrown the screen. `help` prints the twenty-seven builtins and
+then every program `PATH` names — sixty-two lines today, and one more with every
+program added — so on an ordinary grid most of it scrolled past. Scrollback
+catches it, but scrollback is not a pager: no search, no mark, no line model,
+and any key but the chord throws the view away.
+
+**The pager is the one the system already has.** `help | less` worked before
+this and works still; what changed is that `help` does it for itself when the
+output is a console that cannot hold the listing. Nothing new crosses the ABI,
+and the shortcut is defined by the pipeline it stands for — **`help` reports the
+pager's status**, so an auto-paged `help` is `help | less` down to the 130 a
+`^C` leaves in the next prompt. Anything else would make the two observably
+different, and then there would be two behaviours to document instead of one.
+
+**Only when it does not fit.** `tty_of` answers with the geometry as well as the
+answer — it is the same reply `ls` reads its column width out of — so the height
+test is free, and `lines >= at.rows` (the prompt that follows needs a row) costs
+three lines. Paging unconditionally would have spent a worker and a keypress on
+a screen with room for the listing, and it would have meant rewriting every
+interactive `help` assertion in the suite. Those cases already resized to a tall
+grid; they now resize to a taller one than the listing, and say so, because a
+two-line margin would have flipped them into the pager the day two programs were
+added.
+
+**No `PAGER` and no flag.** The bypass is that a pipe is not a terminal:
+`help | cat`, `help > f` and `$(help)` were already going to print plainly, so
+the tty test does the whole job and there is no second mechanism to explain. A
+`PAGER` would have been the first environment variable the shell reads for its
+own behaviour, and policy Concept.md does not carry; a flag would have put an
+option on a command whose usage line is `help` and nothing else.
+
+**`sh_foreground()` had to exist.** A builtin can ask whether its shell is
+interactive and could not ask whether *this pipeline* holds the terminal, and
+those differ in exactly the case that breaks: `help &`. A backgrounded pipeline
+is not handed the keyboard — the prompt keeps it — so a `less` spawned there
+would have failed its claim, printed `less: no keyboard` and taken the listing
+down with it. `run_pipeline` already computes that bit as `handed`; it is now
+published beside `g_ctx` and restored with it, so `eval` and `.` running a
+pipeline of their own nest correctly.
+
+**What makes a builtin spawning a program legal at all.** Three things already
+in place, none of them added for this. The shell gives the keyboard back
+*before* it spawns and takes it again after the waits, so the keys are free
+while a builtin runs and `less` can claim them. `Sys::Fg`'s fourth clause is
+"nobody is in front", and a builtin-only pipeline armed no stages, so the
+builtin may put its own child there. And writing into a pipe a child is draining
+is the shape `run_pipeline` is already built around — it spawns every program
+stage before it runs any builtin precisely so that a builtin may write into a
+pipe one of them is reading. What a builtin cannot do is wait for a *sibling*;
+a child was never the problem, and `exec <command>` had been spawning one all
+along.
+
+**The descriptor guard is a refusal rather than a dup.** `ChildIo` *moves*
+anything from `SYS_FD_MIN` up out of the caller's table, so handing a child a
+descriptor the shell still needs would lose it — which is what `detach_base`
+duplicates for a program stage. Rather than repeat that dance, `help` pages only
+when its stdout is one of the three streams it was given, which a spawn passes
+through rather than moves. Every way to reach the console today lands there
+(`>&2` yields the number 2, not a duplicate), so nothing is given up; if some
+future redirection hands a builtin a console descriptor of its own, it prints
+plainly instead of moving it into a child.
+
+---
+
 ## A `/proc` size is a snapshot, and the test asked the wrong file
 
 `test_procfs` checked that `vfs_stat` agrees with a read — what `ls -l`

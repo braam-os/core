@@ -17,6 +17,10 @@
 // (PIPE_SLOTS, ../user/io.h), so a line at a time would fill one and park with
 // nobody left to drain it. See Release_Notes.md for the rest of the reasoning.
 //
+// **A builtin may have a child; what it cannot wait for is a sibling.** `exec`
+// spawns one and leaves with its status, and `help` spawns `less` when the
+// console cannot hold its listing.
+//
 // The table is an explicit sorted array: --gc-sections never extracts an
 // archive member nothing references.
 #pragma once
