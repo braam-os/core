@@ -3,6 +3,7 @@
 #include "alloc.h"
 #include "hash.h"
 #include "host.h"
+#include "sysabi.h" // SYS_PID_MAX, which bounds the pid table's ids
 #include "traits.h"
 #include "vec.h"
 
@@ -21,17 +22,39 @@ struct Job {
     CancelState cancel;
 };
 
-// jobs[] holds freed pointers while ~Sched walks it, so anything a frame
-// destructor might reach that iterates jobs has to stand down.
+// The tables hold freed pointers while ~Sched walks them, so anything a frame
+// destructor might reach that iterates one has to stand down.
 bool tearing_down = false;
+
+// A pid that outlives its job, and how many things still name it.
+struct Hold {
+    u32 pid   = 0;
+    u32 count = 0;
+};
+
+// Destroys a table's jobs newest first: a child is spawned after its parent and
+// its frame may hold a reference to something the parent's frame owns.
+void drop_all(Vec<Job *> &t)
+{
+    for (usize i = t.size(); i > 0; i--) {
+        t[i - 1]->~Job();
+        heap_free(t[i - 1]);
+    }
+}
 
 struct Sched {
     Vec<std::coroutine_handle<>> ready;
     usize head = 0; // Vec has no pop_front; the queue is drained with a cursor
     Vec<Timer> timers;
     HashMap<u32, Waiter *> waits;
+
+    // Two tables, two id spaces. `jobs` is 1..SYS_PID_MAX and is what /proc
+    // lists; `anon` is above it, for the jobs the kernel runs for itself.
     Vec<Job *> jobs;
+    Vec<Job *> anon;
+    Vec<Hold> held; // pids reserved past their job (sched_pid_hold)
     u32 next_pid   = 1;
+    u32 next_anon  = SYS_PID_MAX + 1;
     u32 next_token = 1;
     f64 now        = 0;
 
@@ -43,18 +66,18 @@ struct Sched {
     u64 misses       = 0;
     u64 timers_fired = 0; // `timers` above is the queue
     u64 spawns       = 0;
+    u64 wraps        = 0;
 
-    // Destroying a job destroys its suspended frames, whose awaiters
-    // deregister from the queues above; those must still be alive here.
-    // Backwards, because a child is spawned after its parent and its frame
-    // may hold a reference to something the parent's frame owns.
+    // Destroying a job destroys its suspended frames, whose awaiters deregister
+    // from the queues above; those must still be alive here. `anon` first: a
+    // syscall server is spawned after the process it serves and its frame holds
+    // a ProcRef and awaitables parked on that process's stdio, so it must unwind
+    // before the stepper does.
     ~Sched()
     {
         tearing_down = true;
-        for (usize i = jobs.size(); i > 0; i--) {
-            jobs[i - 1]->~Job();
-            heap_free(jobs[i - 1]);
-        }
+        drop_all(anon);
+        drop_all(jobs);
     }
 };
 
@@ -131,27 +154,116 @@ ProcInfo::Wait wait_kind(const Waiter *w)
                        : ProcInfo::Wait::None;
 }
 
+// The table an id belongs to. The two spaces are disjoint, so this is the whole
+// of telling a kernel job from a task userland can name.
+Vec<Job *> &table_of(u32 pid)
+{
+    Sched &s = sched();
+    return pid > SYS_PID_MAX ? s.anon : s.jobs;
+}
+
+// One table's share of the gauges. `ready` is a task suspended on nothing, not
+// the depth of the ready queue: this runs inside the drain, where that depth is
+// the reader's own backlog.
+void count_waits(const Vec<Job *> &t, SchedStats &out)
+{
+    for (Job *j : t) {
+        const Waiter *w = j->cancel.waiting;
+        if (!w) {
+            out.ready++; // what `ps` prints as R
+            continue;
+        }
+        switch (wait_kind(w)) {
+        case ProcInfo::Wait::Timer:
+            out.on_timer++;
+            break;
+        case ProcInfo::Wait::Park:
+            out.on_park++;
+            break;
+        case ProcInfo::Wait::Host:
+            out.on_host++;
+            break;
+        case ProcInfo::Wait::None:
+            break; // suspended but registered nowhere: a failed await, unwinding
+        }
+    }
+}
+
+// Frees the jobs whose root has returned, keeping the rest in order.
+void reap(Vec<Job *> &t)
+{
+    usize k = 0;
+    for (usize i = 0; i < t.size(); i++) {
+        Job *j = t[i];
+        if (j->root.done()) {
+            j->~Job();
+            heap_free(j);
+        } else {
+            t[k++] = j;
+        }
+    }
+    t.resize(k);
+}
+
 Job *find_job(u32 pid)
 {
     if (tearing_down)
         return nullptr;
-    for (Job *j : sched().jobs)
+    for (Job *j : table_of(pid))
         if (j->pid == pid)
             return j;
     return nullptr;
 }
 
+// Is this id spoken for — a live job, or a pid something still names?
+bool id_taken(u32 pid)
+{
+    for (Job *j : table_of(pid))
+        if (j->pid == pid)
+            return true;
+    for (const Hold &h : sched().held)
+        if (h.pid == pid)
+            return true;
+    return false;
+}
+
+// The next free id in `pid`'s space, wrapping. At most one candidate more than
+// there are jobs and holds, since that many consecutive ids cannot all be
+// taken; 0 is "the space is full", which is a spawn failure.
+u32 take_id(JobId kind)
+{
+    Sched &s   = sched();
+    bool anon  = kind == JobId::Anon;
+    u32 &next  = anon ? s.next_anon : s.next_pid;
+    u32 lowest = anon ? SYS_PID_MAX + 1 : 1;
+    u32 top    = anon ? 0xffffffff : SYS_PID_MAX;
+
+    for (usize tries = s.jobs.size() + s.anon.size() + s.held.size() + 1; tries > 0; tries--) {
+        u32 id = next;
+        if (next == top) {
+            next = lowest;
+            if (!anon)
+                s.wraps++;
+        } else {
+            next++;
+        }
+        if (!id_taken(id))
+            return id;
+    }
+    return 0;
+}
+
 } // namespace
 
-u32 sched_spawn(Task<i32> t, Str name)
+u32 sched_spawn(Task<i32> t, Str name, JobId id)
 {
     if (!t)
         return 0;
 
     Sched &s = sched();
 
-    // The counter saturates at 0: an exhausted pid space is a spawn failure.
-    if (!s.next_pid)
+    u32 pid = take_id(id);
+    if (!pid)
         return 0;
 
     Job *j = static_cast<Job *>(heap_alloc(sizeof(Job)));
@@ -159,12 +271,12 @@ u32 sched_spawn(Task<i32> t, Str name)
         return 0;
     new (j) Job();
 
-    j->pid                            = s.next_pid++;
+    j->pid                            = pid;
     j->started                        = s.now;
     j->name                           = name;
     j->root                           = move(t);
     j->root.handle().promise().cancel = &j->cancel;
-    if (!s.jobs.push(j)) {
+    if (!table_of(pid).push(j)) {
         j->~Job();
         heap_free(j);
         return 0;
@@ -172,6 +284,32 @@ u32 sched_spawn(Task<i32> t, Str name)
     s.spawns++;
     push_ready(j->root.handle());
     return j->pid;
+}
+
+bool sched_pid_hold(u32 pid)
+{
+    if (!pid || pid > SYS_PID_MAX)
+        return true;
+    Sched &s = sched();
+    for (Hold &h : s.held)
+        if (h.pid == pid) {
+            h.count++;
+            return true;
+        }
+    return s.held.push(Hold{ pid, 1 });
+}
+
+void sched_pid_drop(u32 pid)
+{
+    if (!pid || pid > SYS_PID_MAX)
+        return;
+    Sched &s = sched();
+    for (usize i = 0; i < s.held.size(); i++)
+        if (s.held[i].pid == pid) {
+            if (--s.held[i].count == 0)
+                s.held.erase(i);
+            return;
+        }
 }
 
 void sched_cancel(u32 pid)
@@ -196,6 +334,8 @@ bool sched_alive(u32 pid)
     return find_job(pid) != nullptr;
 }
 
+// The pid table alone: an anonymous job is the kernel's own business and has no
+// line in /proc.
 usize sched_procs(ProcInfo *out, usize cap)
 {
     if (tearing_down)
@@ -231,33 +371,17 @@ SchedStats sched_stats()
     out.timers  = s.timers_fired;
     out.spawns  = s.spawns;
 
-    // The gauges are read off jobs[], which holds freed pointers during teardown.
+    out.wraps = s.wraps;
+
+    // The gauges are read off the tables, which hold freed pointers during
+    // teardown.
     if (tearing_down)
         return out;
 
-    // `ready` is a task suspended on nothing, not the depth of the ready queue:
-    // this runs inside the drain, where that depth is the reader's own backlog.
-    out.tasks = s.jobs.size();
-    for (Job *j : s.jobs) {
-        const Waiter *w = j->cancel.waiting;
-        if (!w) {
-            out.ready++; // what `ps` prints as R
-            continue;
-        }
-        switch (wait_kind(w)) {
-        case ProcInfo::Wait::Timer:
-            out.on_timer++;
-            break;
-        case ProcInfo::Wait::Park:
-            out.on_park++;
-            break;
-        case ProcInfo::Wait::Host:
-            out.on_host++;
-            break;
-        case ProcInfo::Wait::None:
-            break; // suspended but registered nowhere: a failed await, unwinding
-        }
-    }
+    // Both tables, so the count includes what /proc does not list.
+    out.tasks = s.jobs.size() + s.anon.size();
+    count_waits(s.jobs, out);
+    count_waits(s.anon, out);
     return out;
 }
 
@@ -283,17 +407,8 @@ i32 sched_tick(f64 now_ms)
         h.resume();
     }
 
-    usize k = 0;
-    for (usize i = 0; i < s.jobs.size(); i++) {
-        Job *j = s.jobs[i];
-        if (j->root.done()) {
-            j->~Job();
-            heap_free(j);
-        } else {
-            s.jobs[k++] = j;
-        }
-    }
-    s.jobs.resize(k);
+    reap(s.jobs);
+    reap(s.anon);
 
     if (s.head < s.ready.size())
         return 0;
@@ -343,7 +458,7 @@ f64 sched_now()
 
 usize sched_pending()
 {
-    return sched().jobs.size();
+    return sched().jobs.size() + sched().anon.size();
 }
 
 void sched_reset()
@@ -355,6 +470,13 @@ void sched_reset()
     heap_free(s);
     g            = nullptr;
     tearing_down = false;
+}
+
+void sched_pid_seed(u32 pid, u32 anon)
+{
+    Sched &s    = sched();
+    s.next_pid  = pid;
+    s.next_anon = anon;
 }
 
 u32 sched_token()

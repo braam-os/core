@@ -197,6 +197,7 @@ Str meaning_of(Str name)
         { "unparks", "wakeups from a channel" },
         { "misses", "wakes with nothing waiting" },
         { "spawns", "tasks created" },
+        { "wraps", "laps of the pid space" },
         { "syscalls", "syscalls parked and answered" },
         { "sysfast", "syscalls answered in the import" },
         { "steps", "steps issued to a worker" },

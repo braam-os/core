@@ -258,10 +258,12 @@ constexpr u32 SYS_ECHO_END   = 4;
 // Sys::Wait's "whichever finishes first". Zero is never a pid.
 constexpr u32 SYS_WAIT_ANY = 0;
 
-// The largest pid Wait and Kill can name, because the op word's argument is
-// 24 bits. Spawn refuses one above it rather than handing back a number that
-// would be truncated into somebody else's.
-constexpr u32 SYS_PID_MAX = 0xffffff;
+// The largest pid there is. Above it are the scheduler's anonymous jobs, which
+// this wire cannot name.
+constexpr u32 SYS_PID_MAX = 999999;
+
+// The op word's argument is 24 bits, and a pid must survive it whole.
+static_assert(SYS_PID_MAX < (1u << 24), "a pid must fit the op word's argument");
 
 // How many children a process may have at once, and how deep a chain of them
 // may go. Every one is an instance with a memory cap of its own, so without a

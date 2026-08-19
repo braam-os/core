@@ -69,8 +69,10 @@ struct SchedStats {
     u64 misses;  // woken with nothing waiting: a late or cancelled event
     u64 timers;  // timer expiries
     u64 spawns;  // tasks created; a syscall server is one, so not a fork rate
+    u64 wraps;   // laps of the pid space
 
-    // Gauges. The four below partition `tasks`.
+    // Gauges over both tables, so `tasks` counts the anonymous jobs /proc does
+    // not list. The four below partition it.
     usize tasks;
     usize ready; // suspended on nothing
     usize on_timer;
@@ -80,15 +82,26 @@ struct SchedStats {
 
 SchedStats sched_stats();
 
+// Which job table a task goes in, and so which space names it. Pid is a task
+// userland can address, 1..SYS_PID_MAX; Anon is a kernel job, above it and out
+// of /proc.
+enum class JobId : u8 { Pid, Anon };
+
 // `name` is stored as a view, so it must outlive the task: a literal, or a
 // stage's argv[0] out of the job's word store — never a local. Returns 0 on
-// failure, an exhausted pid space among them.
-u32 sched_spawn(Task<i32> t, Str name = {});
+// failure, a space with no free id among them.
+u32 sched_spawn(Task<i32> t, Str name = {}, JobId id = JobId::Pid);
 void sched_cancel(u32 pid);
 bool sched_alive(u32 pid);
 
-// A snapshot of the live tasks, up to `cap`. Empty while the scheduler is being
-// torn down, when jobs[] holds freed pointers.
+// Keeps a pid out of the allocator while something still names it after its job
+// has gone — an uncollected child, a foreground entry. Counted: two holders may
+// name one pid and either may go first. An anonymous id is ignored.
+bool sched_pid_hold(u32 pid); // false is out of memory
+void sched_pid_drop(u32 pid);
+
+// A snapshot of the live tasks with a pid, up to `cap`. Empty while the
+// scheduler is being torn down, when the tables hold freed pointers.
 usize sched_procs(ProcInfo *out, usize cap);
 i32 sched_tick(f64 now_ms);
 
@@ -98,6 +111,10 @@ bool sched_wake(u32 token, u32 ptr, u32 len);
 f64 sched_now();
 usize sched_pending();
 void sched_reset();
+
+// Where the two counters resume from. For the wrap tests alone: reaching a lap
+// by spawning is a million tasks.
+void sched_pid_seed(u32 pid, u32 anon);
 
 u32 sched_token();
 bool sched_wait_timer(Waiter *w, u32 ms);

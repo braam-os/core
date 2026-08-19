@@ -271,7 +271,20 @@ so neither can drift alone. Load-bearing rules:
 - **A process's children are cancelled by its destructor** — §3.6's structured concurrency, by
   hand one level further down. A child is an ordinary scheduler job, so `^C`, `kill`, `jobs` and
   `/proc` reach it with nothing written for them; its status is recorded on the parent's record by
-  a destructor that finds the parent by pid (pids are never reused).
+  a destructor that finds the parent by pid.
+- **A pid is reused, but never while something still names it.** Both id spaces wrap, so the
+  system has no lifetime; `sched_pid_hold`/`sched_pid_drop` is what makes that safe, held by the
+  two things that outlive the job they name — an uncollected `Child` entry and a foreground entry.
+  Anything else naming a pid either holds it only while the job runs or identifies its subject
+  another way (the tty claims compare pointer identity), and adding a third holder means adding a
+  hold. `SYS_PID_MAX` is 999999 and is the boundary between the two spaces, not the op word's
+  24-bit limit.
+- **The scheduler has two job tables, and `/proc` lists one.** A task userland can address is
+  named from `1..SYS_PID_MAX`; a job the kernel runs for itself is named above it and is absent
+  from `sched_procs`, so it has no `/proc` line and `ps` needs no filter. Today that is the syscall
+  server per parked call — the fire hose, ~150k a second through a bulk pipe, and a task `Wait`,
+  `Kill` and `Fg` cannot name since all three search the caller's own children. `/proc/stat`'s
+  gauges still count both, so `tasks` exceeds the row count of `/proc/tasks`.
 - **A process ends when its root task returns**, whatever the others are doing. The kernel then
   drops the instance and cancels the servers of anything still outstanding.
 - **Both halves of the step protocol live in `web/proc.js`** — `serveProc` is the process's side,

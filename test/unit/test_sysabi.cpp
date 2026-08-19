@@ -65,13 +65,14 @@ void test_sysabi()
     CHECK_EQ(sys_op_arg(sys_op(Sys::Open, SYS_O_READ | SYS_O_CREATE)), SYS_O_READ | SYS_O_CREATE);
     CHECK(sys_op_code(sys_op(Sys::Open, SYS_O_TRUNC)) == Sys::Open);
 
-    // Wait and Kill carry a pid in that same field, which is 24 bits wide —
-    // SYS_PID_MAX is the largest that survives the round trip, and Sys::Spawn
-    // refuses to hand back one above it rather than let it truncate into a pid
-    // belonging to somebody else.
+    // Wait and Kill carry a pid in that same field, which is 24 bits wide.
+    // SYS_PID_MAX is the largest pid there is and survives the round trip with
+    // room to spare: the ids above it are the scheduler's anonymous jobs, so the
+    // boundary between the two spaces is not the field's.
     CHECK_EQ(sys_op_arg(sys_op(Sys::Wait, SYS_PID_MAX)), SYS_PID_MAX);
     CHECK(sys_op_code(sys_op(Sys::Wait, SYS_PID_MAX)) == Sys::Wait);
-    CHECK_EQ(sys_op_arg(sys_op(Sys::Kill, SYS_PID_MAX + 1)), 0); // truncated, as advertised
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Kill, SYS_PID_MAX + 1)), SYS_PID_MAX + 1);
+    CHECK_EQ(sys_op_arg(sys_op(Sys::Kill, 1u << 24)), 0); // the field truncates here
     CHECK_EQ(sys_op_arg(sys_op(Sys::Wait, SYS_WAIT_ANY)), SYS_WAIT_ANY);
 
     // Chdir's one bit says whether it moves or only reports, and Cursor's says

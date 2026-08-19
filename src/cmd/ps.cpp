@@ -2,10 +2,10 @@
 #include "kernel/text.h"
 #include "proc/io.h"
 
-// The tasks the scheduler is running, from /proc/tasks — one open, so every row
-// describes the same moment. A worker is exactly a process, and a process is
-// exactly a row with a cwd: a task without one is a coroutine in the kernel, and
-// answers for nothing in the four columns after STAT.
+// The tasks the scheduler is running that have a pid, from /proc/tasks — one
+// open, so every row describes the same moment. A worker is exactly a process,
+// and a process is exactly a row with a cwd: a task without one is a coroutine
+// in the kernel, and answers for nothing in the four columns after STAT.
 //
 // MEM is what the instance has committed, measured on the host — the one memory
 // figure a browser gives up, since a wasm Memory says its own size even though
@@ -15,9 +15,9 @@
 
 namespace {
 
-// A row inside eighty columns, the cwd taking whatever is left. NAME holds the
-// longest a syscall server carries — a binary's path, /bin/timeout — and one
-// space. The two pid columns are minimums, widened to fit.
+// A row inside eighty columns, the cwd taking whatever is left. NAME holds an
+// argv[0] and one space; a longer one is cut to the column. The two pid columns
+// are minimums, widened to fit.
 constexpr usize W_PID = 5, W_PPID = 5, W_NAME = 13, W_STAT = 5;
 constexpr usize W_WAIT = 6, W_CALLS = 6, W_FDS = 4, W_MEM = 6, W_AGE = 8;
 

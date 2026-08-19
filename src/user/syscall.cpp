@@ -363,15 +363,22 @@ Task<i32> proc_spawn_child(Proc &p, u32 arg, Str payload)
     if (!pid)
         co_return -i32(Error::NoMemory);
     if (pid > SYS_PID_MAX) {
-        // The op word's argument is 24 bits, so Wait and Kill could not name
-        // it. Refusing beats handing back a number that truncates into a pid
-        // belonging to somebody else.
+        // The boundary between the two id spaces: above it is a job of the
+        // kernel's own, which this wire has no way to name.
         sched_cancel(pid);
         co_return -i32(Error::Unsupported);
     }
     s->pid     = pid;
     s->exe.pid = pid;
+
+    // The entry outlives the child, so the pid is reserved for as long as it is
+    // here: Sys::Wait drops it, and so does ~Proc for one never collected.
+    if (!sched_pid_hold(pid)) {
+        sched_cancel(pid);
+        co_return -i32(Error::NoMemory);
+    }
     if (!p.children.push(Child{ pid, true, 0, 0 })) {
+        sched_pid_drop(pid);
         sched_cancel(pid);
         co_return -i32(Error::NoMemory);
     }
@@ -1267,6 +1274,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                     u32 pid = p.children[at].pid;
                     i32 st  = p.children[at].status;
                     p.children.erase(at);
+                    sched_pid_drop(pid); // nothing names it now
                     if (!reply_u32(reply, pid))
                         co_return Err(Error::NoMemory);
                     status = st;

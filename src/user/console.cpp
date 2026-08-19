@@ -41,11 +41,17 @@ void rearm()
 
 } // namespace
 
+// Both pids are reserved while they are here: a set naming one that has been
+// reused would send ^C to a stranger.
 bool console_fg_add(u32 pid, u32 by)
 {
-    if (g_fg_n >= CONSOLE_FG_MAX)
+    if (g_fg_n >= CONSOLE_FG_MAX || !sched_pid_hold(pid))
         return false;
     if (!g_fg_n) {
+        if (!sched_pid_hold(by)) {
+            sched_pid_drop(pid);
+            return false;
+        }
         g_fg_by = by;
         rearm();
     }
@@ -55,6 +61,9 @@ bool console_fg_add(u32 pid, u32 by)
 
 void console_fg_clear()
 {
+    for (usize i = 0; i < g_fg_n; i++)
+        sched_pid_drop(g_fg[i]);
+    sched_pid_drop(g_fg_by);
     g_fg_n  = 0;
     g_fg_by = 0;
 }

@@ -7,6 +7,76 @@ of the two needs amending.
 
 ---
 
+## Pids are reused, and syscall servers no longer spend them
+
+This reverses "The pid counter saturates rather than wraps" below. The reasoning there was sound
+on its own terms and the terms have changed: the requirement is now that the system run for as
+long as the tab is open, and a counter that only climbs is a lifetime rather than a bound. Two
+things came out of taking that seriously.
+
+**The wall was closer than the counter.** `next_pid` is a `u32`, but `SYS_PID_MAX` was `0xffffff`
+and `Sys::Spawn` refused any pid above it, so the system stopped being able to run programs at
+16.7M spawns — not 4.3 billion. That is about two minutes of bulk piping at 150k parked syscalls
+a second. `/proc/stat`'s `spawns` was already measuring it; nobody had divided.
+
+**The fire hose was not processes.** 99.99% of the space went to the syscall server each parked
+call gets, which is a task `Wait`, `Kill` and `Fg` cannot name — the op word carries a pid, but
+all three look it up in the caller's own children, so a number that names no child of yours is
+`Err(Perm)` whatever it is. Spending a nameable resource on unnameable things was the actual
+defect. Servers now come from a second table with ids above `SYS_PID_MAX`, and the pid space is
+spent only on what can be addressed: at a heroic ten programs a second it lasts nineteen days,
+and at a realistic rate, years.
+
+**Two tables rather than one partitioned vector.** A range test on the id would have served the
+allocator, and a single `jobs` vector would have kept one sweep, one teardown order and one gauge
+loop. Two tables cost a second pass in each of those and a teardown-ordering argument that used
+to come free — `anon` is destroyed first, because a server is spawned after the process it serves
+and its frame holds a `ProcRef` and awaitables parked on that process's stdio. What they buy is
+that `sched_procs` walks one table and is done: an anonymous job is not in `/proc` because it is
+not in the structure `/proc` reads, rather than because every reader remembers to filter.
+
+**Servers left `/proc`, and that is a real loss.** You can no longer see *which* syscall a wedged
+process is stuck in — only how many, from `/proc/<pid>`'s `calls`. Against it: `ps` during a large
+pipe was mostly rows for one-syscall coroutines, and the PID column had grown to six and seven
+digits reporting how much I/O the session had done rather than how many commands had been run.
+`PROC_MAX` is 64, and a bulk pipeline could push the snapshot past it and truncate `/proc/tasks`
+silently; processes alone will not. `exec_proc_state`'s nested scan over every process × every
+outstanding call — which existed only to give a server row a `ppid` — is deleted.
+
+**The gauges still count what the listing hides.** `/proc/stat`'s `tasks`, `ready`, `on_timer`,
+`on_host` and `on_park` cover both tables, so `tasks` is now larger than the number of
+`/proc/tasks` rows. Hiding a job from a listing is not hiding it from a count, and `on_host`
+counting the servers is the half of that figure worth reading — `vmstat` relies on it, since its
+own server is runnable while its stepper is parked.
+
+**Reuse is made safe by reservation, not by the wrap being large.** The old note is right that
+skipping *live* pids cannot help, because every dangerous case is a pid held across the death of
+the task it named. So those cases hold the pid explicitly: `sched_pid_hold` is a counted set the
+allocator skips, taken by an uncollected `Child` entry and by a foreground entry, which the audit
+found to be the whole list. The other holders identify their subject some other way and needed
+nothing — the keyboard and screen claims compare pointer identity (`g_raw == ring_`), and
+`web/proc.js`'s map entry is deleted by `End::~End` before the job is reaped. `Call::server` was
+the near miss: `serve` deletes the `Call` before returning on every path but one, and that one now
+clears `server` so the invariant is flat — it names a live job or it is 0. With the holds in
+place, the shell's `alive()` over `/proc/<pid>` needs no change, since the file existing again can
+only mean the same task.
+
+**`SYS_PID_MAX` is 999999 and not `0xffffff`.** Six digits keeps `ps`'s PID column at seven
+characters, which is what the width-from-the-table work below was compensating for. It is no
+longer the op word's limit — the argument is 24 bits and would carry 999999 with room to spare —
+so the constant's meaning changed from "the largest the field can carry" to "the largest pid there
+is", and `test_sysabi` now asserts both separately: `SYS_PID_MAX + 1` round-trips, and the field
+truncates at `1 << 24`.
+
+**`PROC_ABI` did not move.** No wire format, operation, payload or import changed. A binary built
+against the old constant differs only in that a stale `ps` would look for rows that no longer
+exist, which is cosmetic; bumping would force every out-of-tree SDK program to be rebuilt for
+nothing structural.
+
+**`wraps` is a new `/proc/stat` counter.** Laps of the pid space, which after this change is the
+event worth knowing about — the anonymous space wraps freely and is not counted, since nothing
+names one of its ids past its job.
+
 ## The pid counter saturates rather than wraps
 
 `sched_spawn` refuses to spawn once `next_pid` has come back round to 0, instead of handing that

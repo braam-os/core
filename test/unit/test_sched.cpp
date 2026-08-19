@@ -2,6 +2,7 @@
 #include "kernel/alloc.h"
 #include "kernel/sched.h"
 #include "kernel/str.h"
+#include "kernel/sysabi.h"
 
 namespace {
 
@@ -164,6 +165,59 @@ void test_sched()
     sched_wake(wake_token, 0, 3);
     CHECK_EQ(sched_tick(2), -1);
     CHECK(traced() == "");
+
+    // Two id spaces. A pid is 1..SYS_PID_MAX and is what /proc lists; an
+    // anonymous job is above it. Both are reached by the same cancel and the
+    // same liveness test, and both count towards the gauges.
+    sched_reset();
+    u32 named = sched_spawn(guarded_sleeper(1000));
+    u32 anon  = sched_spawn(guarded_sleeper(1000), "anon", JobId::Anon);
+    CHECK(named >= 1 && named <= SYS_PID_MAX);
+    CHECK(anon > SYS_PID_MAX);
+    sched_tick(0);
+    CHECK(sched_alive(named));
+    CHECK(sched_alive(anon));
+    CHECK_EQ(sched_stats().tasks, usize(2));
+
+    // Only the pid is in /proc's snapshot.
+    ProcInfo seen[4];
+    usize n = sched_procs(seen, 4);
+    CHECK_EQ(n, usize(1));
+    CHECK_EQ(seen[0].pid, named);
+
+    sched_cancel(anon);
+    sched_tick(1);
+    CHECK(!sched_alive(anon));
+    CHECK(sched_alive(named));
+
+    // Each counter wraps rather than saturating, and skips what is still live.
+    sched_reset();
+    sched_pid_seed(SYS_PID_MAX, 0xffffffff);
+    u32 last  = sched_spawn(guarded_sleeper(1000));
+    u32 first = sched_spawn(guarded_sleeper(1000));
+    CHECK_EQ(last, SYS_PID_MAX);
+    CHECK_EQ(first, u32(1));
+    CHECK_EQ(sched_spawn(guarded_sleeper(1000), "anon", JobId::Anon), 0xffffffffu);
+    CHECK_EQ(sched_spawn(guarded_sleeper(1000), "anon", JobId::Anon), SYS_PID_MAX + 1);
+    CHECK_EQ(sched_stats().wraps, u64(1));
+    sched_tick(0);
+
+    // A live job's pid is skipped, so the third spawn is 2 rather than 1 again.
+    sched_pid_seed(1, SYS_PID_MAX + 1);
+    CHECK_EQ(sched_spawn(guarded_sleeper(1000)), u32(2));
+
+    // So is one a hold reserves, until the last holder drops it.
+    sched_reset();
+    sched_pid_seed(5, SYS_PID_MAX + 1);
+    CHECK(sched_pid_hold(5));
+    CHECK(sched_pid_hold(5)); // two holders, either may go first
+    CHECK_EQ(sched_spawn(guarded_sleeper(1000)), u32(6));
+    sched_pid_drop(5);
+    sched_pid_seed(5, SYS_PID_MAX + 1);
+    CHECK_EQ(sched_spawn(guarded_sleeper(1000)), u32(7)); // still held, and 6 is live
+    sched_pid_drop(5);
+    sched_pid_seed(5, SYS_PID_MAX + 1);
+    CHECK_EQ(sched_spawn(guarded_sleeper(1000)), u32(5));
 
     sched_reset();
 }

@@ -110,8 +110,12 @@ Task<i32> serve(ProcRef p, Call *c)
             co_return 1;
         u8 head[4];
         sys_put_u32(head, u32(-i32(r.error())));
-        if (!rep.payload.append(Str(reinterpret_cast<const char *>(head), sizeof(head))))
+        if (!rep.payload.append(Str(reinterpret_cast<const char *>(head), sizeof(head)))) {
+            // The Call outlives this frame here, so it must stop naming a job
+            // that is about to go: Call::server is a live job or it is 0.
+            c->server = 0;
             co_return 1;
+        }
     }
 
     for (usize i = 0; i < p->calls.size(); i++)
@@ -369,7 +373,7 @@ Task<i32> exec_process(Executable &exe, Args args, Stdio io, Str cwd, Str env, b
         for (Call *c : p->calls) {
             if (c->server)
                 continue;
-            c->server = sched_spawn(serve(ProcRef(p), c), exe.path.str());
+            c->server = sched_spawn(serve(ProcRef(p), c), exe.path.str(), JobId::Anon);
             if (!c->server)
                 co_return 1;
             alive++;

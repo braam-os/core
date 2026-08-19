@@ -155,6 +155,7 @@ bool generate(Str name, String &out)
             { "unparks", s.unparks },
             { "misses", s.misses },
             { "spawns", s.spawns },
+            { "wraps", s.wraps },
             { "syscalls", e.syscalls },
             { "sysfast", e.sysfast },
             { "steps", e.steps },

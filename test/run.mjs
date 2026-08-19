@@ -1178,9 +1178,13 @@ if (mode === "--kernel") {
         fail(`/proc/tasks has no pump without a process: ${JSON.stringify(tasks)}`);
     if (!tasks.some((line) => /^2 init \w+ \S+ \S+ 0 \d+ \d+ \d+ \d+ \d+ \/home$/.test(line)))
         fail(`/proc/tasks has no init with a process behind it: ${JSON.stringify(tasks)}`);
-    for (const line of tasks)
+    for (const line of tasks) {
         if (line.split(" ").length !== 12)
             fail(`/proc/tasks is not twelve fields: ${JSON.stringify(line)}`);
+        // A syscall server is an anonymous job: no pid, and no line here.
+        if (Number(line.split(" ")[0]) > 999999 || line.split(" ")[1].startsWith("/bin/"))
+            fail(`/proc/tasks listed an anonymous job: ${JSON.stringify(line)}`);
+    }
 
     // The memory a process has committed is measured on the host and rides back
     // on every step: less than the cap, and not nought, since a running instance
@@ -1194,7 +1198,8 @@ if (mode === "--kernel") {
 
     // ps itself is one of the tasks it lists — it is a process like any other,
     // and the shell armed it as the foreground before waiting for it. A syscall
-    // server is a task too, and names the process it serves rather than floating.
+    // server is not: it is an anonymous job, out of the pid space and out of
+    // /proc, so neither file names one.
     s = submit("ps", 1185.2);
     const ps = rows(s);
     if (!ps.includes("  PID PPID NAME         STAT WAIT   CALLS FDS   MEM ELAPSED  CWD"))
@@ -1206,8 +1211,10 @@ if (mode === "--kernel") {
         fail(`ps did not scale init's memory: ${JSON.stringify(ps)}`);
     if (!ps.some((line) => /^ +\d+ +2 ps +S\+ +\S+ +\d/.test(line)))
         fail(`ps did not list itself in the foreground: ${JSON.stringify(ps)}`);
-    if (!ps.some((line) => /^ +\d+ +\d+ \/bin\/ps +[RS] +\S+ +- /.test(line)))
-        fail(`ps did not attribute its own syscall server: ${JSON.stringify(ps)}`);
+    if (ps.some((line) => /^ +\d+ +\d+ \/bin\//.test(line)))
+        fail(`ps listed a syscall server: ${JSON.stringify(ps)}`);
+    if (ps.some((line) => Number(line.trim().split(" ")[0]) > 999999))
+        fail(`ps listed a task outside the pid space: ${JSON.stringify(ps)}`);
     s = submit("ps -x", 1185.3);
     if (!rows(s).includes("usage: ps") || !rows(s).includes(prompt(2)))
         fail(`ps -x printed ${JSON.stringify(rows(s))}, expected a usage line`);
@@ -3098,15 +3105,14 @@ if (mode === "--kernel") {
     sshows("sh /home/s9/deep.sh; echo $?", "sh: too many processes|126");
 
     // /proc names the job by the word the caller typed, not by the interpreter
-    // the kernel went on to instantiate, so ps, jobs and kill %n still point at
-    // the script — while the syscall server it spawned names /bin/sh, which is
-    // what crashed if anything does.
+    // the kernel went on to instantiate, so ps, jobs and kill %n point at the
+    // script and nothing here names /bin/sh at all.
     submit("clear", (s9t += 0.01));
     const psr = rows(submit("./self.sh", (s9t += 0.01)));
     if (!psr.some((line) => /^ *\d+ +\d+ \.\/self\.sh +[RS]\+ +\S+ +\d/.test(line)))
         fail(`ps inside a #! script did not name the script: ${JSON.stringify(psr)}`);
-    if (!psr.some((line) => /^ *\d+ +\d+ \/bin\/sh +[RS] +\S+ +- /.test(line)))
-        fail(`the script's syscall server did not name the interpreter: ${JSON.stringify(psr)}`);
+    if (psr.some((line) => /^ *\d+ +\d+ \/bin\/sh /.test(line)))
+        fail(`ps inside a #! script named the interpreter: ${JSON.stringify(psr)}`);
 
     submit("cd /home", (s9t += 0.01));
     submit("rm /bin/greet", (s9t += 0.01));

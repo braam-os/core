@@ -10,6 +10,7 @@
 #include "io.h"
 #include "kernel/alloc.h"
 #include "kernel/channel.h"
+#include "kernel/sched.h"
 #include "kernel/string.h"
 #include "kernel/sysabi.h"
 #include "kernel/task.h"
@@ -201,6 +202,9 @@ struct Proc {
 
     ~Proc()
     {
+        // A child never collected still holds its pid reserved.
+        for (const Child &ch : children)
+            sched_pid_drop(ch.pid);
         heap_delete(alt); // restores the screen
         heap_delete(keys);
         for (Call *c : calls)

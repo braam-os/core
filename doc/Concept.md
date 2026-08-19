@@ -653,10 +653,27 @@ hands its own on and an unbounded one would grow down a chain of them.
 **A child is an ordinary scheduler job**, spawned exactly as a pipeline stage is, so `^C`,
 `kill`, `jobs` and `/proc` reach it with nothing added. Its parent's destructor cancels it,
 which is §3.6's structured concurrency put back by hand one level further down; its status is
-recorded on the parent's record by a destructor that finds the parent by pid, since pids are
-never reused. Both bounds — `SYS_CHILD_MAX` live children, `SYS_PROC_DEPTH` levels deep — hold
-because every child is an instance with a memory cap of its own, and nothing else would stop the
-first fork bomb.
+recorded on the parent's record by a destructor that finds the parent by pid. Both bounds —
+`SYS_CHILD_MAX` live children, `SYS_PROC_DEPTH` levels deep — hold because every child is an
+instance with a memory cap of its own, and nothing else would stop the first fork bomb.
+
+**A pid is reused, but never while something still names it.** The system is meant to run for as
+long as the tab is open, so a counter that only climbs is a lifetime: `SYS_PID_MAX` is 999999 and
+both spaces wrap. Reuse is safe because the scheduler skips a pid that is live *and* one that is
+reserved — `sched_pid_hold`, taken by whatever outlives the job it names, which is an uncollected
+`Child` entry and a foreground entry and nothing else. Everything else that holds a pid holds it
+only while the job runs, or identifies its subject some other way: the keyboard and screen claims
+test pointer identity, and the host's process map is cleared before the job is reaped.
+
+**The scheduler has two job tables, and only one of them is in `/proc`.** A task userland can
+address — a process, a pipeline stage, init, the console pump — is named from `1..SYS_PID_MAX`. A
+job the kernel runs for itself is named from above it, and today that is the syscall server each
+parked call gets. They are separated because the servers are the fire hose: one per parked
+syscall, ~150k a second through a bulk pipe, which would spend the whole pid space in minutes on
+tasks `Wait`, `Kill` and `Fg` cannot name — all three reach only the caller's children, so the
+partition is structural rather than a range check. An anonymous id is never held, because nothing
+names one past its job. The cost is that `/proc` no longer says *which* syscall a wedged process
+is stuck in; `/proc/<pid>`'s `calls` still says how many.
 
 **0 is not a pid.** It is `sched_spawn`'s failure return, what `tty_keys_owner()` and
 `tty_screen_owner()` mean by "nobody", `SYS_WAIT_ANY`, `Fg(0)`, and `link.pid = 0` in
@@ -844,9 +861,12 @@ different moments. `/proc/cwd` is the *kernel's* working directory; every proces
 line in its own `/proc/<pid>`. There is no `/proc/jobs`, because the job table is a process's
 memory and no syscall shows one process another's.
 
-`/proc/tasks` is every task at once, one line of positional fields each, and it exists for that
-same snapshot rule: `ps` reformats it the way `mount` and `df` reformat `/proc/mounts`, and a
-`ps` built from one read per pid would describe as many moments as it had rows. It carries what
+`/proc/tasks` is every task with a pid at once, one line of positional fields each, and it exists
+for that same snapshot rule: `ps` reformats it the way `mount` and `df` reformat `/proc/mounts`,
+and a `ps` built from one read per pid would describe as many moments as it had rows. The
+scheduler's anonymous jobs (§4.3) are not here and have no file of their own, so the tree really
+is one entry per live pid; `/proc/stat`'s gauges still count them, and `tasks` is therefore larger
+than the number of rows. It carries what
 the scheduler knows (state, what the task is suspended on, how long it has been up) beside what
 only the process record does — whose child it is, how many syscalls and descriptors it holds,
 how much memory it has committed against the cap it was given, and the directory it is in. A

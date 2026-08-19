@@ -77,8 +77,7 @@ struct ProcState {
 };
 
 // False when no process record mentions the pid, which is a task the kernel runs
-// for itself. A syscall server is one of those and still has a parent: it is a
-// job of the process it serves, so /proc can say whose it is.
+// for itself — init's own, or the console pump.
 bool exec_proc_state(u32 pid, ProcState &out);
 
 // What running processes has cost since boot, for /proc/stat. System-wide, and

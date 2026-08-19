@@ -116,20 +116,8 @@ i32 handle_bind(Proc &p, Handle *h)
 bool exec_proc_state(u32 pid, ProcState &out)
 {
     Proc *p = proc_find(pid);
-    if (!p) {
-        // Not a process, but perhaps a syscall server of one: those are ordinary
-        // jobs, and naming their owner is what keeps /proc legible. Only while
-        // the call is outstanding — once it is answered the record is erased and
-        // what is left is a coroutine finishing, which is what /proc then says.
-        if (g_procs)
-            for (Proc *q : *g_procs)
-                for (const Call *c : q->calls)
-                    if (c->server == pid) {
-                        out.ppid = q->pid;
-                        return true;
-                    }
+    if (!p)
         return false;
-    }
 
     out.worker    = true;
     out.calls     = u32(p->calls.size());

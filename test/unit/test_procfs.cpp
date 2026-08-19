@@ -2,6 +2,7 @@
 #include "harness.h"
 #include "kernel/fmt.h"
 #include "kernel/sched.h"
+#include "kernel/sysabi.h"
 #include "user/procfs.h"
 
 namespace {
@@ -100,6 +101,18 @@ void test_procfs()
             fields++;
     CHECK_EQ(fields, usize(12));
 
+    // An anonymous job is the kernel's own business: no file, no line and no
+    // entry in the listing, though the gauges below still count it.
+    u32 anon = sched_spawn(parked(), "anon", JobId::Anon);
+    CHECK(anon > SYS_PID_MAX);
+    sched_tick(0);
+    Buf<32> hidden;
+    hidden.put("/proc/").put(anon);
+    CHECK(run_now(vfs_stat(hidden.str())).is_err());
+    CHECK(!slurp("/proc/tasks").str().contains(" anon "));
+    sched_cancel(anon);
+    sched_tick(0);
+
     // /proc/stat is every counter the kernel keeps, one `name value` line each.
     // The parked task above is the whole of what is running, so the four wait
     // gauges partition it: one task, on a timer, nothing runnable.
@@ -130,7 +143,7 @@ void test_procfs()
             longest = run;
         run = 0;
     }
-    CHECK_EQ(lines, usize(23));
+    CHECK_EQ(lines, usize(24));
     CHECK(longest < 31);
 
     // It appears in the listing too, and goes when the task does.

@@ -859,12 +859,15 @@ as it can get: one `Error` value carries both bounds and a genuine allocation fa
 | `SYS_STYLE_KEEP` | 0xffffffff | an `Echo` run naming no colour, so the sticky one stands |
 | `SYS_TTY_CONSOLE` | 1 | `Tty`'s flags word: this descriptor is the cell grid |
 | `SYS_WAIT_ANY` | 0 | `Wait`'s "whichever finishes first"; zero is never a pid |
-| `SYS_PID_MAX` | 0xffffff | the largest pid `Wait` and `Kill` can name — the op word's arg is 24 bits |
+| `SYS_PID_MAX` | 999999 | the largest pid there is; above it are the scheduler's anonymous jobs |
 | `SYS_CHILD_MAX` | 16 | live children per process |
 | `SYS_PROC_DEPTH` | 16 | how deep a chain of spawns may go |
 
-`SYS_PID_MAX` is not decoration: `Spawn` refuses to hand back a pid above it, because a truncated
-pid would name somebody else's process rather than nothing.
+`SYS_PID_MAX` is the boundary between the two id spaces, not the op word's limit — the argument is
+24 bits and would carry a larger number whole. Above it the scheduler names the jobs it runs for
+itself, one per parked syscall, and `Spawn` refuses to hand one back. Nothing here can name one
+anyway: `Wait`, `Kill` and `Fg` all search the caller's own children, and `/proc` does not list
+them. Pids below it are reused once nothing names them any more (Concept.md §4.3).
 
 `SYS_O_*` and `SYS_KIND_*` are deliberately *not* the VFS's numbers. A process cannot see the
 filesystem, and the numbers a binary compiled today speaks must not move because the VFS's did;
