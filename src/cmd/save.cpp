@@ -31,7 +31,7 @@ Task<i32> proc_main(Args args)
     if (done.is_err()) {
         if (done.error() == Error::Cancelled)
             co_return 130;
-        if (Task<void> e = errln("export", name, done.error()))
+        if (Task<void> e = errln("save", name, done.error()))
             co_await e;
         co_return 1;
     }

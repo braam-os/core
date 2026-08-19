@@ -1,21 +1,12 @@
 #include "expand.h"
 
+#include "name.h"
 #include "tokenize.h"
 
 namespace {
 
 // `${x-${y-…}}` nests, and this recurses on the wasm stack.
 constexpr u32 MAX_DEPTH = 8;
-
-bool is_name_start(char c)
-{
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
-}
-
-bool is_name_char(char c)
-{
-    return is_name_start(c) || (c >= '0' && c <= '9');
-}
 
 bool is_digit_char(char c)
 {

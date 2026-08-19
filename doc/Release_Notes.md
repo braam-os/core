@@ -7,6 +7,60 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## `export notes.txt` is refused rather than obeyed
+
+It surfaced out of a naming question — whether `/bin/import` and `/bin/save`
+should become `upload`/`download`, or `fimport`/`fexport` — and the answer
+turned out not to be a rename at all.
+
+`/bin/import` has no `/bin/export` because the builtin owns that name
+("`/bin/export` became `save`" below). So a user who has found `import` and
+wants the way back out guesses `export`, and until now the guess *worked*: the
+builtin handed its operand straight to `var_mark`, which validates nothing, and
+the shell created an exported variable named `notes.txt`, printed nothing and
+exited 0. Of the ways that line could have failed, silent success is the worst
+one — nothing to search for, nothing in `$?`, and a variable in every child's
+environment from then on. `read notes.txt` did the same.
+
+**No rename closes that**, which is the argument for leaving `import` and `save`
+alone. A user under `fimport`/`fexport` still guesses `export` the first time;
+what they need is for the guess to say no. The asymmetry between `import` and
+`save` is a scar with a reason, and it cost exactly one thing, which is now
+paid.
+
+**Checked before the value**, so `export 2a=1` neither assigns nor marks. The
+alternative — assign, then refuse the mark — would leave a variable behind from
+a line that reported failure. The remaining operands are still applied and the
+refusals are collected into one write, which is what the readonly refusal
+beside it already did.
+
+**`read` validates every name before it reads**, not as it fills them. A usage
+error that consumed a line would be a silent data loss inside `while read`, and
+the loop would then end on the next iteration for the wrong reason.
+
+**`var_init` is deliberately exempt.** It imports the environment blob the
+kernel handed the process, and dropping an entry there would be a silent loss
+of something a caller meant to pass — the failure this change exists to remove.
+An environment is not a place to enforce the shell's spelling rules.
+
+**The rule was written three times**, all file-local: `is_name` in `parse.cpp`,
+a hand-inlined copy of the same character class inside `is_assignment` beside
+it, and `is_name_start`/`is_name_char` in `expand.cpp`. None was visible outside
+its own translation unit, so a builtin could not ask the question the grammar
+had already answered — which is how the hole survived this long. They are now
+one header-only `name.h`, included by both grammar files and by the two
+builtins. Header-only and `inline` matters: `braam_sh`'s builtins reach a
+syscall and the grammar is compiled into `tests.wasm`, which links no process
+runtime, so a shared `.cpp` would have had to be pure anyway and a shared
+header costs nothing either way.
+
+The predicate is unit-tested; the builtins cannot be, since `write_all` is a
+syscall and the unit suite links none, so their behaviour is asserted in
+`run.mjs` — including that the refused name reaches no child's environment and
+that a refused `read` leaves the line for the next one.
+
+---
+
 ## Pids are reused, and syscall servers no longer spend them
 
 This reverses "The pid counter saturates rather than wraps" below. The reasoning

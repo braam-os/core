@@ -614,6 +614,11 @@ before the mark, since the mark this very call makes would refuse it after. A
 refusal is `export: <name>: cannot be set`, status 1. Neither mark ever comes
 off.
 
+An operand a `$` could not name — `export notes.txt` — is
+`export: <name>: not a valid name` and status 1, checked before the value, so
+such an operand sets nothing and marks nothing. The remaining operands are
+still applied.
+
 ### `false` / `true`
 
 Exit 1 / exit 0.
@@ -651,7 +656,9 @@ Reads one line from standard input and splits it across the names on `$IFS`.
 **The last name takes the whole remainder**, separators included, trimmed at
 both ends. A last line with no newline is still a line. End of input is status
 1, which is what ends a `while read`; a `^C` is 130; a readonly name is
-`read: <name>: permission denied` and status 1.
+`read: <name>: permission denied` and status 1. A name a `$` could not name is
+`read: <name>: not a valid name` and status 1, and every name is checked
+**before** the read, so a usage error does not consume the line.
 
 `Sys::Read` carries no length, so a chunk is whatever the writer wrote: what
 followed the newline is kept in a pushback buffer keyed by the descriptor, and

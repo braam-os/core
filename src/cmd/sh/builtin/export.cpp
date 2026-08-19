@@ -1,3 +1,4 @@
+#include "cmd/sh/name.h"
 #include "cmd/sh/var.h"
 #include "decl.h"
 #include "kernel/string.h"
@@ -32,6 +33,14 @@ Task<i32> mark(Args args, ShIo io, bool exported)
         Str w    = args[i];
         usize eq = w.find('=');
         Str name = eq == Str::npos ? w : w.substr(0, eq);
+
+        // Before the value: an illegal name sets nothing and marks nothing.
+        if (!is_name(name)) {
+            if (!bad.append(who) || !bad.append(": ") || !bad.append(name) ||
+                !bad.append(": not a valid name\n"))
+                co_return 1;
+            continue;
+        }
 
         // The value first: the mark this call makes would refuse it after.
         bool ok = eq == Str::npos || var_set(name, w.substr(eq + 1));

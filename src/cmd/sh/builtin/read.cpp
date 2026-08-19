@@ -1,3 +1,4 @@
+#include "cmd/sh/name.h"
 #include "cmd/sh/var.h"
 #include "decl.h"
 #include "kernel/alloc.h"
@@ -91,6 +92,19 @@ Task<i32> builtin_read(Args args, ShIo io)
     if (args.size() < 2) {
         co_await write_all(io.err, "usage: read <name>...\n");
         co_return 2;
+    }
+
+    // Every name before the read: a refusal must not eat a line.
+    String bad;
+    for (usize i = 1; i < args.size(); i++) {
+        if (is_name(args[i]))
+            continue;
+        if (!bad.append("read: ") || !bad.append(args[i]) || !bad.append(": not a valid name\n"))
+            co_return 1;
+    }
+    if (!bad.empty()) {
+        co_await write_all(io.err, bad.str());
+        co_return 1;
     }
 
     Task<Result<String>> t = read_line(io.in);

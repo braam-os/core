@@ -1,3 +1,4 @@
+#include "cmd/sh/name.h"
 #include "cmd/sh/parse.h"
 #include "harness.h"
 #include "kernel/str.h"
@@ -218,6 +219,19 @@ Str shape(Str line)
 void test_parse()
 {
     test_begin("parse");
+
+    // The name rule the grammar and the name-taking builtins share.
+    CHECK(is_name("x"));
+    CHECK(is_name("_"));
+    CHECK(is_name("a2"));
+    CHECK(is_name("_9"));
+    CHECK(is_name("HOME"));
+    CHECK(!is_name(""));
+    CHECK(!is_name("2a"));
+    CHECK(!is_name("notes.txt"));
+    CHECK(!is_name("a-b"));
+    CHECK(!is_name("a b"));
+    CHECK(!is_name("x=1"));
 
     // An empty text is a tree whose root is nothing, not an error.
     CHECK(shape("") == "");

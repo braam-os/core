@@ -777,6 +777,21 @@ if (mode === "--kernel") {
     vrun("unset x");
     vshows("echo a $x b", "a b");
 
+    // A name a `$` could not name is refused rather than marked, sets nothing
+    // and reaches no child.
+    vshows("export notes.txt", "export: notes.txt: not a valid name");
+    vshows("export notes.txt; echo $?", "1");
+    vshows("readonly a-b", "readonly: a-b: not a valid name");
+    vshows("export 2a=1; echo $?", "1");
+    if (rows(vrun("export 2a=1; env")).some((line) => line.startsWith("2a=")))
+        fail("an illegal name reached a child's environment");
+    // Refused before the read, so the line it would have eaten is still there.
+    vshows("read notes.txt", "read: notes.txt: not a valid name");
+    vshows("read notes.txt; echo $?", "1");
+    vrun("echo kept > rf");
+    vshows("{ read notes.txt; read ok; echo $ok; } < rf", "kept");
+    vrun("rm rf");
+
     // Lists. The unit suite has the tree; what only a real shell shows is that
     // each pipeline runs in its turn and that a status steers the next.
     vshows("echo one; echo two", "one");

@@ -2,6 +2,7 @@
 
 #include "kernel/alloc.h"
 #include "kernel/host.h"
+#include "name.h"
 #include "tokenize.h"
 
 Result<void> Tree::keep(Str s, Vec<Slice> &into)
@@ -22,27 +23,11 @@ namespace {
 
 // `name=` on the raw word, before any quote comes off: a name is what a `$`
 // would accept, so `a2=1` assigns and `2a=1` is an ordinary word.
-bool is_name(Str w)
-{
-    for (usize i = 0; i < w.size(); i++) {
-        char c = w[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
-              (i && c >= '0' && c <= '9')))
-            return false;
-    }
-    return !w.empty();
-}
-
 bool is_assignment(Str w)
 {
     usize i = 0;
-    for (; i < w.size(); i++) {
-        char c         = w[i];
-        bool name_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
-                         (i && c >= '0' && c <= '9');
-        if (!name_char)
-            break;
-    }
+    while (i < w.size() && (i ? is_name_char(w[i]) : is_name_start(w[i])))
+        i++;
     return i > 0 && i < w.size() && w[i] == '=';
 }
 
