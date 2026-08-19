@@ -21,7 +21,7 @@ grep     [-i] [-v] <text> [<file>...] — pass matching lines
 head     [-n <count>] [<file>...] — the first lines, ten by default
 hog      take memory until the cap refuses more
 less     [<file>] — page through a file, or the input; q quits
-ls       [-1CRSdhlr] [<path>...] — list directories, in columns on a terminal
+ls       [-1CRSdhlrt] [<path>...] — list directories, in columns on a terminal
 mkdir    <dir>... — create directories
 mount    list the mounted filesystems
 pbcopy   [<file>...] — put the input on the clipboard
@@ -35,7 +35,7 @@ spin     [<millions>] — loop without yielding, to be killed
 tail     [-n <count>] [<file>...] — the last lines, ten by default
 test     <expr> — evaluate a condition and report it as a status
 timeout  [-m] <secs> <command> [<arg>...] — run a command, killing it after a delay (124)
-touch    <file>... — create empty files
+touch    <file>... — create empty files, or move an existing one's mtime
 true     succeed
 uname    [-a|-s|-r|-m] — name the system, and with -a the host it runs on
 vmstat   [-s] [-m] [<secs> [<count>]] — report what the kernel is doing, as rates

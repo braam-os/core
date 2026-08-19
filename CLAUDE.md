@@ -407,6 +407,16 @@ adding one is a design change to argue in Concept.md first.
   `/proc` is the one read-write store. `rm /bin/sh` is therefore reachable; what
   stands behind it is that `no_shell` offers to unpack `rootfs.zip` again. **The
   archive, not the store, is what the system recovers from.**
+- **A directory has no modification time, and neither does `/proc`.** `Stat` and
+  `Entry` carry an `mtime` in milliseconds, straight off the `File` that
+  `getFile()` already yields, but OPFS puts no timestamp on a directory handle
+  and a `/proc` file is generated at `open`. Both report 0, which is the
+  system-wide "this filesystem does not know", and `ls -l` prints a dash rather
+  than 1970. **There is no setter either**: `touch` moves a stamp only by
+  rewriting the file with its own bytes and confirming the browser restamped it,
+  and answers `Err(Unsupported)` when it did not. That confirmation is the only
+  thing standing between a `touch` that works and one that lies, and no fake
+  backend can test it — `make serve` in a real browser is where it is checked.
 - **No system at all without OPFS.** Boot says so and starts no shell —
   deliberately, since the memory fallback that used to be here would look like a
   system and lose everything at the reload. It retires M5's third acceptance

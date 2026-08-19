@@ -28,24 +28,26 @@ Result<u32> off32(u64 v)
 
 } // namespace
 
-// The reply is a run of entries, each {kind, size_lo, size_hi, name_len} in
-// u32s followed by the name padded up to the next word. web/fs.js writes it.
+// The reply is a run of entries, each {kind, size_lo, size_hi, mtime_lo,
+// mtime_hi, name_len} in u32s followed by the name padded up to the next word.
+// web/fs.js writes it.
 Result<Vec<Entry>> fs_decode_entries(const char *p, usize n)
 {
     Vec<Entry> out;
     usize at = 0;
-    while (at + 16 <= n) {
-        u32 head[4];
+    while (at + 24 <= n) {
+        u32 head[6];
         __builtin_memcpy(head, p + at, sizeof(head));
         at += sizeof(head);
 
-        usize len = head[3];
+        usize len = head[5];
         if (at + len > n)
             return Err(Error::Io);
 
         Entry e;
-        e.kind = head[0] ? NodeKind::Dir : NodeKind::File;
-        e.size = u64(head[1]) | (u64(head[2]) << 32);
+        e.kind  = head[0] ? NodeKind::Dir : NodeKind::File;
+        e.size  = u64(head[1]) | (u64(head[2]) << 32);
+        e.mtime = u64(head[3]) | (u64(head[4]) << 32);
         if (!e.name.assign(Str(p + at, len)) || !out.push(move(e)))
             return Err(Error::NoMemory);
         at += (len + 3) & ~usize(3);
@@ -56,10 +58,16 @@ Result<Vec<Entry>> fs_decode_entries(const char *p, usize n)
 Task<Result<Stat>> OpfsFs::stat(Str path)
 {
     FsCall c(FsOp::Stat, path, 0);
-    if (!c.ok())
+    if (!c.ok() || !c.reserve(STAT_BYTES))
         co_return Err(Error::NoMemory);
     CO_TRY_VOID(co_await c);
-    co_return Stat{ c.req().h.flags ? NodeKind::Dir : NodeKind::File, c.req().result() };
+    if (c.req().h.buf_len < STAT_BYTES)
+        co_return Err(Error::Io);
+
+    u32 w[5];
+    __builtin_memcpy(w, c.req().buf.data(), sizeof(w));
+    co_return Stat{ w[0] ? NodeKind::Dir : NodeKind::File, u64(w[1]) | (u64(w[2]) << 32),
+                    u64(w[3]) | (u64(w[4]) << 32) };
 }
 
 Task<Result<Vec<Entry>>> OpfsFs::list(Str path)
@@ -104,6 +112,14 @@ Task<Result<void>> OpfsFs::mkdir(Str path)
 Task<Result<void>> OpfsFs::remove(Str path, bool all)
 {
     FsCall c(FsOp::Remove, path, all ? 1u : 0u);
+    if (!c.ok())
+        co_return Err(Error::NoMemory);
+    co_return co_await c;
+}
+
+Task<Result<void>> OpfsFs::touch(Str path)
+{
+    FsCall c(FsOp::Touch, path, 0);
     if (!c.ok())
         co_return Err(Error::NoMemory);
     co_return co_await c;

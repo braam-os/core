@@ -15,10 +15,12 @@
 #include "kernel/vec.h"
 
 // One file primary: the operator's letter, and the word after it. `-t` with no
-// operand records "1", which is the descriptor v7 tests by default.
+// operand records "1", which is the descriptor v7 tests by default. `arg2` is
+// the second file of `-nt`/`-ot` and empty for everything else.
 struct CondProbe {
-    char op; // 'r' 'w' 'x' 'f' 'd' 's' 't'
+    char op; // 'r' 'w' 'x' 'f' 'd' 's' 't' 'n' 'o'
     Str arg;
+    Str arg2;
 };
 
 // Why the expression is neither true nor false. A view into a literal, so it

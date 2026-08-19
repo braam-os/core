@@ -5,6 +5,7 @@
 #include "kernel/traits.h"
 #include "proc/io.h"
 #include "proc/opt.h"
+#include "proc/time.h"
 
 // A listing, laid out for whatever stdout turns out to be: columns on the
 // terminal, one name per line into a pipe. The trailing slash on a directory is
@@ -13,12 +14,16 @@
 
 namespace {
 
-constexpr Opts LS_OPTS{ "1CRSdhlr", "" };
+constexpr Opts LS_OPTS{ "1CRSdhlrt", "" };
 
 constexpr usize GAP         = 2;   // between columns
 constexpr u32 WIDTH_DEFAULT = 80;  // -C with no terminal to measure
 constexpr u64 BLOCK         = 512; // FS_BLOCK, which is what `total` counts
-constexpr Str USAGE         = "usage: ls [-1CRSdhlr] [<path>...]\n";
+constexpr Str USAGE         = "usage: ls [-1CRSdhlrt] [<path>...]\n";
+
+// "Mmm DD HH:MM" or "Mmm DD  YYYY", the two BSD forms, and the width of both.
+constexpr usize STAMP_W  = 12;
+constexpr i64 STAMP_NEAR = 15778476; // six months in seconds
 
 // Everything that outlives an await. A coroutine frame past 512 bytes costs a
 // whole 64 KiB span, so the entries, the recursion and the row being built live
@@ -29,11 +34,16 @@ struct Lister {
     bool human   = false; // -h
     bool recurse = false; // -R
     bool reverse = false; // -r
-    bool by_size = false; // -S
+    char order   = 0;     // -S or -t, the last of the two given
     bool self    = false; // -d
     bool head    = false; // print `path:` before each directory
 
     u32 width = WIDTH_DEFAULT;
+
+    // The wall clock -l renders against: which side of UTC to show a stamp in,
+    // and what "recent" is measured from. Read once, and only for -l.
+    i64 now_secs = 0;
+    i32 tz_min   = 0;
 
     Vec<DirEntry> ents; // the block being printed
     Vec<String> dirs;   // the directory operands, in the order given
@@ -104,15 +114,51 @@ void put_size(Buf<32> &b, u64 bytes, bool human_sizes)
         b.put(bytes);
 }
 
-// The default is name order, which vfs_list already delivered. -S is stable, so
-// that order stays the tiebreak; -r reverses whatever came out.
+void put2(Buf<64> &b, u32 v)
+{
+    b.put(char('0' + (v / 10) % 10)).put(char('0' + v % 10));
+}
+
+// One -l time column, right-aligned in STAMP_W. A file whose filesystem keeps
+// no mtime gets a dash rather than 1970.
+void put_stamp(Buf<64> &b, const Lister &st, u64 mtime)
+{
+    if (!mtime) {
+        for (usize i = 1; i < STAMP_W; i++)
+            b.put(' ');
+        b.put('-');
+        return;
+    }
+
+    i64 secs = i64(mtime / 1000) + st.tz_min * 60;
+    Civil c  = civil(secs);
+    b.put(TIME_MONTHS[c.month - 1]).put(' ');
+    put2(b, c.day);
+    b.put(' ');
+
+    // The clock's own zone, so "recent" is measured the way it is displayed.
+    i64 age = st.now_secs + st.tz_min * 60 - secs;
+    if (age >= 0 && age < STAMP_NEAR) {
+        put2(b, c.hour);
+        b.put(':');
+        put2(b, c.min);
+    } else {
+        b.put(' ').put(u32(c.year));
+    }
+}
+
+// The default is name order, which vfs_list already delivered. -S and -t are
+// stable, so that order stays the tiebreak; -r reverses whatever came out.
 void sort_block(Lister &st)
 {
     Vec<DirEntry> &v = st.ents;
-    if (st.by_size)
-        for (usize i = 1; i < v.size(); i++)
-            for (usize k = i; k > 0 && v[k].size > v[k - 1].size; k--)
-                swap(v[k], v[k - 1]);
+    for (usize i = 1; st.order && i < v.size(); i++)
+        for (usize k = i; k > 0; k--) {
+            bool ahead = st.order == 'S' ? v[k].size > v[k - 1].size : v[k].mtime > v[k - 1].mtime;
+            if (!ahead)
+                break;
+            swap(v[k], v[k - 1]);
+        }
     if (st.reverse && v.size() > 1)
         for (usize i = 0, j = v.size() - 1; i < j; i++, j--)
             swap(v[i], v[j]);
@@ -197,10 +243,13 @@ Task<i32> emit_long(Lister &st, bool with_total)
         Buf<32> num;
         put_size(num, e.size, st.human);
 
-        // A size is ASCII, so put_right's byte padding is cell padding here.
+        // A size and a stamp are ASCII, so put_right's byte padding is cell
+        // padding here.
         Buf<64> t;
         t.put(e.kind == SYS_KIND_DIR ? Str("dir  ") : Str("file "));
         t.put_right(num.str(), w).put(' ');
+        put_stamp(t, st, e.mtime);
+        t.put(' ');
 
         st.row.clear();
         if (!st.row.append(t.str()) || !put_name(st.row, e) || !st.row.push('\n'))
@@ -310,7 +359,8 @@ Task<i32> run(Lister &st, Args paths)
         if (!name.assign(p))
             co_return 1;
         bool ok = dir ? st.dirs.push(move(name))
-                      : st.ents.push(DirEntry{ move(name), s.value().kind, s.value().size });
+                      : st.ents.push(DirEntry{ move(name), s.value().kind, s.value().size,
+                                               s.value().mtime });
         if (!ok)
             co_return 1;
     }
@@ -388,7 +438,8 @@ Task<i32> proc_main(Args args)
             st->recurse = true;
             break;
         case 'S':
-            st->by_size = true;
+        case 't':
+            st->order = o.name;
             break;
         case 'd':
             st->self = true;
@@ -417,6 +468,20 @@ Task<i32> proc_main(Args args)
     st->columns  = layout == 'C' || (!layout && console);
     if (console && tty.value().at.cols)
         st->width = tty.value().at.cols;
+
+    // Only -l renders a stamp, and a clock that will not answer costs the
+    // recent form rather than the listing.
+    if (st->detail) {
+        Result<Clock> clock = Err(Error::Unsupported);
+        if (Task<Result<Clock>> t = clock_now())
+            clock = co_await t;
+        if (clock.is_err() && clock.error() == Error::Cancelled)
+            co_return 130;
+        if (clock.is_ok()) {
+            st->now_secs = i64(clock.value().epoch_ms / 1000);
+            st->tz_min   = clock.value().tz_min;
+        }
+    }
 
     Task<i32> t = run(*st, opts.rest());
     if (!t)

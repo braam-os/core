@@ -58,6 +58,20 @@ Task<bool> answer(const CondProbe &p)
         co_return runnable;
     }
 
+    if (p.op == 'n' || p.op == 'o') {
+        // v7 has neither; both are false when either file is missing, which is
+        // also what a filesystem keeping no mtime answers.
+        Result<FileInfo> a = Err(Error::NotFound), b = Err(Error::NotFound);
+        if (Task<Result<FileInfo>> t = stat_of(p.arg))
+            a = co_await t;
+        if (Task<Result<FileInfo>> t = stat_of(p.arg2))
+            b = co_await t;
+        if (a.is_err() || b.is_err())
+            co_return false;
+        co_return p.op == 'n' ? a.value().mtime > b.value().mtime
+                              : a.value().mtime < b.value().mtime;
+    }
+
     Task<Result<FileInfo>> t = stat_of(p.arg);
     if (!t)
         co_return false;

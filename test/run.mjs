@@ -296,7 +296,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 11)
+        if (m[0] !== 0x6d617262 || m[1] !== 12)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         if (m[4] !== 256)
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
@@ -1056,6 +1056,9 @@ if (mode === "--kernel") {
     submit("mkdir /home/t/sub", 1186.31);
     submit("echo 1 > /home/t/aaa", 1186.32); // 2 bytes
     submit("echo 123456 > /home/t/bb", 1186.33); // 7 bytes
+    // Restamps aaa, so -t and -S disagree — and so `touch` on a file that is
+    // already there is a moved mtime rather than a no-op.
+    submit("touch /home/t/aaa", 1186.34);
 
     // aaa=3, bb=2, sub/=4, so the column is 4 + 2 wide and three of them fit.
     const listing = (line, now) => {
@@ -1065,18 +1068,28 @@ if (mode === "--kernel") {
     const listings = [
         ["ls /home/t", "aaa   bb    sub/"],
         ["ls -1 /home/t", "aaa|bb|sub/"],
-        ["ls -l /home/t", "total 2|file 2 aaa|file 7 bb|dir  0 sub/"],
-        ["ls -lh /home/t", "total 2|file 2B aaa|file 7B bb|dir  0B sub/"],
+        // A directory keeps no mtime in OPFS and reports a dash, not 1970.
+        ["ls -l /home/t", "total 2|file 2 Jun 19 20:14 aaa|file 7 Jun 19 20:14 bb|" +
+            "dir  0            - sub/"],
+        ["ls -lh /home/t", "total 2|file 2B Jun 19 20:14 aaa|file 7B Jun 19 20:14 bb|" +
+            "dir  0B            - sub/"],
         ["ls -S /home/t", "bb    aaa   sub/"],
+        // Newest first, which the touch above made disagree with -S.
+        ["ls -t /home/t", "aaa   bb    sub/"],
         ["ls -r /home/t", "sub/  bb    aaa"],
         ["ls -rS /home/t", "sub/  aaa   bb"],
+        ["ls -rt /home/t", "sub/  bb    aaa"],
+        // The last of -S and -t wins, as the last of -l, -1 and -C does.
+        ["ls -St /home/t", "aaa   bb    sub/"],
+        ["ls -tS /home/t", "bb    aaa   sub/"],
         ["ls -d /home/t", "/home/t/"],
         // Bundled, and a named directory gets no `total`.
-        ["ls -dl /home/t", "dir  0 /home/t/"],
+        ["ls -dl /home/t", "dir  0            - /home/t/"],
         ["ls -- /home/t", "aaa   bb    sub/"],
         ["ls -R /home/t", "/home/t:|aaa   bb    sub/||/home/t/sub:"],
         ["ls -lR /home/t",
-            "/home/t:|total 2|file 2 aaa|file 7 bb|dir  0 sub/||/home/t/sub:|total 0"],
+            "/home/t:|total 2|file 2 Jun 19 20:14 aaa|file 7 Jun 19 20:14 bb|" +
+            "dir  0            - sub/||/home/t/sub:|total 0"],
         // A file operand prints before a directory one, in a block of its own.
         ["ls /home/t/aaa /home/t", "/home/t/aaa||/home/t:|aaa   bb    sub/"],
         // A pipe is one name per line; -C forces columns into one, at eighty.
@@ -2808,7 +2821,7 @@ if (mode === "--kernel") {
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
     // The many-writes case: 7,707 bytes is sixteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "129 1281 7707");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "129 1299 7809");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;
@@ -2946,6 +2959,21 @@ if (mode === "--kernel") {
     tshows("[ -x /share/motd ]; echo $?", "1");
     tshows("[ -w /share/motd ]; echo $?", "0");
     tshows("[ -w /proc/uptime ]; echo $?", "1");
+    // The binary pair, over two files made in a known order.
+    submit("touch /home/s8/a", (gt += 0.01));
+    submit("touch /home/s8/b", (gt += 0.01));
+    tshows("[ /home/s8/b -nt /home/s8/a ]; echo $?", "0");
+    tshows("[ /home/s8/a -nt /home/s8/b ]; echo $?", "1");
+    tshows("[ /home/s8/a -ot /home/s8/b ]; echo $?", "0");
+    // And `touch` turning the answer round, which is what a `make` rides on.
+    submit("touch /home/s8/a", (gt += 0.01));
+    tshows("[ /home/s8/a -nt /home/s8/b ]; echo $?", "0");
+    // A missing file is false either way round, as is a directory, which keeps
+    // no mtime at all.
+    tshows("[ /home/s8/a -nt /home/s8/gone ]; echo $?", "1");
+    tshows("[ /home/s8/gone -ot /home/s8/a ]; echo $?", "1");
+    tshows("[ /home/s8/a -nt /home/s8 ]; echo $?", "0");
+    tshows("[ /home/s8 -nt /home/s8/a ]; echo $?", "1");
     // Neither true nor false, and said so.
     tshows("[ -f /bin; echo $?", "test: ] missing|2");
     tshows("[ -f ]; echo $?", "test: argument expected|2");

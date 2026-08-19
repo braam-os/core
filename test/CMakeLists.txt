@@ -29,6 +29,7 @@ add_executable(tests
     unit/test_task.cpp
     unit/test_text.cpp
     unit/test_textbuf.cpp
+    unit/test_time.cpp
     unit/test_tty.cpp
     unit/test_vec.cpp
     unit/test_vfs.cpp
@@ -45,9 +46,11 @@ add_executable(tests
     ../src/cmd/sh/parse.cpp
     ../src/cmd/sh/tokenize.cpp
 
-    # The option parser is the process runtime's, and pure for the same reason:
-    # Args, Str and Result and nothing else. braam_proc is not linked here.
-    ../src/proc/opt.cpp)
+    # The option parser and the calendar are the process runtime's, and pure
+    # for the same reason: Args, Str and Result and nothing else. braam_proc is
+    # not linked here.
+    ../src/proc/opt.cpp
+    ../src/proc/time.cpp)
 
 target_link_libraries(tests PRIVATE
     braam_user braam_fs braam_svc braam_ui braam_core braam_flags)

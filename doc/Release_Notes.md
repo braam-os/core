@@ -7,6 +7,99 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## Files have a modification time
+
+The filesystem stored `{kind, size}` and nothing else. The section on `ls`,
+below, blamed five of BSD's flags on that and was right to — but the store had
+been keeping the missing field all along. `getFile()` yields a `File`, a `File`
+carries `lastModified`, and `OpfsStore.stat` and `OpfsStore.list` were already
+awaiting one apiece to learn a size. The mtime cost one property read.
+
+**Milliseconds, not seconds.** Seconds is Unix's unit, good to 2106, and would
+have fitted the free `aux` word in `HostRequest` — no reply shape would have
+moved and no buffer would have been reserved per stat. It was rejected on the
+one workload this field exists for. A build step in this system finishes in well
+under a second, so second-granularity stamps would routinely give a target and
+the source it was made from the same time, and a `make` that cannot tell those
+apart is not a `make`. The unit that costs something is the unit that works.
+
+**`FsOp::Stat` answers through the buffer now, as `Info` always has.** Its two
+scalar channels were both spoken for — `flags` held the kind, `result` held the
+64-bit size — and a second u64 does not fit beside them. Borrowing `aux` would
+have worked for seconds and not for milliseconds, and adding a word to
+`HostRequest` would grow every request record in the system for one operation.
+So `Stat` packs `{kind, size, mtime}` into 20 bytes the way `Info` packs 32.
+The width is fixed, so `OpfsFs::stat` reserves exactly it and `List`'s
+ask-again round trip cannot arise here. The cost is one small allocation per
+stat, against a `FsCall` that already allocates the path.
+
+**0 means the filesystem does not know, and `ls -l` prints a dash.** OPFS has no
+timestamp on a directory handle at all, and a `/proc` file is generated at
+`open` and has no moment to name. Unix would report 0 as a real time and render
+`Jan 01  1970`; that reads as a broken clock on every directory in every
+listing, which is the same misreading that moved the release archive's stamps
+off 1980. A dash says what is true. Nothing here predates 1970, so the sentinel
+can never collide with a stamp.
+
+**`touch` moves an mtime by rewriting the file, and checks that it worked.**
+OPFS has no setter — there is no `utimes` to reach for and no prospect of one —
+so the only lever is to modify the file and let the browser restamp it: its own
+first byte written back, or, for an empty file, a byte written and truncated
+away. Whether that restamps is the browser's decision and not ours, so the host
+reads `lastModified` back and answers `Unsupported` when it has not moved. A
+`touch` that silently did nothing would be exactly the failure this system
+refuses elsewhere — a thing that looks like it worked. This is also the one
+place in the tree where the store's own behaviour, rather than ours, decides
+whether an operation exists, and the fake backend cannot answer the question:
+`make serve` in a real browser is the only test of it.
+
+`PROC_ABI` went 11 to 12. `Sys::Stat` and `Sys::List` widened, and `Touch` took
+op 24, pushing `Chdir` and `Dup` up one — a renumbering worth doing while the
+ABI word was moving anyway, since it keeps the path operations contiguous.
+
+**`civil()` moved out of `date` into `src/proc/time.h`.** It was already the
+branch-free `civil_from_days`, and already correct; it was in an anonymous
+namespace where `ls` could not reach it. `src/proc/` is where it belongs — pure,
+no host import, so it is linkable into `tests.wasm` (which is what
+`test_time.cpp` does, over the leap-day cases and the two century years the era
+arithmetic exists to get right) and it ships with the SDK unasked. `date`'s
+output did not move, which is what the unchanged `date -u` assertion checks.
+
+**`ls -l` gains twelve columns and one syscall.** The two BSD forms —
+`Mmm DD HH:MM` inside six months, `Mmm DD  YYYY` outside — rather than ISO,
+because `date` already renders in that register and a listing that agrees with
+the system's own clock command is worth more than lexical sortability nothing
+here sorts on. The one `clock_now()` is read only under `-l`, and supplies both
+halves of the decision: the timezone to render in, and the "now" the six months
+are measured from. A clock that will not answer costs the recent form and not
+the listing.
+
+**`-t` is the flag the gap actually cost**, and it arrives with `-S` folded into
+one `order` key rather than beside it as a second flag, so the last of the two
+given wins the way the last of `-l`, `-1` and `-C` already does. `-i`, `-s`,
+`-o`, `-T` and `-L` remain out of reach, and for the original reason: mode,
+owner, link count and inode are still not stored anywhere.
+
+**`test -nt` and `-ot` are the first binary file primaries.** `cond.cpp` had
+string and integer comparison and no binary operator that looked at a file, so
+this adds a shape rather than a row: `CondProbe` grew an `arg2` and the probe
+walk answers both files in one go. Both are false when either file is missing,
+which is also what two files with no mtime between them answer — a directory
+compares false against everything, including another directory.
+
+The fake store stamps from a clock of its own, seeded behind `fakesvc`'s frozen
+wall clock so a stamped file reads as the recent past and the `-l` output is
+exact. It advances a second per write, which is what gives `ls -t` something to
+sort and lets the suite prove `touch` moved a stamp rather than merely returning
+success.
+
+`kernel.wasm` grew 2,581 bytes to 154,751 (59% of budget) and the staging tree
+5,174 to 736,180 (70%). `ls` is 2,653 of that, `test` 824, `sh` 870, `touch`
+677 and `date` 90 — the calendar is shared now, but every binary that links it
+still carries its own copy, which is §4.4 again.
+
+---
+
 ## `import` and `save` became `fimport` and `fexport`
 
 The pair was asymmetric because one half of it was never chosen: the shell
@@ -1959,7 +2052,8 @@ one `less` has a `Pager` for.
 `-L`. The filesystem stores `{kind, size}` and nothing else — no mtime, mode,
 owner, link count or inode anywhere in `Stat`, `Entry` or the `Sys::List` wire
 format. Any of those is a change reaching both storage backends and the ABI, not
-a change to `ls`. `-a`/`-A` were left out for a different reason: nothing in the
+a change to `ls`. (`-t` since arrived, by making exactly that change — see
+"Files have a modification time", above. The other five stand.) `-a`/`-A` were left out for a different reason: nothing in the
 tree creates a dotfile and nothing hides one, so the flag would introduce the
 concept of a hidden file rather than expose it. `-F` is already there and
 unconditional — the trailing slash on a directory is the only thing

@@ -15,6 +15,11 @@ u8 answer_of(const CondProbe &p)
         return p.arg == "dir" ? 1 : 0;
     if (p.op == 't')
         return p.arg == "1" ? 1 : 0;
+    // The two binary primaries: `new` is the younger of the pair.
+    if (p.op == 'n')
+        return p.arg == "new" && p.arg2 != "new" ? 1 : 0;
+    if (p.op == 'o')
+        return p.arg != "new" && p.arg2 == "new" ? 1 : 0;
     return p.arg == "yes" ? 1 : 0;
 }
 
@@ -115,6 +120,15 @@ void test_cond()
     CHECK(shape("-s yes") == "T");
     CHECK(shape("-t") == "T"); // no operand is descriptor 1
     CHECK(shape("-t 2") == "F");
+
+    // The binary pair, which reads its two words as one probe.
+    CHECK(shape("new -nt old") == "T");
+    CHECK(shape("old -nt new") == "F");
+    CHECK(shape("old -ot new") == "T");
+    CHECK(shape("new -ot old") == "F");
+    CHECK(shape("new -nt old -a new -nt old") == "T");
+    CHECK(shape("! new -nt old") == "F");
+    CHECK(shape("new -nt") == "!argument expected");
 
     // ---- precedence ----
 

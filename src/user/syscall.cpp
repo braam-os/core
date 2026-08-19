@@ -627,7 +627,8 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 break;
             }
             if (!reply_u32(reply, r.value().kind == NodeKind::Dir ? SYS_KIND_DIR : SYS_KIND_FILE,
-                           u32(r.value().size), u32(r.value().size >> 32)))
+                           u32(r.value().size), u32(r.value().size >> 32), u32(r.value().mtime),
+                           u32(r.value().mtime >> 32)))
                 co_return Err(Error::NoMemory);
             status = 0;
             break;
@@ -650,7 +651,8 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 co_return Err(Error::NoMemory);
             for (const Entry &e : r.value())
                 if (!reply_u32(reply, e.kind == NodeKind::Dir ? SYS_KIND_DIR : SYS_KIND_FILE,
-                               u32(e.size), u32(e.size >> 32), u32(e.name.size())) ||
+                               u32(e.size), u32(e.size >> 32), u32(e.mtime), u32(e.mtime >> 32),
+                               u32(e.name.size())) ||
                     !reply.append(e.name.str()))
                     co_return Err(Error::NoMemory);
             status = 0;
@@ -679,6 +681,20 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             }
             Result<void> r = Err(Error::NoMemory);
             CO_CALL(r, vfs_remove(abs.str(), sys_op_arg(c.op) & 1));
+            status = 0;
+            if (r.is_err())
+                status = -i32(r.error());
+            break;
+        }
+
+        case Sys::Touch: {
+            String abs;
+            if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
+            Result<void> r = Err(Error::NoMemory);
+            CO_CALL(r, vfs_touch(abs.str()));
             status = 0;
             if (r.is_err())
                 status = -i32(r.error());

@@ -17,6 +17,7 @@ export const OP = {
     LIST: 5,
     MKDIR: 6,
     REMOVE: 7,
+    TOUCH: 8,
 };
 
 export const SYNC = {
@@ -32,13 +33,13 @@ export const SYNC = {
 // sync access handle is read-write regardless of what the opener asked for.
 export const O_CREATE = 4, O_TRUNC = 8;
 
-// The reply the kernel decodes in fs_decode_entries: per entry, four u32s and
+// The reply the kernel decodes in fs_decode_entries: per entry, six u32s and
 // then the name, padded up to the next word.
 export function packEntries(entries) {
     let size = 0;
     const names = entries.map((e) => new TextEncoder().encode(e.name));
     for (const n of names)
-        size += 16 + ((n.length + 3) & ~3);
+        size += 24 + ((n.length + 3) & ~3);
 
     const out = new Uint8Array(size);
     const words = new Uint32Array(out.buffer);
@@ -48,10 +49,24 @@ export function packEntries(entries) {
         words[at >> 2] = e.dir ? 1 : 0;
         words[(at >> 2) + 1] = e.size >>> 0;
         words[(at >> 2) + 2] = Math.floor(e.size / 4294967296) >>> 0;
-        words[(at >> 2) + 3] = n.length;
-        out.set(n, at + 16);
-        at += 16 + ((n.length + 3) & ~3);
+        words[(at >> 2) + 3] = (e.mtime || 0) >>> 0;
+        words[(at >> 2) + 4] = Math.floor((e.mtime || 0) / 4294967296) >>> 0;
+        words[(at >> 2) + 5] = n.length;
+        out.set(n, at + 24);
+        at += 24 + ((n.length + 3) & ~3);
     });
+    return out;
+}
+
+// FsOp::Stat's reply, fixed width, decoded in OpfsFs::stat.
+export function packStat(s) {
+    const out = new Uint8Array(20);
+    const words = new Uint32Array(out.buffer);
+    words[0] = s.dir ? 1 : 0;
+    words[1] = s.size >>> 0;
+    words[2] = Math.floor(s.size / 4294967296) >>> 0;
+    words[3] = (s.mtime || 0) >>> 0;
+    words[4] = Math.floor((s.mtime || 0) / 4294967296) >>> 0;
     return out;
 }
 
@@ -245,18 +260,20 @@ export class OpfsStore {
         return slot;
     }
 
+    // A directory has no timestamp in OPFS, so it reports mtime 0.
     async stat(path) {
         if (path === "/")
-            return { dir: true, size: 0 };
+            return { dir: true, size: 0, mtime: 0 };
         const at = path.lastIndexOf("/");
         const dir = await this.dir(path.slice(0, at), false);
         const name = path.slice(at + 1);
         try {
-            const file = await dir.getFileHandle(name);
-            return { dir: false, size: (await file.getFile()).size };
+            const handle = await dir.getFileHandle(name);
+            const file = await handle.getFile();
+            return { dir: false, size: file.size, mtime: file.lastModified };
         } catch {
             await dir.getDirectoryHandle(name);
-            return { dir: true, size: 0 };
+            return { dir: true, size: 0, mtime: 0 };
         }
     }
 
@@ -265,13 +282,45 @@ export class OpfsStore {
         const out = [];
         for await (const [name, handle] of dir.entries()) {
             const isDir = handle.kind === "directory";
+            const file = isDir ? null : await handle.getFile();
             out.push({
                 name,
                 dir: isDir,
-                size: isDir ? 0 : (await handle.getFile()).size,
+                size: file ? file.size : 0,
+                mtime: file ? file.lastModified : 0,
             });
         }
         return out;
+    }
+
+    // OPFS cannot set a modification time, so the file is rewritten with its
+    // own bytes and the browser restamps it. The stamp is read back: one that
+    // did not move is reported rather than believed.
+    async touch(path) {
+        const at = path.lastIndexOf("/");
+        const dir = await this.dir(path.slice(0, at), false);
+        const name = path.slice(at + 1);
+        const handle = await dir.getFileHandle(name);
+        const before = (await handle.getFile()).lastModified;
+
+        const h = await handle.createSyncAccessHandle();
+        try {
+            const n = h.getSize();
+            const one = new Uint8Array(1);
+            if (n > 0) {
+                h.read(one, { at: 0 });
+                h.write(one, { at: 0 });
+            } else {
+                h.write(one, { at: 0 });
+                h.truncate(0);
+            }
+            h.flush();
+        } finally {
+            h.close();
+        }
+
+        if ((await handle.getFile()).lastModified === before)
+            throw { braam: E.UNSUPPORTED };
     }
 
     async mkdir(path) {
@@ -350,12 +399,10 @@ export function makeFsImports(mem, store, reply) {
         case OP.OPEN:
             r.ok(await store.open(r.arg(), r.get("flags")));
             return;
-        case OP.STAT: {
-            const s = await store.stat(r.arg());
-            r.set("flags", s.dir ? 1 : 0);
-            r.ok(s.size >>> 0, Math.floor(s.size / 4294967296) >>> 0);
+        case OP.STAT:
+            r.set("status", 0);
+            r.write(packStat(await store.stat(r.arg())));
             return;
-        }
         case OP.LIST:
             r.set("status", 0);
             r.write(packEntries(await store.list(r.arg())));
@@ -366,6 +413,10 @@ export function makeFsImports(mem, store, reply) {
             return;
         case OP.REMOVE:
             await store.remove(r.arg(), (r.get("flags") & 1) !== 0);
+            r.ok();
+            return;
+        case OP.TOUCH:
+            await store.touch(r.arg());
             r.ok();
             return;
         default:

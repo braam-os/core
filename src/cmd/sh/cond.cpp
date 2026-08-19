@@ -79,10 +79,10 @@ struct Walk {
             at--;
     }
 
-    bool ask(char op, Str arg)
+    bool ask(char op, Str arg, Str arg2 = Str())
     {
         if (probes) {
-            if (!probes->push(CondProbe{ op, arg }))
+            if (!probes->push(CondProbe{ op, arg, arg2 }))
                 oom = true;
             return false;
         }
@@ -191,6 +191,13 @@ struct Walk {
             return need() == a0;
         if (p2 == "!=")
             return need() != a0;
+
+        // The only binary file primaries. The letter is the operator's second
+        // byte, as it is for the unary ones.
+        if (p2 == "-nt" || p2 == "-ot") {
+            Str f2 = need();
+            return bad ? false : ask(p2[1], a0, f2);
+        }
 
         i32 n1 = to_int(a0);
         i32 n2 = to_int(need());

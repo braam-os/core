@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 11;
+constexpr u32 PROC_ABI       = 12;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -116,10 +116,11 @@ enum class Sys : u32 {
     Read,       // arg = fd;                                   data = the chunk, empty at end
     Open,       // arg = SYS_O_* flags;  payload = the path;   status = the fd
     Close,      // arg = fd
-    Stat,       // payload = the path;   data = u32 kind, u64 size
+    Stat,       // payload = the path;   data = u32 kind, u64 size, u64 mtime
     List,       // payload = the path;   data = u32 count, then that many entries
     MkDir,      // payload = the path
     Remove,     // arg bit 0 = recursive; payload = the path
+    Touch,      // payload = the path;   an existing file's mtime moved to now
 
     // The working directory the five above resolve against, which is this
     // process's own and nobody else's — inherited from whoever spawned it, the
@@ -279,10 +280,11 @@ constexpr u32 SYS_PROC_DEPTH  = 16;
 // sends, and an uncapped ask is an allocation a hostile binary chooses.
 constexpr u32 SYS_STAGE_MAX = 1u << 20;
 
-// One entry of Sys::List's reply: u32 kind, u64 size, u32 name_len, the name.
-// Restated here rather than shared with fs.h, for the reason SYS_O_* is: a
-// process cannot see the VFS, and the numbers a binary compiled today speaks
-// must not move because the filesystem's did.
+// One entry of Sys::List's reply: u32 kind, u64 size, u64 mtime, u32 name_len,
+// the name. `mtime` is milliseconds since the epoch, 0 when the filesystem
+// keeps none. Restated here rather than shared with fs.h, for the reason
+// SYS_O_* is: a process cannot see the VFS, and the numbers a binary compiled
+// today speaks must not move because the filesystem's did.
 constexpr u32 SYS_KIND_FILE = 0;
 constexpr u32 SYS_KIND_DIR  = 1;
 

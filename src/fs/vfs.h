@@ -47,6 +47,9 @@ Task<Result<void>> vfs_mkdir(Str path);
 
 Task<Result<void>> vfs_remove(Str path, bool all);
 
+// Moves an existing file's mtime to now.
+Task<Result<void>> vfs_touch(Str path);
+
 // On an open descriptor, and therefore synchronous (Concept.md §5.2).
 Result<usize> vfs_read(i32 fd, u64 off, u8 *buf, usize n);
 Result<usize> vfs_write(i32 fd, u64 off, const u8 *buf, usize n);

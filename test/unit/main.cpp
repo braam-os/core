@@ -29,6 +29,7 @@ void test_text();
 void test_procfs();
 void test_pane();
 void test_textbuf();
+void test_time();
 void test_tokenize();
 void test_parse();
 void test_expand();
@@ -85,6 +86,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_console(); // after tty: the pump routes through its claims
     test_pane();
     test_textbuf();
+    test_time();
     test_path();
     test_jsref();
     test_hostfs();

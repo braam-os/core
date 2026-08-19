@@ -42,16 +42,19 @@ Task<void> close_fd(u32 fd);
 Task<Result<u32>> dup_fd(u32 fd);
 
 // What Sys::Stat answers with, and one entry of what Sys::List answers with.
-// `kind` is SYS_KIND_FILE or SYS_KIND_DIR.
+// `kind` is SYS_KIND_FILE or SYS_KIND_DIR; `mtime` is milliseconds since the
+// epoch, 0 when the filesystem keeps none — every directory, and all of /proc.
 struct FileInfo {
-    u32 kind = SYS_KIND_FILE;
-    u64 size = 0;
+    u32 kind  = SYS_KIND_FILE;
+    u64 size  = 0;
+    u64 mtime = 0;
 };
 
 struct DirEntry {
     String name;
-    u32 kind = SYS_KIND_FILE;
-    u64 size = 0;
+    u32 kind  = SYS_KIND_FILE;
+    u64 size  = 0;
+    u64 mtime = 0;
 };
 
 Task<Result<FileInfo>> stat_of(Str path);
@@ -61,6 +64,10 @@ Task<Result<Vec<DirEntry>>> list_dir(Str path);
 Task<Result<void>> make_dir(Str path);
 
 Task<Result<void>> remove_path(Str path, bool all);
+
+// Moves an existing file's mtime to now. Err(Unsupported) where the store
+// cannot be made to restamp one.
+Task<Result<void>> touch_path(Str path);
 
 // This process's own working directory, which every relative path above
 // resolves against. Inherited from whoever spawned it — the shell, for a

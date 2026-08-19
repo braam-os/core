@@ -59,7 +59,7 @@ struct TempFs final : Fs {
         const Node *n = find(path);
         if (!n)
             co_return Err(Error::NotFound);
-        co_return Stat{ n->kind, n->data.size() };
+        co_return Stat{ n->kind, n->data.size(), n->mtime };
     }
 
     Task<Result<Vec<Entry>>> list(Str path) override
@@ -69,8 +69,9 @@ struct TempFs final : Fs {
             if (parent_of(n.name.str()) != path)
                 continue;
             Entry e;
-            e.kind = n.kind;
-            e.size = n.data.size();
+            e.kind  = n.kind;
+            e.size  = n.data.size();
+            e.mtime = n.mtime;
             if (!e.name.assign(base_of(n.name.str())) || !out.push(move(e)))
                 co_return Err(Error::NoMemory);
         }
@@ -145,7 +146,8 @@ struct TempFs final : Fs {
         Node *node = node_of(h);
         if (!node)
             return Err(Error::Invalid);
-        usize at = usize(off);
+        node->mtime = ++clock_;
+        usize at    = usize(off);
         while (node->data.size() < at)
             if (!node->data.push('\0'))
                 return Err(Error::NoMemory);
@@ -168,8 +170,18 @@ struct TempFs final : Fs {
         Node *node = node_of(h);
         if (!node)
             return Err(Error::Invalid);
+        node->mtime = ++clock_;
         node->data.truncate(usize(n));
         return {};
+    }
+
+    Task<Result<void>> touch(Str path) override
+    {
+        Node *n = find(path);
+        if (!n)
+            co_return Err(Error::NotFound);
+        n->mtime = ++clock_;
+        co_return Result<void>{};
     }
 
     void close(u32 h) override
@@ -186,6 +198,7 @@ private:
         String data;
         NodeKind kind = NodeKind::File;
         u32 id        = 0;
+        u64 mtime     = 0;
     };
 
     Node *find(Str path)
@@ -201,8 +214,9 @@ private:
     Node *make(Str path, NodeKind kind)
     {
         Node n;
-        n.kind = kind;
-        n.id   = ++next_;
+        n.kind  = kind;
+        n.id    = ++next_;
+        n.mtime = ++clock_;
         if (!n.name.assign(path) || !nodes_.push(move(n)))
             return nullptr;
         return &nodes_[nodes_.size() - 1];
@@ -220,7 +234,8 @@ private:
 
     Vec<Node> nodes_;
     Vec<u32> open_;
-    u32 next_ = 0;
+    u32 next_  = 0;
+    u64 clock_ = 0;
 };
 
 // A filesystem that refuses everything, to prove the VFS checks before it
@@ -406,13 +421,41 @@ void test_vfs()
     CHECK(run_now(vfs_remove("/home", true)).error() == Error::Perm);
 
     // Listing the root folds in the mount points, which do not exist as
-    // directories in the filesystem mounted there.
+    // directories in the filesystem mounted there — and so have no mtime.
     {
         Vec<Entry> root = move(run_now(vfs_list("/")).value());
         CHECK(has(root, "home"));
         CHECK(has(root, "share"));
         for (const Entry &e : root)
             CHECK(e.kind == NodeKind::Dir);
+        for (const Entry &e : root)
+            if (e.name == "home" || e.name == "share")
+                CHECK_EQ(e.mtime, 0u);
+    }
+
+    // An mtime rides stat and list alike, moves when the file is written, and
+    // moves again on a touch.
+    {
+        u64 was = run_now(vfs_stat("/home/notes")).value().mtime;
+        CHECK(was > 0);
+        fd = run_now(vfs_open("/home/notes", O_WRITE)).value();
+        CHECK(write(fd, 0, "hello!").value() == 6);
+        vfs_close(fd);
+
+        u64 now = run_now(vfs_stat("/home/notes")).value().mtime;
+        CHECK(now > was);
+
+        Vec<Entry> home = move(run_now(vfs_list("/home")).value());
+        for (const Entry &e : home)
+            if (e.name == "notes")
+                CHECK_EQ(e.mtime, now);
+
+        CHECK(run_now(vfs_touch("/home/notes")).is_ok());
+        CHECK(run_now(vfs_stat("/home/notes")).value().mtime > now);
+
+        // A filesystem keeping none refuses rather than answering 0.
+        CHECK(run_now(vfs_touch("/share/x")).error() == Error::Perm);
+        CHECK(run_now(vfs_touch("/count/f")).error() == Error::Unsupported);
     }
 
     // Sorted, which is what makes `ls` output stable.

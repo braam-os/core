@@ -132,11 +132,11 @@ Task<Result<FileInfo>> stat_of(Str path)
     Result<SysReply> r = co_await sys_call(Sys::Stat, 0, path);
     if (r.is_err())
         co_return Err(r.error());
-    if (r.value().data.size() < 12)
+    if (r.value().data.size() < 20)
         co_return Err(Error::Io);
 
     const u8 *p = reinterpret_cast<const u8 *>(r.value().data.data());
-    co_return FileInfo{ sys_get_u32(p), wide(p + 4) };
+    co_return FileInfo{ sys_get_u32(p), wide(p + 4), wide(p + 12) };
 }
 
 Task<Result<Vec<DirEntry>>> list_dir(Str path)
@@ -154,13 +154,14 @@ Task<Result<Vec<DirEntry>>> list_dir(Str path)
 
     Vec<DirEntry> out;
     for (usize i = 0; i < n; i++) {
-        if (at + 16 > data.size())
+        if (at + 24 > data.size())
             co_return Err(Error::Io);
         DirEntry e;
         e.kind    = sys_get_u32(p + at);
         e.size    = wide(p + at + 4);
-        usize len = sys_get_u32(p + at + 12);
-        at += 16;
+        e.mtime   = wide(p + at + 12);
+        usize len = sys_get_u32(p + at + 20);
+        at += 24;
         if (at + len > data.size())
             co_return Err(Error::Io);
         if (!e.name.assign(Str(data.data() + at, len)) || !out.push(move(e)))
@@ -181,6 +182,14 @@ Task<Result<void>> make_dir(Str path)
 Task<Result<void>> remove_path(Str path, bool all)
 {
     Result<SysReply> r = co_await sys_call(Sys::Remove, all ? 1 : 0, path);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+Task<Result<void>> touch_path(Str path)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Touch, 0, path);
     if (r.is_err())
         co_return Err(r.error());
     co_return {};

@@ -259,7 +259,7 @@ it, and how much memory to give it. It lives in a wasm custom section named
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 10
+    u32 abi;            // PROC_ABI, currently 12
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -721,12 +721,13 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 17 | `Read` | fd | — | bytes read, 0 at end | the chunk |
 | 18 | `Open` | `SYS_O_*` | the path | the fd | — |
 | 19 | `Close` | fd | — | 0 | — |
-| 20 | `Stat` | — | the path | 0 | `u32 kind`, `u64 size` |
-| 21 | `List` | — | the path | 0 | `u32 count`, then per entry `u32 kind`, `u64 size`, `u32 name_len`, the name |
+| 20 | `Stat` | — | the path | 0 | `u32 kind`, `u64 size`, `u64 mtime` |
+| 21 | `List` | — | the path | 0 | `u32 count`, then per entry `u32 kind`, `u64 size`, `u64 mtime`, `u32 name_len`, the name |
 | 22 | `MkDir` | — | the path | 0 | — |
 | 23 | `Remove` | bit 0 = recursive | the path | 0 | — |
-| 24 | `Chdir` | bit 0 = set, else report | the path, when setting | 0 | the resulting absolute cwd |
-| 25 | `Dup` | fd | — | a second fd for the same thing | — |
+| 24 | `Touch` | — | the path | 0 | — |
+| 25 | `Chdir` | bit 0 = set, else report | the path, when setting | 0 | the resulting absolute cwd |
+| 26 | `Dup` | fd | — | a second fd for the same thing | — |
 | 32 | `Sleep` | — | `u32 ms` | 0 | — |
 | 48 | `Clock` | — | — | 0 | `u64 epoch_ms`, `i32 tz_min` |
 | 49 | `Storage` | — | — | 0 | `u64 quota`, `u64 usage`, `u32 flags` |
@@ -755,10 +756,17 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 Every multi-byte field is little-endian, and a `u64` is a low word then a high
 word.
 
-`Chdir` sits at 24 rather than with the process family because it is the state
-`Open`, `Stat`, `List`, `MkDir` and `Remove` resolve *against* — it belongs with
-the operations it governs, and a program that never spawns anything still uses
-it. `pwd` is its caller.
+`Chdir` sits at 25 rather than with the process family because it is the state
+`Open`, `Stat`, `List`, `MkDir`, `Remove` and `Touch` resolve *against* — it
+belongs with the operations it governs, and a program that never spawns anything
+still uses it. `pwd` is its caller.
+
+**`Stat` and `List` carry a modification time**, milliseconds since the epoch,
+0 where the filesystem keeps none — every directory, since OPFS has no timestamp
+on one, and all of `/proc`, which is generated at `open`. `Touch` is the only
+way to move one: there is no setter in OPFS, so the host rewrites the file with
+its own bytes and checks that the browser restamped it, answering `Unsupported`
+when it did not. `ls -l`, `ls -t` and `test -nt`/`-ot` are the callers.
 
 **`Dup` is the only way to say `2>&1`, and the only way a shell keeps a
 descriptor across a `Spawn`.** One handle stands behind both numbers, so a
@@ -769,7 +777,9 @@ to the first child that ran.
 
 Adding it moved `PROC_ABI` from 9 to 10 and relaxed one rule in `Spawn`. (The
 environment moved it from 10 to 11, without adding an operation: the blob rides
-`Spawn`'s payload and `_start`'s.) That operation used to refuse a handle with
+`Spawn`'s payload and `_start`'s. Modification times moved it from 11 to 12,
+widening `Stat` and `List`'s replies and taking op 24 for `Touch`, which pushed
+`Chdir` and `Dup` up one.) That operation used to refuse a handle with
 `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
 *descriptor* raises that count too, so every duplicated fd would have been
 unspawnable. The test is now the `busy_r`/`busy_w` flags, which is what the

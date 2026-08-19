@@ -20,15 +20,18 @@ enum class NodeKind : u8 {
     Dir  = 1,
 };
 
+// `mtime` is milliseconds since the epoch, 0 when the filesystem keeps none.
 struct Stat {
     NodeKind kind = NodeKind::File;
     u64 size      = 0;
+    u64 mtime     = 0;
 };
 
 struct Entry {
     String name;
     NodeKind kind = NodeKind::File;
     u64 size      = 0;
+    u64 mtime     = 0;
 };
 
 // open() flags. Read and write are separate bits because the open-file table
@@ -63,6 +66,13 @@ struct Fs {
     virtual Task<Result<u32>> open(Str path, u32 flags)   = 0;
     virtual Task<Result<void>> mkdir(Str path)            = 0;
     virtual Task<Result<void>> remove(Str path, bool all) = 0;
+
+    // Moves an existing file's mtime to now. A filesystem keeping none refuses.
+    virtual Task<Result<void>> touch(Str path)
+    {
+        (void)path;
+        co_return Err(Error::Unsupported);
+    }
 
     // On an open handle, and therefore synchronous.
     virtual Result<usize> read(u32 h, u64 off, u8 *buf, usize n)        = 0;

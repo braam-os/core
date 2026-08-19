@@ -11,11 +11,15 @@ enum class FsOp : u32 {
     Info = 1, // the StorageBackend, into buf
     Unpack,   // version -> the root archive written into the store, result = files
     Open,     // path, flags -> result = handle
-    Stat,     // path -> flags = NodeKind, result = size
+    Stat,     // path -> a packed Stat, into buf
     List,     // path -> packed entries, into buf
     Mkdir,    // path
     Remove,   // path, flags bit 0 = recursive
+    Touch,    // path -> the file's mtime moved to now, or Err(Unsupported)
 };
+
+// FsOp::Stat's reply, packed by web/fs.js: u32 kind, u64 size, u64 mtime.
+constexpr usize STAT_BYTES = 20;
 
 // host_fs_sync's operations. All of them act on an already-open handle.
 enum class FsSyncOp : u32 {

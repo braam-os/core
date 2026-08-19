@@ -367,6 +367,24 @@ Task<Result<void>> vfs_remove(Str path, bool all)
     co_return co_await t;
 }
 
+Task<Result<void>> vfs_touch(Str path)
+{
+    String abs;
+    CO_TRY_VOID(vfs_abs(path, abs));
+
+    Str sub;
+    const Mount *m = vfs_lookup(abs.str(), sub);
+    if (!m)
+        co_return Err(Error::NotFound);
+    if (!m->fs->writable())
+        co_return Err(Error::Perm);
+
+    Task<Result<void>> t = m->fs->touch(sub);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
 Result<usize> vfs_read(i32 fd, u64 off, u8 *buf, usize n)
 {
     OpenFile *f = file_of(fd);

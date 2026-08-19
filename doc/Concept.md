@@ -463,6 +463,7 @@ the same gesture (§6) takes the text and nothing is typed.
       virtual Task<Result<u32>>        open(Str path, u32 flags);
       virtual Task<Result<void>>       mkdir(Str path);
       virtual Task<Result<void>>       remove(Str path, bool all);
+      virtual Task<Result<void>>       touch(Str path);   // Unsupported by default
 
       virtual Result<usize> read(u32 h, u64 off, u8 *buf, usize n);
       virtual Result<usize> write(u32 h, u64 off, const u8 *buf, usize n);
@@ -1058,6 +1059,20 @@ from the prompt and the stamp would still match, so `no_shell` offers the unpack
 again rather than leaving an origin that can never boot. **The archive, not the
 store, is the thing the system can be recovered from** — which is why it is
 fetched lazily and never cached into the store as bytes.
+
+**A modification time comes out of the store and cannot be put back.**
+`getFile()` yields a `File`, and a `File` carries `lastModified` — milliseconds
+since the epoch, at the two places the store already awaits one to learn a size,
+so `Stat` and `List` carry it for nothing. What OPFS does not offer is a setter,
+and it has no timestamp on a *directory* handle at all. So a directory reports 0,
+which is what the whole system means by "this filesystem does not know" — `/proc`
+reports it too, since a file generated at `open` has no moment to name — and
+`ls -l` prints a dash there rather than 1970. `touch` on a file that already
+exists is the one operation that moves a stamp, and it does it the only way there
+is: the host rewrites the file with its own bytes and then reads the stamp back,
+answering `Unsupported` if the browser did not restamp. Milliseconds rather than
+seconds because a build step here finishes in well under one, and a `make` that
+cannot tell a target from the source it was made from is no `make`.
 
 Two constraints to build around:
 

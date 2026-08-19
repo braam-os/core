@@ -8,9 +8,13 @@
 // and the tick that issued the request drains the queue on its way out. Set
 // `defer` to hold replies back and prove the parked path as well.
 
-import { E, OP, Request, SYNC, installOps, packEntries, packInfo } from "../web/fs.js";
+import { E, OP, Request, SYNC, installOps, packEntries, packInfo, packStat } from "../web/fs.js";
 
 const O_CREATE = 4, O_TRUNC = 8;
+
+// The clock writes are stamped from: deterministic, and behind fakesvc's frozen
+// wall clock so a stamped file reads as the recent past.
+const CLOCK_START = 1781900000000, CLOCK_STEP = 1000;
 
 function dirname(p) {
     const at = p.lastIndexOf("/");
@@ -23,8 +27,10 @@ function removeTree(store, path) {
         if (n === path || n.startsWith(under))
             store.dirs.delete(n);
     for (const n of [...store.files.keys()])
-        if (n === path || n.startsWith(under))
+        if (n === path || n.startsWith(under)) {
             store.files.delete(n);
+            store.mtimes.delete(n);
+        }
 }
 
 export class FakeStore {
@@ -35,6 +41,8 @@ export class FakeStore {
     reset() {
         this.dirs = new Set(["/"]);
         this.files = new Map(); // path -> Uint8Array
+        this.mtimes = new Map(); // path -> epoch ms; a directory has none
+        this.clock = CLOCK_START;
         this.handles = [];      // index -> path, or null
         this.opfs = true;
         this.sync = true;
@@ -54,6 +62,12 @@ export class FakeStore {
         for (const data of this.files.values())
             n += data.length;
         return n;
+    }
+
+    // Every write moves the clock on, so `ls -t` has something to sort.
+    stamp(path) {
+        this.clock += CLOCK_STEP;
+        this.mtimes.set(path, this.clock);
     }
 
     // Everything the kernel would have found after a reload, and nothing the
@@ -89,8 +103,10 @@ export function makeFakeImports(mem, store, kernel) {
                     removeTree(store, step.path);
                 else if (step.op === "mkdir")
                     store.dirs.add(step.path);
-                else
+                else {
                     store.files.set(step.path, step.bytes);
+                    store.stamp(step.path);
+                }
             }
             return r.ok(store.entries.length);
         }
@@ -105,8 +121,10 @@ export function makeFakeImports(mem, store, kernel) {
                 if (!store.dirs.has(dirname(path)))
                     return r.fail(E.NOTFOUND);
                 store.files.set(path, new Uint8Array(0));
+                store.stamp(path);
             } else if (flags & O_TRUNC) {
                 store.files.set(path, new Uint8Array(0));
+                store.stamp(path);
             }
             let slot = store.handles.indexOf(null);
             if (slot < 0)
@@ -116,15 +134,17 @@ export function makeFakeImports(mem, store, kernel) {
         }
 
         case OP.STAT: {
-            if (store.dirs.has(path)) {
-                r.set("flags", 1);
-                return r.ok(0, 0);
-            }
+            r.set("status", 0);
+            if (store.dirs.has(path))
+                return r.write(packStat({ dir: true, size: 0, mtime: 0 }));
             const data = store.files.get(path);
             if (!data)
                 return r.fail(E.NOTFOUND);
-            r.set("flags", 0);
-            return r.ok(data.length, 0);
+            return r.write(packStat({
+                dir: false,
+                size: data.length,
+                mtime: store.mtimes.get(path) || 0,
+            }));
         }
 
         case OP.LIST: {
@@ -134,10 +154,15 @@ export function makeFakeImports(mem, store, kernel) {
             const under = path === "/" ? "/" : path + "/";
             for (const name of store.dirs)
                 if (name !== "/" && dirname(name) === path)
-                    out.push({ name: name.slice(under.length), dir: true, size: 0 });
+                    out.push({ name: name.slice(under.length), dir: true, size: 0, mtime: 0 });
             for (const [name, data] of store.files)
                 if (dirname(name) === path)
-                    out.push({ name: name.slice(under.length), dir: false, size: data.length });
+                    out.push({
+                        name: name.slice(under.length),
+                        dir: false,
+                        size: data.length,
+                        mtime: store.mtimes.get(name) || 0,
+                    });
             r.set("status", 0);
             return r.write(packEntries(out));
         }
@@ -152,8 +177,10 @@ export function makeFakeImports(mem, store, kernel) {
 
         case OP.REMOVE: {
             const recursive = (r.get("flags") & 1) !== 0;
-            if (store.files.delete(path))
+            if (store.files.delete(path)) {
+                store.mtimes.delete(path);
                 return r.ok();
+            }
             if (!store.dirs.has(path))
                 return r.fail(E.NOTFOUND);
 
@@ -165,10 +192,19 @@ export function makeFakeImports(mem, store, kernel) {
             for (const n of kids) {
                 store.dirs.delete(n);
                 store.files.delete(n);
+                store.mtimes.delete(n);
             }
             store.dirs.delete(path);
             return r.ok();
         }
+
+        case OP.TOUCH:
+            // NOTDIR on a directory, which is what OPFS's TypeMismatchError
+            // becomes when getFileHandle is handed one.
+            if (!store.files.has(path))
+                return r.fail(store.dirs.has(path) ? E.NOTDIR : E.NOTFOUND);
+            store.stamp(path);
+            return r.ok();
 
         default:
             return r.fail(E.UNSUPPORTED);
@@ -208,6 +244,7 @@ export function makeFakeImports(mem, store, kernel) {
                     store.files.set(path, out);
                 }
                 out.set(mem.view().slice(ptr, ptr + len), off);
+                store.stamp(path);
                 return len;
             }
             case SYNC.SIZE:
@@ -216,6 +253,7 @@ export function makeFakeImports(mem, store, kernel) {
                 const out = new Uint8Array(off);
                 out.set(data.subarray(0, Math.min(off, data.length)));
                 store.files.set(path, out);
+                store.stamp(path);
                 return 0;
             }
             case SYNC.FLUSH:

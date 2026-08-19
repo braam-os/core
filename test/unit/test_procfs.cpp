@@ -71,6 +71,13 @@ void test_procfs()
     CHECK_EQ(st.value().size, slurp("/proc/meminfo").size());
     CHECK(run_now(vfs_stat("/proc")).value().kind == NodeKind::Dir);
 
+    // Generated at open, so there is no moment to report: mtime 0 throughout,
+    // and nothing to move.
+    CHECK_EQ(st.value().mtime, 0u);
+    for (const Entry &e : ls.value())
+        CHECK_EQ(e.mtime, 0u);
+    CHECK(run_now(vfs_touch("/proc/meminfo")).error() == Error::Perm);
+
     // A live task has a file of its own, named by its pid.
     u32 pid = sched_spawn(parked(), "parked");
     CHECK(pid != 0);

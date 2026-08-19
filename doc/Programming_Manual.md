@@ -278,7 +278,7 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with
 | Group | What is there |
 | --- | --- |
 | Streams | `write_all(fd, Str)`, `read_chunk(fd)`, `close_fd(fd)` |
-| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path` |
+| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path`, `touch_path` |
 | Directory | `cwd_get()`, `cwd_set(path)` — this process's own, inherited from whoever spawned it |
 | Children | `make_pipe()`, `spawn(Args, ChildIo, const Args *env)`, `wait_child(pid)`, `kill_child(pid)`, `set_fg(pid)` |
 | Terminal | `tty_of(fd)`, `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
@@ -300,10 +300,26 @@ or a child already running. What a program *can* choose is what its own children
 get: `spawn(argv, io)` hands them this process's, and `spawn(argv, io, &env)`
 hands them exactly the words named. `/bin/env` is the worked example of both.
 
+`stat_of` answers a `FileInfo{kind, size, mtime}` and `list_dir` a `DirEntry`
+each, which is the same three fields plus a name. The `mtime` is milliseconds
+since the epoch, and **0 means the filesystem keeps none**: every directory,
+since OPFS has no timestamp on one, and all of `/proc`, which is generated at
+`open`. Compare two of them to tell which file is newer; render one with
+`civil()` from `proc/time.h`, which `date` and `ls -l` both use. `touch_path`
+moves a file's mtime to now and is the only thing that can — there is no setter
+in OPFS, so a store that cannot be made to restamp answers `Unsupported`.
+
 `tty_of(SYS_STDOUT)` is how a program lays its output out: it reports whether
 that descriptor is the terminal and, if it is, how wide. The geometry is zero
 for a pipe or a file, so a program that formats for a terminal falls back to one
 item per line rather than inventing a width. `/bin/ls` is the worked example.
+
+### `proc/time.h` — the calendar
+
+`civil(secs)` turns seconds since the epoch into a `Civil{year, month, day,
+hour, min, sec, weekday}`, with `TIME_MONTHS` and `TIME_DAYS` beside it for the
+names. Pure — no syscall — so the wall clock and the timezone are the caller's
+to fetch with `clock_now()` and add in. `date` and `ls -l` are the callers.
 
 ### `proc/opt.h` — the command line
 
