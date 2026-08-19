@@ -25,7 +25,7 @@ mkdir    <dir>... — create directories
 mount    list the mounted filesystems
 pbcopy   [<file>...] — put the input on the clipboard
 pbpaste  write the clipboard to the output
-ps       list the tasks the kernel is running, and which hold a worker
+ps       list the tasks the kernel is running, and which are processes
 pwd      print the working directory
 rm       [-r] <path>... — remove files, or directories with -r
 save     <file> [<name>] — download a file out of the browser

@@ -73,7 +73,6 @@ struct ProcState {
     u32 fds       = 0;     // descriptors open; stdio is not one, it is a Stdio
     u32 pages     = 0;     // pages the instance has committed, as of its last step
     u32 max_pages = 0;     // and the cap the kernel set at spawn
-    bool dead     = false;
     Str cwd;
 };
 

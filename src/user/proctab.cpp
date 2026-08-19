@@ -135,7 +135,6 @@ bool exec_proc_state(u32 pid, ProcState &out)
     out.calls     = u32(p->calls.size());
     out.pages     = p->pages;
     out.max_pages = p->max_pages;
-    out.dead      = p->dead;
     out.cwd       = p->cwd.str();
 
     // A closed descriptor leaves its slot behind as a null, so the slots are

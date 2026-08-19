@@ -1170,23 +1170,23 @@ if (mode === "--kernel") {
     if (addr === 0)
         fail("the resize before ps failed");
 
-    // The pump is task 1 and holds no worker: a task without one is a coroutine
-    // in the kernel, which is the whole of what the browser could never say.
+    // The pump is task 1 and has no process behind it: no cwd, and a dash in
+    // every field the process record fills — it is a coroutine in the kernel.
     s = submit("cat /proc/tasks", 1185.1);
     const tasks = rows(s).filter((line) => line && !line.includes("$"));
-    if (!tasks.some((line) => /^1 tty \w+ \S+ \S+ - 0 0 0 0 0 \d+ -$/.test(line)))
-        fail(`/proc/tasks has no pump with no worker: ${JSON.stringify(tasks)}`);
-    if (!tasks.some((line) => /^2 init \w+ \S+ \S+ bound 0 \d+ \d+ \d+ \d+ \d+ \/home$/.test(line)))
-        fail(`/proc/tasks has no init holding a worker: ${JSON.stringify(tasks)}`);
+    if (!tasks.some((line) => /^1 tty \w+ \S+ \S+ 0 0 0 0 0 \d+ -$/.test(line)))
+        fail(`/proc/tasks has no pump without a process: ${JSON.stringify(tasks)}`);
+    if (!tasks.some((line) => /^2 init \w+ \S+ \S+ 0 \d+ \d+ \d+ \d+ \d+ \/home$/.test(line)))
+        fail(`/proc/tasks has no init with a process behind it: ${JSON.stringify(tasks)}`);
     for (const line of tasks)
-        if (line.split(" ").length !== 13)
-            fail(`/proc/tasks is not thirteen fields: ${JSON.stringify(line)}`);
+        if (line.split(" ").length !== 12)
+            fail(`/proc/tasks is not twelve fields: ${JSON.stringify(line)}`);
 
     // The memory a process has committed is measured on the host and rides back
     // on every step: less than the cap, and not nought, since a running instance
     // has pages. Nothing else in a browser will say what a worker holds.
     const shell = tasks.find((line) => line.startsWith("2 init "));
-    const [used, cap] = shell.split(" ").slice(9, 11).map(Number);
+    const [used, cap] = shell.split(" ").slice(8, 10).map(Number);
     if (!(used > 0 && used < cap))
         fail(`init committed ${used} of ${cap} bytes, expected some of it`);
     if (cap !== 256 * 65536)
@@ -1197,16 +1197,16 @@ if (mode === "--kernel") {
     // server is a task too, and names the process it serves rather than floating.
     s = submit("ps", 1185.2);
     const ps = rows(s);
-    if (!ps.includes("  PID PPID NAME         STAT WORKER WAIT   CALLS FDS   MEM ELAPSED  CWD"))
+    if (!ps.includes("  PID PPID NAME         STAT WAIT   CALLS FDS   MEM ELAPSED  CWD"))
         fail(`ps did not head the table: ${JSON.stringify(ps)}`);
-    if (!ps.some((line) => /^ +1 +- tty +[RS] +- +\S+ +- +- +- +\d+:\d\d +-$/.test(line)))
-        fail(`ps did not show the pump as workerless: ${JSON.stringify(ps)}`);
+    if (!ps.some((line) => /^ +1 +- tty +[RS] +\S+ +- +- +- +\d+:\d\d +-$/.test(line)))
+        fail(`ps did not show the pump as a kernel task: ${JSON.stringify(ps)}`);
     if (!ps.some((line) =>
-        /^ +2 +- init +[RS] +bound +\S+ +\d+ +\d+ +\d+(\.\d)?[BKM] +\d+:\d\d +\/home$/.test(line)))
+        /^ +2 +- init +[RS] +\S+ +\d+ +\d+ +\d+(\.\d)?[BKM] +\d+:\d\d +\/home$/.test(line)))
         fail(`ps did not scale init's memory: ${JSON.stringify(ps)}`);
-    if (!ps.some((line) => /^ +\d+ +2 ps +S\+ +bound /.test(line)))
+    if (!ps.some((line) => /^ +\d+ +2 ps +S\+ +\S+ +\d/.test(line)))
         fail(`ps did not list itself in the foreground: ${JSON.stringify(ps)}`);
-    if (!ps.some((line) => /^ +\d+ +\d+ \/bin\/ps +[RS] +- /.test(line)))
+    if (!ps.some((line) => /^ +\d+ +\d+ \/bin\/ps +[RS] +\S+ +- /.test(line)))
         fail(`ps did not attribute its own syscall server: ${JSON.stringify(ps)}`);
     s = submit("ps -x", 1185.3);
     if (!rows(s).includes("usage: ps") || !rows(s).includes(prompt(2)))
@@ -2785,7 +2785,7 @@ if (mode === "--kernel") {
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
     // The many-writes case: 7,707 bytes is sixteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "129 1284 7707");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "129 1281 7707");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;
@@ -3103,9 +3103,9 @@ if (mode === "--kernel") {
     // what crashed if anything does.
     submit("clear", (s9t += 0.01));
     const psr = rows(submit("./self.sh", (s9t += 0.01)));
-    if (!psr.some((line) => /^ *\d+ +\d+ \.\/self\.sh +[RS]\+ +bound /.test(line)))
+    if (!psr.some((line) => /^ *\d+ +\d+ \.\/self\.sh +[RS]\+ +\S+ +\d/.test(line)))
         fail(`ps inside a #! script did not name the script: ${JSON.stringify(psr)}`);
-    if (!psr.some((line) => /^ *\d+ +\d+ \/bin\/sh +[RS] +- /.test(line)))
+    if (!psr.some((line) => /^ *\d+ +\d+ \/bin\/sh +[RS] +\S+ +- /.test(line)))
         fail(`the script's syscall server did not name the interpreter: ${JSON.stringify(psr)}`);
 
     submit("cd /home", (s9t += 0.01));

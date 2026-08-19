@@ -88,16 +88,17 @@ void test_procfs()
     CHECK(!text.str().contains("\ncwd    "));
     CHECK(!text.str().contains("\nfds    "));
 
-    // /proc/tasks is the same facts, one line per task, taken in one pass: pid,
-    // name, state, wait, flags, worker, ppid, calls, fds, mem, cap, age, cwd.
+    // /proc/tasks is the same facts but the worker, one line per task, taken in
+    // one pass: pid, name, state, wait, flags, ppid, calls, fds, mem, cap, age,
+    // cwd.
     String held = slurp("/proc/tasks");
     Str tasks   = held.str();
-    CHECK(tasks.contains(" parked waiting timer - - 0 0 0 0 0 "));
+    CHECK(tasks.contains(" parked waiting timer - 0 0 0 0 0 "));
     usize fields = 1;
     for (usize i = 0; i < tasks.size() && tasks[i] != '\n'; i++)
         if (tasks[i] == ' ')
             fields++;
-    CHECK_EQ(fields, usize(13));
+    CHECK_EQ(fields, usize(12));
 
     // /proc/stat is every counter the kernel keeps, one `name value` line each.
     // The parked task above is the whole of what is running, so the four wait

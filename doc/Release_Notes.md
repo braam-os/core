@@ -7,6 +7,38 @@ of the two needs amending.
 
 ---
 
+## WORKER was the CWD column saying it twice
+
+`ps` has ten columns rather than eleven and `/proc/tasks` twelve fields rather than thirteen: the
+worker is gone from both. `/proc/<pid>` keeps its `worker` line.
+
+**The column carried one bit, and four other columns already carried it.** `exec_proc_state`
+fills `worker`, `calls`, `fds`, `pages` and `cwd` together or not at all, because they all come
+from the `Proc` the pid does or does not have. A `Proc`'s cwd is never empty — `exec_process`
+assigns `vfs_cwd()` when the spawn named none, and a process whose assignment fails never starts
+— so `CWD` is `-` exactly when `WORKER` was, and it is the one of the two that also answers a
+question worth asking. What is lost is a *label*: `bound` said "this is a process" in a word,
+where the reader now infers it. That is the trade, and seven columns of an eighty-column row is
+what it buys.
+
+**`dying` went with it, and was unreachable.** `worker_of` had a third value for `st.dead`, but
+`End` sets `p->dead` and calls `proc_remove(p)` three lines later in the same destructor with no
+await between, so `proc_find` never returns a record with it set and no reader ever saw the word.
+`ProcState::dead` is deleted; `Proc::dead` stays, since `Sys::Wait`'s parent check reads it —
+where, for the same reason, the `!par` beside it is what actually fires.
+
+**`ps` used the field as its own predicate** — `worker != "-"` decided whether CALLS and FDS
+print a number or a dash — and now tests the cwd instead. That is the whole of the program's
+change beyond the column itself, and it is why the field could not simply be left in the file
+unread.
+
+**`/proc/<pid>` is the exception on purpose.** A pid with no process behind it prints no `cwd`
+line there at all, and no `fds` and no cap: the file is named lines rather than a fixed row, so
+absence says nothing and `worker -` is the only positive statement that this is a kernel
+coroutine. Concept.md §5.1 now says the two files differ in that, and why.
+
+`kernel.wasm` 151,028 → 150,828.
+
 ## The `braam:` prefix is gone
 
 Everything the system writes to its own screen used to begin `braam:` — the shell's `say` and

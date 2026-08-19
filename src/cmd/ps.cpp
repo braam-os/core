@@ -3,9 +3,9 @@
 #include "proc/io.h"
 
 // The tasks the scheduler is running, from /proc/tasks — one open, so every row
-// describes the same moment. The browser tells nobody anything about a worker,
-// so WORKER is the kernel's own bookkeeping: a worker is exactly a process, and
-// a task without one is a coroutine in the kernel.
+// describes the same moment. A worker is exactly a process, and a process is
+// exactly a row with a cwd: a task without one is a coroutine in the kernel, and
+// answers for nothing in the four columns after STAT.
 //
 // MEM is what the instance has committed, measured on the host — the one memory
 // figure a browser gives up, since a wasm Memory says its own size even though
@@ -18,7 +18,7 @@ namespace {
 // A row inside eighty columns, the cwd taking whatever is left. NAME holds the
 // longest a syscall server carries — a binary's path, /bin/timeout — and one
 // space.
-constexpr usize W_PID = 5, W_PPID = 5, W_NAME = 13, W_STAT = 5, W_WORKER = 7;
+constexpr usize W_PID = 5, W_PPID = 5, W_NAME = 13, W_STAT = 5;
 constexpr usize W_WAIT = 6, W_CALLS = 6, W_FDS = 4, W_MEM = 6, W_AGE = 8;
 
 // R ready, S waiting, C cancelled — then what the task holds, which /proc has
@@ -124,7 +124,7 @@ Task<i32> proc_main(Args args)
     Buf<128> head;
     head.put_right("PID", W_PID).put_right("PPID", W_PPID).put(' ');
     head.put_left("NAME", W_NAME).put_left("STAT", W_STAT);
-    head.put_left("WORKER", W_WORKER).put_left("WAIT", W_WAIT);
+    head.put_left("WAIT", W_WAIT);
     head.put_right("CALLS", W_CALLS).put_right("FDS", W_FDS);
     head.put_right("MEM", W_MEM).put_right("ELAPSED", W_AGE).put("  CWD\n");
     if ((co_await write_all(SYS_STDOUT, head.str())).is_err())
@@ -134,23 +134,22 @@ Task<i32> proc_main(Args args)
     // which is why it is last there: a path may hold a space.
     Str rest = r.value().str(), line;
     while (next_line(rest, line)) {
-        Str pid    = next_field(line);
-        Str name   = next_field(line);
-        Str state  = next_field(line);
-        Str wait   = next_field(line);
-        Str flags  = next_field(line);
-        Str worker = next_field(line);
-        Str ppid   = next_field(line);
-        Str calls  = next_field(line);
-        Str fds    = next_field(line);
-        Str mem    = next_field(line);
+        Str pid   = next_field(line);
+        Str name  = next_field(line);
+        Str state = next_field(line);
+        Str wait  = next_field(line);
+        Str flags = next_field(line);
+        Str ppid  = next_field(line);
+        Str calls = next_field(line);
+        Str fds   = next_field(line);
+        Str mem   = next_field(line);
         next_field(line); // the cap, which is uniform: /proc/<pid> has it
         Str age = next_field(line);
         Str cwd = last_field(line);
         if (pid.empty())
             continue;
 
-        bool proc = worker != "-";
+        bool proc = cwd != "-";
 
         Buf<16> stat;
         put_stat(stat, state, flags);
@@ -161,7 +160,7 @@ Task<i32> proc_main(Args args)
         out.put(' ');
         put_name(out, name, W_NAME);
         out.put_left(stat.str(), W_STAT);
-        out.put_left(worker, W_WORKER).put_left(wait, W_WAIT);
+        out.put_left(wait, W_WAIT);
         put_count(out, calls, proc, W_CALLS);
         put_count(out, fds, proc, W_FDS);
         put_mem(out, mem, W_MEM);

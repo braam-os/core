@@ -49,7 +49,7 @@ Str wait_of(const ProcInfo &p)
 // finished with.
 Str worker_of(const ProcState &st)
 {
-    return !st.worker ? Str("-") : st.dead ? Str("dying") : Str("bound");
+    return st.worker ? Str("bound") : Str("-");
 }
 
 // The foreground and the two console claims, which `ps` prints as STAT.
@@ -85,8 +85,9 @@ bool put_word(String &out, Str s)
 }
 
 // One task as positional fields, the way /proc/mounts reads: pid, name, state,
-// wait, flags, worker, ppid, calls, fds, mem, cap, age, cwd. The cwd is last, so
-// nothing after it needs finding; `-` is "no answer here".
+// wait, flags, ppid, calls, fds, mem, cap, age, cwd. The cwd is last, so nothing
+// after it needs finding; `-` is "no answer here", and a cwd is what a row with
+// a process behind it has — /proc/<pid> names the worker.
 bool put_task(String &out, const ProcInfo &p)
 {
     ProcState st;
@@ -100,7 +101,7 @@ bool put_task(String &out, const ProcInfo &p)
 
     Buf<128> rest;
     rest.put(' ').put(state_of(p)).put(' ').put(wait_of(p));
-    rest.put(' ').put(flags.str()).put(' ').put(worker_of(st));
+    rest.put(' ').put(flags.str());
     rest.put(' ').put(st.ppid).put(' ').put(st.calls).put(' ').put(st.fds);
     rest.put(' ').put(u64(st.pages) * PROC_PAGE).put(' ').put(u64(st.max_pages) * PROC_PAGE);
     rest.put(' ').put(age_of(p)).put(' ');

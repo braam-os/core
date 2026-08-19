@@ -848,10 +848,12 @@ memory and no syscall shows one process another's.
 same snapshot rule: `ps` reformats it the way `mount` and `df` reformat `/proc/mounts`, and a
 `ps` built from one read per pid would describe as many moments as it had rows. It carries what
 the scheduler knows (state, what the task is suspended on, how long it has been up) beside what
-only the process record does — whether a **worker** is bound, whose child it is, how many
-syscalls and descriptors it holds, and how much memory it has committed against the cap it was
-given. A worker is exactly a process, so that column is `proc_find` succeeding and needs nothing
-of the host. The memory figure is the one thing here the kernel cannot see for itself: a
+only the process record does — whose child it is, how many syscalls and descriptors it holds,
+how much memory it has committed against the cap it was given, and the directory it is in. A
+worker is exactly a process and a process is exactly a row with a **cwd**, so the line says
+whether one is bound by saying something more useful; `/proc/<pid>` names the binding outright,
+for a pid with none of the rest to show. The memory figure is the one thing here the kernel
+cannot see for itself: a
 `WebAssembly.Memory` reports its own size and only the worker holds one, so it comes back in
 every step's reply (§4.3) rather than in an operation of its own — a file generated at `open`
 could not have awaited one.

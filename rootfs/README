@@ -29,6 +29,6 @@ disk on its own:
 
 help lists every command. uname -a says what this is and what it is running
 on, and df shows how much room the browser gave it. ps lists what is running,
-and which of those hold a worker of their own.
+and which of those are processes of their own.
 
 /proc is the system describing itself as plain text — try cat /proc/host.
