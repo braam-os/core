@@ -10,8 +10,8 @@ and compiled to WebAssembly, deployable as a static site with no server and no
 special HTTP headers.
 
 It is a working system; the bar for any change is that nothing below regresses.
-`kernel.wasm` is ~163 KiB against a 256 KiB budget, the boot archive's staging
-tree ~737 KiB against 1 MiB, the wasm ABI is six imports and nine exports, and
+`kernel.wasm` is ~168 KiB against a 256 KiB budget, the boot archive's staging
+tree ~780 KiB against 1 MiB, the wasm ABI is six imports and nine exports, and
 the three CTest cases pass.
 
 ## Documents
@@ -266,30 +266,44 @@ Further constraints, easy to violate by habit:
 
 Every program is a binary; there is no in-kernel program, no program registry
 and no way to write one (Concept.md §4). A command word resolves as **function,
-then builtin, then `/bin`**, and only the last of the three costs a process. A
+then builtin, then `PATH`**, and only the last of the three costs a process. A
 file is a program when it carries the `braam` section, and otherwise when it
 begins `#!` and names an absolute interpreter, which `exec_resolve` chases
 exactly once; `test -x` answers from the same `exec_shebang` in `sysabi.h`. Two
 kinds of thing run a command:
 
-- **Shell builtin** — the twenty-six in `src/cmd/sh/builtin/`, inside `/bin/sh`,
-  plus a shell function, which is the same thing named by the user. Two clauses
-  make one. Either it touches the shell *process's* own state — its cwd, which a
-  typed command inherits at spawn; its job table, which no syscall shows anyone;
-  its variables, its options, its traps, its loop — **or its whole cost is the
-  spawn**, which is `test`, `[`, `:`, `echo`, `true` and `false` and nothing
-  else. The first kind has no file and never will; the second keeps its file in
-  `/bin`, since a builtin shadows the name at a prompt and not everywhere. It
-  pipes and redirects through descriptors like anything else, but runs **in its
-  turn rather than alongside**, since nothing inside a process can wait for a
-  sibling task — so it must buffer its output and write it once, or it fills an
-  eight-slot pipe and parks with nobody left to drain it.
+- **Shell builtin** — the twenty-seven in `src/cmd/sh/builtin/`, inside
+  `/bin/sh`, plus a shell function, which is the same thing named by the user.
+  Two clauses make one. Either it touches the shell *process's* own state — its
+  cwd, which a typed command inherits at spawn; its job table, which no syscall
+  shows anyone; its variables, its options, its traps, its loop — **or its whole
+  cost is the spawn**, which is `test`, `[`, `:`, `echo`, `true` and `false` and
+  nothing else. `command -v` is of the first kind: the function and builtin
+  tables are this process's own state too. The first kind has no file and never
+  will; the second keeps its file in `/bin`, since a builtin shadows the name at
+  a prompt and not everywhere. It pipes and redirects through descriptors like
+  anything else, but runs **in its turn rather than alongside**, since nothing
+  inside a process can wait for a sibling task — so it must buffer its output
+  and write it once, or it fills an eight-slot pipe and parks with nobody left
+  to drain it.
 - **A process in a worker of its own** — address-space, capability, descriptor
   and memory-cap isolation plus a real kill switch, since wasm cannot be
   preempted. **This is what every program gets and the only thing one can get**:
   `braam_add_program` arranges it unasked, and the binary's `braam` section
   carries no placement word. One message each way per step; a syscall is two
   `postMessage` hops, 34–45 µs.
+
+**`PATH` is searched by the kernel, not by the shell.** `exec_resolve` in
+`src/user/exec.cpp` reads the one word out of the env blob the spawn carries, so
+`timeout ls`, `watch ls`, `PATH=/x ls` and a script's own children all steer by
+it — a shell that resolved words itself would leave the other three looking
+elsewhere. Components are `:`-separated, an empty one is skipped, a relative one
+resolves against the caller's cwd, and no `PATH` at all means
+`SYS_PATH_DEFAULT` (`/bin`) while an empty one finds nothing. A candidate that
+is not a program does not shadow one further along, and a search that found only
+those is `Err(Invalid)` (126) rather than `Err(NotFound)` (127). The shell marks
+`PATH` exported on every assignment, since an unexported one would not reach the
+kernel that reads it.
 
 **A host with no worker to give is waited out, not worked around.** There is no
 fallback: the spawn is refused with `Error::Again` and `spawn_process` in
@@ -494,6 +508,10 @@ adding one is a design change to argue in Concept.md first.
   a job of its own. A nested `sh` gets one of its own. Nothing derives a
   filename from it, so nothing collides; `$$` is not a temp-file scheme here,
   because there are no temp files.
+- **`command` is the query half only.** `command -v` says what a word would run;
+  a bare `command <cmd>` — run it with function lookup suppressed — is a usage
+  line and 2, because suppression has to reach `exec_pipeline`'s per-stage
+  resolution rather than living in a builtin.
 - **No `setenv`: a process's environment is fixed at spawn.** `export` does
   reach a child now — `Sys::Spawn` carries an env blob after the argv one, the
   kernel keeps it on `Proc` beside the cwd, and a spawn naming none hands the
@@ -505,8 +523,9 @@ adding one is a design change to argue in Concept.md first.
 - **A script file is parsed whole.** `sh file` reads and parses it at once, as
   `.` does, so a syntax error anywhere in it means none of it runs — v7 runs
   everything above the error. `#!` works now (`./script.sh`), within three
-  bounds: the interpreter must be absolute (there is no PATH), the lookup is one
-  level deep, and the first line must end within `PROC_SHEBANG_MAX`.
+  bounds: the interpreter must be absolute (`PATH` is the caller's, so a bare
+  word would name a different one depending on who ran the script), the lookup
+  is one level deep, and the first line must end within `PROC_SHEBANG_MAX`.
 - **`trap` has two signals and one of them cannot be ignored.** There are none
   in the system, so `trap … 0` (EXIT) and `trap … 2` (INT) are all there is, and
   `trap '' 2` is refused rather than accepted and dropped:

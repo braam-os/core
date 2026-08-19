@@ -208,7 +208,7 @@ Result<ProcMeta> exec_meta(Str image)
 //
 // `out.lead` is written before the interpreter is known to load, which is safe
 // because every caller discards `out` on error.
-Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
+Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd, Str env)
 {
     String hold;     // the interpreter's name, once a #! line has named one
     Str word = name; // and what this round resolves
@@ -217,55 +217,86 @@ Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd)
         if (word.empty())
             co_return Err(Error::NotFound);
 
-        // A name with a slash is a path; a bare name is looked for in /bin,
-        // which is where the archive puts the binaries. There is no PATH
-        // variable yet, and one directory is not a search path.
-        String path;
-        bool ok =
-            word.contains("/") ? path.assign(word) : path.assign("/bin/") && path.append(word);
-        if (!ok)
-            co_return Err(Error::NoMemory);
+        // A name with a slash is a path and is never searched; a bare name goes
+        // along PATH, read out of the environment this spawn carries. An
+        // interpreter is absolute, so a second round is always the first case.
+        bool as_path = word.contains("/");
+        Str dirs     = SYS_PATH_DEFAULT;
+        if (!as_path)
+            env_value(reinterpret_cast<const u8 *>(env.data()), env.size(), "PATH", dirs);
 
-        // `./prog` is relative to whoever asked — the shell for a typed command,
-        // the parent for a Sys::Spawn, and those are two different directories
-        // now. An interpreter is absolute, so this only normalises one.
-        if (!cwd.empty()) {
-            String abs;
-            CO_TRY_VOID(path_resolve(cwd, path.str(), abs));
-            path = move(abs);
+        Str rest   = dirs, dir;
+        bool saw   = false; // a file that is there and is not a program: 126, not 127
+        bool again = false; // a #! line named an interpreter
+
+        for (bool more = true; more;) {
+            String path;
+            if (as_path) {
+                more = false;
+                if (!path.assign(word))
+                    co_return Err(Error::NoMemory);
+            } else {
+                if (!env_path_next(rest, dir))
+                    break;
+                CO_TRY_VOID(path_join(dir, word, path));
+            }
+
+            // `./prog` and a relative PATH component are relative to whoever
+            // asked — the shell for a typed command, the parent for a
+            // Sys::Spawn, and those are two different directories now.
+            if (!cwd.empty()) {
+                String abs;
+                CO_TRY_VOID(path_resolve(cwd, path.str(), abs));
+                path = move(abs);
+            }
+
+            Result<String> image = Err(Error::NoMemory);
+            CO_CALL(image, read_file(path.str()));
+            if (image.is_err()) {
+                // A candidate that is not there, and a component that is not a
+                // directory, move the search on; anything else is the answer.
+                Error e = image.error();
+                if (!as_path && (e == Error::NotFound || e == Error::NotDir || e == Error::IsDir))
+                    continue;
+                // A missing interpreter is a file that will not run, not a
+                // command that does not exist: 126, not 127.
+                co_return Err(round && e == Error::NotFound ? Error::Invalid : e);
+            }
+
+            Result<ProcMeta> meta = exec_meta(image.value().str());
+            if (meta.is_ok()) {
+                if (meta.value().max_pages == 0 || meta.value().max_pages > PROC_MAX_PAGES)
+                    meta.value().max_pages = PROC_MAX_PAGES;
+                out.meta  = meta.value();
+                out.path  = move(path);
+                out.image = move(image.value());
+                co_return {};
+            }
+            // Unsupported is one of ours built against another kernel, and stops
+            // the search: a stale binary is only a diagnostic if it survives.
+            // Only Invalid means "not a module at all".
+            if (meta.error() != Error::Invalid)
+                co_return Err(meta.error());
+
+            Str interp, arg;
+            if (!round && exec_shebang(image.value().str(), interp, arg)) {
+                // Both view the image, which goes at the end of this round. The
+                // script word is the resolved path, not the caller's.
+                if (!lead_words(out.lead, interp, arg, path.str()) || !hold.assign(interp))
+                    co_return Err(Error::NoMemory);
+                word  = hold.str();
+                again = true;
+                break;
+            }
+
+            // Not a program. There are no permissions, so this is the only
+            // executability test there is: keep looking rather than let a stray
+            // file shadow a binary further along.
+            saw = true;
         }
 
-        Result<String> image = Err(Error::NoMemory);
-        CO_CALL(image, read_file(path.str()));
-        if (image.is_err())
-            // A missing interpreter is a file that will not run, not a command
-            // that does not exist: 126, not 127.
-            co_return Err(round && image.error() == Error::NotFound ? Error::Invalid
-                                                                    : image.error());
-
-        Result<ProcMeta> meta = exec_meta(image.value().str());
-        if (meta.is_ok()) {
-            if (meta.value().max_pages == 0 || meta.value().max_pages > PROC_MAX_PAGES)
-                meta.value().max_pages = PROC_MAX_PAGES;
-            out.meta  = meta.value();
-            out.path  = move(path);
-            out.image = move(image.value());
-            co_return {};
-        }
-        // Unsupported is one of ours built against another kernel; only Invalid
-        // means "not a module at all".
-        if (meta.error() != Error::Invalid)
-            co_return Err(meta.error());
-
-        Str interp, arg;
-        if (round || !exec_shebang(image.value().str(), interp, arg))
-            co_return Err(Error::Invalid);
-
-        // Both view the image, which goes at the end of this round. The script
-        // word is the resolved path, not the caller's.
-        if (!lead_words(out.lead, interp, arg, path.str()) || !hold.assign(interp))
-            co_return Err(Error::NoMemory);
-        word = hold.str();
+        if (!again)
+            co_return Err(saw || round ? Error::Invalid : Error::NotFound);
     }
 }
 

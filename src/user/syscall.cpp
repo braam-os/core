@@ -329,7 +329,7 @@ Task<i32> proc_spawn_child(Proc &p, u32 arg, Str payload)
 
     // Resolved before the descriptors are taken, so a name that turns out not
     // to be a command leaves the parent's table as it found it.
-    Task<Result<void>> t = exec_resolve(s->words[0], s->exe, p.cwd.str());
+    Task<Result<void>> t = exec_resolve(s->words[0], s->exe, p.cwd.str(), s->env.str());
     if (!t)
         co_return -i32(Error::NoMemory);
     if (Result<void> r = co_await t; r.is_err())

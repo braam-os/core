@@ -68,6 +68,10 @@ Task<i32> sh_eval(Args args, ShIo io);
 // `unset -f`. False when there is no such function.
 bool func_unset(Str name);
 
+// Whether a function of that name is defined, which is what `command -v` looks
+// at before anything else, in the order a command word resolves.
+bool func_exists(Str name);
+
 // `exec`: with no command its redirections become the shell's own and outlive
 // the line; with one it spawns, waits, and ends the shell with that status.
 Task<i32> sh_exec(Args args, ShIo io);

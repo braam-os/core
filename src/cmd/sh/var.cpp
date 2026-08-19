@@ -137,6 +137,10 @@ bool var_set(Str name, Str value)
     if (!e || !e->value.assign(value))
         return false;
     e->valued = true;
+    // PATH steers the kernel's own resolution and reaches it through the
+    // environment, so an unexported one would not steer anything.
+    if (name == "PATH")
+        e->exported = true;
     return true;
 }
 

@@ -7,6 +7,7 @@ Task<i32> builtin_bracket(Args args, ShIo io);
 Task<i32> builtin_break(Args args, ShIo io);
 Task<i32> builtin_cd(Args args, ShIo io);
 Task<i32> builtin_colon(Args args, ShIo io);
+Task<i32> builtin_command(Args args, ShIo io);
 Task<i32> builtin_continue(Args args, ShIo io);
 Task<i32> builtin_dot(Args args, ShIo io);
 Task<i32> builtin_echo(Args args, ShIo io);

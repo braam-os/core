@@ -471,6 +471,9 @@ inline usize argv_bytes(const u8 *p, usize len)
     return at;
 }
 
+// Where a bare command name is looked for when the environment names nowhere.
+constexpr Str SYS_PATH_DEFAULT = "/bin";
+
 // The i'th word, or an empty Str if the blob is short — a truncated blob is a
 // broken host, and reading past it would be worse than losing an argument.
 inline Str argv_at(const u8 *p, usize len, usize i)
@@ -491,4 +494,33 @@ inline Str argv_at(const u8 *p, usize len, usize i)
         at += size;
     }
     return Str();
+}
+
+// The value `name` has in an env blob, whose words are NAME=value. False leaves
+// `out` alone: a name that is not there and one whose value is empty are
+// different answers, and PATH is where the difference shows.
+inline bool env_value(const u8 *p, usize len, Str name, Str &out)
+{
+    usize n = argv_count(p, len);
+    for (usize i = 0; i < n; i++) {
+        Str w    = argv_at(p, len, i);
+        usize eq = w.find('=');
+        if (eq == Str::npos || w.substr(0, eq) != name)
+            continue;
+        out = w.substr(eq + 1);
+        return true;
+    }
+    return false;
+}
+
+// The next directory of a PATH value, cut off `rest`. An empty component is
+// skipped rather than meaning the current directory. False when none are left.
+inline bool env_path_next(Str &rest, Str &dir)
+{
+    while (!rest.empty()) {
+        dir = rest.split(':', rest);
+        if (!dir.empty())
+            return true;
+    }
+    return false;
 }

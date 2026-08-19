@@ -967,7 +967,7 @@ handle owned twice. A `Body`, `Socket`, `PickSet` or `PickFile` is `Err(Perm)`:
 those are read by a host round trip rather than through a `Source`, so they are
 not stdio whatever they are pointed at. A builtin is not refused here any more,
 because the kernel has never heard of one: they live inside `/bin/sh` and
-`exec_resolve` looks only in `/bin`, so `spawn("cd")` is an ordinary
+`exec_resolve` looks only along `PATH`, so `spawn("cd")` is an ordinary
 `Err(NotFound)`.
 
 **`Spawn`'s environment.** With `SYS_SPAWN_ENV` in the op word's argument, an
@@ -976,9 +976,21 @@ the caller's, which the kernel holds on the `Proc` record beside the cwd. Both
 blobs are the encoding of `src/kernel/sysabi.h`'s argv — the env's words being
 `NAME=value` — and the join is found by walking the first (`argv_bytes`), so a
 malformed blob is `Err(Invalid)` rather than a child entered with rubbish. An
-environment over `SYS_ENV_MAX` is refused the same way. The kernel does not read
-the words: a word with no `=` is the caller's business, exactly as an argv word
-is.
+environment over `SYS_ENV_MAX` is refused the same way. The kernel reads exactly
+one of the words, `PATH`, and only to resolve the command name — the rest are
+the caller's business, exactly as an argv word is, and a word with no `=` is not
+a name.
+
+**`Spawn` resolves against that environment, not the caller's table.** The blob
+the child will be entered with is assembled first and `exec_resolve` searches
+the `PATH` in it, so `PATH=/x prog` steers the very spawn its prefix names and a
+spawn that carries nothing searches what the parent was given. Components are
+`:`-separated, an empty one is skipped, and a relative one resolves against the
+caller's working directory. No `PATH` at all means `SYS_PATH_DEFAULT`, which is
+`/bin`; a `PATH` that is there and empty names no directories and finds nothing.
+A candidate that is not a program is skipped rather than shadowing one further
+along, and a search that found only those is `Err(Invalid)` — 126 — rather than
+`Err(NotFound)`.
 
 **Statuses are clamped to 0–255 when recorded.** `Sys::Exit` takes whatever the
 program passed it, and a negative status on this wire is an error code.
@@ -1007,6 +1019,7 @@ failure.
 | `SYS_SPAWN_HEAD` | 3 | the descriptor words before `Spawn`'s argv blob, in `u32`s |
 | `SYS_SPAWN_ENV` | 1 | `Spawn`'s arg bit: an env blob follows argv, else the child inherits the caller's |
 | `SYS_ENV_MAX` | 8192 | the most an environment may be, and therefore what a chain of children carries |
+| `SYS_PATH_DEFAULT` | `/bin` | where a bare command name is looked for when the environment names no `PATH` |
 | `SYS_ECHO_HEAD` | 4 | `Echo`'s anchor, cursor offset and run count, in `u32`s |
 | `SYS_ECHO_RUN` | 2 | the style and length of one `Echo` run, in `u32`s |
 | `SYS_ECHO_RUNS_MAX` | 8 | runs per `Echo`; a prompt is four |

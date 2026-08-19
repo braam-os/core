@@ -40,22 +40,8 @@ Task<bool> answer(const CondProbe &p)
     }
 
     if (p.op == 'x') {
-        Task<Result<i32>> t = open_read(p.arg);
-        if (!t)
-            co_return false;
-        Result<i32> r = co_await t;
-        if (r.is_err())
-            co_return false;
-
-        bool runnable = false;
-        if (Task<Result<String>> c = read_chunk(u32(r.value()))) {
-            Result<String> got = co_await c;
-            Str interp, arg;
-            runnable = got.is_ok() && (got.value().str().starts_with(WASM_MAGIC) ||
-                                       exec_shebang(got.value().str(), interp, arg));
-        }
-        co_await close_fd(u32(r.value()));
-        co_return runnable;
+        Task<bool> t = file_runnable(p.arg);
+        co_return t ? co_await t : false;
     }
 
     if (p.op == 'n' || p.op == 'o') {
@@ -96,6 +82,26 @@ Task<bool> answer(const CondProbe &p)
 }
 
 } // namespace
+
+Task<bool> file_runnable(Str path)
+{
+    Task<Result<i32>> t = open_read(path);
+    if (!t)
+        co_return false;
+    Result<i32> r = co_await t;
+    if (r.is_err())
+        co_return false;
+
+    bool runnable = false;
+    if (Task<Result<String>> c = read_chunk(u32(r.value()))) {
+        Result<String> got = co_await c;
+        Str interp, arg;
+        runnable = got.is_ok() && (got.value().str().starts_with(WASM_MAGIC) ||
+                                   exec_shebang(got.value().str(), interp, arg));
+    }
+    co_await close_fd(u32(r.value()));
+    co_return runnable;
+}
 
 Task<i32> cond_run(Args a, u32 errfd)
 {

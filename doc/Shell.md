@@ -2,7 +2,7 @@
 
 `/bin/sh` is a Bourne shell, and the reference for every decision in it is v7's.
 It has variables, functions, the three loops, `case`, globbing, here-documents,
-command substitution, job control, twenty-six builtins and a line editor — and
+command substitution, job control, twenty-seven builtins and a line editor — and
 it is an ordinary wasm binary in `/bin`, running in a worker of its own, asking
 for everything it needs through the same system calls any program can call. This
 document is the whole of it.
@@ -52,8 +52,9 @@ what lets `while read l; do …; done` inside a script work against a pipe.
 streams.
 
 **`#!` works.** A file whose first line is `#!` followed by an **absolute** path
-is executable, so `./script.sh` runs. The interpreter must be absolute — there
-is no PATH to search — the lookup is one level deep, so an interpreter that is
+is executable, so `./script.sh` runs. The interpreter must be absolute — `PATH`
+is the caller's, so a bare word would name a different interpreter depending on
+who ran the script — the lookup is one level deep, so an interpreter that is
 itself a script is refused, and the first line must end within 128 bytes. The
 mechanism is the kernel's, not the shell's; §4.3 has it.
 
@@ -200,9 +201,19 @@ assign   := name '=' word, and only ahead of the first ordinary word
 
 **A simple command** is optional assignments, then words and redirections in any
 order. The first word is the command; it resolves as **a function, then a
-builtin, then `/bin/<word>`**, and only the last of the three costs a process. A
-word containing `/` is a path instead, resolved against the shell's own working
-directory. **There is no PATH.**
+builtin, then a file on `PATH`**, and only the last of the three costs a
+process. A word containing `/` is a path instead, resolved against the shell's
+own working directory and never searched for. `command -v <word>` says which of
+the three a word is.
+
+**The search is the kernel's.** The shell hands `Sys::Spawn` the word as typed
+and `exec_resolve` searches `PATH` out of the environment that spawn carries, so
+`timeout ls` and `watch ls` search the same list the shell does. Components are
+separated by `:` and an empty one is skipped rather than meaning the current
+directory; a relative one is resolved against the working directory. A file on
+`PATH` that is not a program does not shadow one further along, and a search
+that found only such files reports `not executable` (126) rather than
+`not found` (127). An environment naming no `PATH` at all searches `/bin`.
 
 **A pipeline** joins simple commands with `|`, at most **eight** stages. Its
 status is its last stage's. `!` may lead the whole pipeline and inverts that
@@ -454,11 +465,18 @@ The special parameters:
 `set -- a b c` replaces them, `set --` clears them, and `shift [n]` drops the
 first `n`.
 
-**The shell reads exactly four variables**: `IFS` (§6), `PS2` and `PS4` (§2),
-and `HOME`, which `cd` with no operand uses and which falls back to the literal
-`/home`. It plants none of its own. The environment init hands `/bin/sh` is
-`HOME=/home` and `SHELL=/bin/sh`, and everything in an incoming environment
-becomes an exported shell variable at startup, so a nested `sh` is not a wall.
+**The shell reads exactly five variables**: `IFS` (§6), `PS2` and `PS4` (§2),
+`HOME`, which `cd` with no operand uses and which falls back to the literal
+`/home`, and `PATH`, which `command -v` and `help` walk — though what *runs* a
+command word is the kernel reading the same variable out of the environment
+(§4). It plants none of its own. The environment init hands `/bin/sh` is
+`PATH=/bin`, `HOME=/home` and `SHELL=/bin/sh`, and everything in an incoming
+environment becomes an exported shell variable at startup, so a nested `sh` is
+not a wall.
+
+**`PATH` is exported whether or not it is marked.** Assigning it marks it, since
+an unexported one would never reach the kernel that reads it. Unsetting it is
+allowed and means the kernel's own default, `/bin`.
 
 **Scoping is global.** A function call swaps only the positional parameters.
 Only `( … )` isolates variables, and it does so by saving and restoring them,
@@ -537,7 +555,7 @@ test: ] missing
 
 ## 10. The builtins
 
-Twenty-six, and the list is closed. A builtin is one of two things: something
+Twenty-seven, and the list is closed. A builtin is one of two things: something
 that touches the shell **process's** own state and so could not be a file — its
 working directory, its job table, its variables, its options, its traps, its
 loop — or something whose **whole cost is the spawn**, which is `test`, `[`,
@@ -581,6 +599,21 @@ empty. Failure prints `cd: <dir>: <why>` and exits 1. **There is no `cd -`, no
 `$OLDPWD`, no `-P`/`-L` and no `CDPATH`**; a `-` operand is an ordinary
 directory name. `pwd` is not a builtin — it is `/bin/pwd`, since only a system
 call can say which process is asking.
+
+### `command -v <name>...`
+
+Says what each name would run, in the order a command word resolves: a function
+or a builtin prints as the bare name, and anything else prints as the path
+`PATH` found — the same probe `test -x` uses, so a file that is neither a wasm
+module nor a `#!` script is not an answer. A name that is nothing prints nothing
+and the builtin exits 1. Only `-v` is here; see §15.
+
+```
+$ command -v cd
+cd
+$ command -v ls
+/bin/ls
+```
 
 ### `echo [-n] [<word>...]`
 
@@ -638,9 +671,10 @@ waiting is 130.
 
 ### `help`
 
-Lists the builtins with the usage lines the table carries, then every program in
-`/bin` that a builtin does not shadow, with the usage line `/share/help` carries
-for it. One line per name.
+Lists the builtins with the usage lines the table carries, then every program on
+`PATH` that a builtin does not shadow, with the usage line `/share/help` carries
+for it. One line per name, the first directory naming it winning, which is the
+order the kernel searches them in.
 
 ### `jobs`
 
@@ -832,9 +866,10 @@ run past a hole; at a prompt it abandons the line and asks again.
 
 ## 14. The programs in `/bin`
 
-Everything not in §10 is an ordinary program in `/bin`, in a worker of its own.
-`help` prints this list at run time with the usage lines `/share/help` carries;
-each program also answers for itself.
+Everything not in §10 is an ordinary program in `/bin`, in a worker of its own —
+`/bin` being where the archive puts them and what `PATH` names at boot. `help`
+prints this list at run time with the usage lines `/share/help` carries; each
+program also answers for itself.
 
 | | |
 | --- | --- |
@@ -914,10 +949,13 @@ change to argue in Concept.md first.
 - **`read` reads past the line it was asked for**, keeping the remainder in a
   pushback buffer. `sh -s` has a reader of its own, so a `read` inside a script
   off standard input sees a different position in the same stream.
+- **No `command <cmd>`.** Only the query half, `command -v`, is here:
+  suppressing function lookup for one command has to reach the per-stage
+  resolution in `job.cpp`, and a builtin runs after that decision rather than
+  before it. A bare `command` is a usage line and status 2.
 
 **The environment:**
 
-- **No `PATH`.** A command word is a function, a builtin, or `/bin/<word>`.
 - **No `PS1`.** The prompt is structural (§2).
 - **No startup file** — no `.profile`, no `.shrc`, no `ENV`, no `--login`.
 - **No `setenv`.** A process's environment is fixed at spawn. `export` reaches a

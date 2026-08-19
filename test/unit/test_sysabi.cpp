@@ -189,6 +189,59 @@ void test_sysabi()
     CHECK_EQ(sys_op_arg(sys_op(Sys::Spawn, SYS_SPAWN_ENV)), SYS_SPAWN_ENV);
     CHECK(sys_op_code(sys_op(Sys::Spawn, SYS_SPAWN_ENV)) == Sys::Spawn);
 
+    // PATH is the one word the kernel reads out of that blob (exec_resolve), so
+    // a lookup by name lives beside the encoder. A name that is not there
+    // leaves the answer alone: an absent PATH means SYS_PATH_DEFAULT and an
+    // empty one names no directories, and those are different.
+    Str v        = "untouched";
+    const u8 *ev = pp + at;
+    usize evn    = pair.size() - at;
+    CHECK(env_value(ev, evn, "HOME", v));
+    CHECK(v == "/home");
+    CHECK(!env_value(ev, evn, "PATH", v));
+    CHECK(v == "/home"); // still the last answer, not cleared
+    CHECK(!env_value(ev, evn, "HOM", v));
+    CHECK(!env_value(ev, evn, "OME", v));
+    CHECK(!env_value(ev, evn, "", v));
+
+    Str one[] = { "PATH=", "novalue" };
+    String blank;
+    for (usize i = 0; i < argv_size(one, 2); i++)
+        CHECK(blank.push(0));
+    argv_encode(one, 2, reinterpret_cast<u8 *>(blank.data()));
+    const u8 *bp = reinterpret_cast<const u8 *>(blank.data());
+    CHECK(env_value(bp, blank.size(), "PATH", v));
+    CHECK(v.empty());
+    CHECK(!env_value(bp, blank.size(), "novalue", v)); // a word with no `=` is not a name
+
+    // A PATH value is cut into directories, and an empty component is skipped
+    // rather than meaning the current directory.
+    Str rest2 = "/bin", dir;
+    CHECK(env_path_next(rest2, dir));
+    CHECK(dir == "/bin");
+    CHECK(!env_path_next(rest2, dir));
+
+    rest2 = "/a:b:/c";
+    CHECK(env_path_next(rest2, dir));
+    CHECK(dir == "/a");
+    CHECK(env_path_next(rest2, dir));
+    CHECK(dir == "b"); // relative, resolved against the caller's cwd
+    CHECK(env_path_next(rest2, dir));
+    CHECK(dir == "/c");
+    CHECK(!env_path_next(rest2, dir));
+
+    rest2 = ":/a::/b:";
+    CHECK(env_path_next(rest2, dir));
+    CHECK(dir == "/a");
+    CHECK(env_path_next(rest2, dir));
+    CHECK(dir == "/b");
+    CHECK(!env_path_next(rest2, dir));
+
+    rest2 = "";
+    CHECK(!env_path_next(rest2, dir));
+    rest2 = ":::";
+    CHECK(!env_path_next(rest2, dir));
+
     // Sys::Echo's payload is the anchor, then a header per run, then the runs'
     // bytes end to end — every header before every byte, so the kernel can
     // check the whole shape before it reads any of it.
@@ -286,7 +339,7 @@ void test_sysabi()
     CHECK(exec_shebang("#!/bin/sh   -x  \r\n", in, ar) && in == "/bin/sh" && ar == "-x");
 
     CHECK(!exec_shebang("echo hi\n", in, ar));
-    CHECK(!exec_shebang("#!sh\n", in, ar)); // no PATH, so no relative interpreter
+    CHECK(!exec_shebang("#!sh\n", in, ar)); // absolute only: PATH is the caller's
     CHECK(!exec_shebang("#!  \n", in, ar));
     CHECK(!exec_shebang("#!\n", in, ar));
     CHECK(!exec_shebang("#!", in, ar));

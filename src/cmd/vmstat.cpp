@@ -14,7 +14,9 @@
 namespace {
 
 // A row inside eighty columns. Memory is KB rather than `ps`'s scaled units.
-constexpr usize W_PROC = 3, W_MEM = 7, W_AL = 6, W_FR = 6, W_GR = 4;
+// `al` and `fr` are adjacent with no gap between them, so seven each: a busy
+// second allocates past a hundred thousand times, and six would run together.
+constexpr usize W_PROC = 3, W_MEM = 7, W_AL = 7, W_FR = 7, W_GR = 4;
 // A rate of six digits still separates itself from the column on its left.
 constexpr usize W_RATE = 6, W_TICK = 6;
 constexpr usize GAP = 2;

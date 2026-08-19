@@ -575,18 +575,19 @@ user's own `exit` and the end of the session. It is bounded at three deaths in
 quick succession; a shell *waiting* for a worker is not one, since it has not
 started. A replaced shell is a fresh one: kernel `/home`, empty job table.
 
-**A shell builtin is not kernel code**: the twenty-six of them live inside
+**A shell builtin is not kernel code**: the twenty-seven of them live inside
 `/bin/sh`, in `src/cmd/sh/builtin/`. Two clauses make one. The first is that it
 touches the shell *process's own* state — its working directory, which a typed
 command inherits at spawn; its job table, which no syscall shows anyone; its
 variables, its options, its traps, its loop. That is `cd`, `fg`, `jobs`, `kill`,
 `exit`, `set`, `shift`, `read`, `trap`, `wait`, `export`, `readonly`, `unset`,
-`break`, `continue`, `return`, `.`, `eval`, `exec` and `help`. The second is
-that **its whole cost is the spawn**: a program costs an instantiation and a
-worker, roughly a millisecond (§4.4), and `while [ … ]; do echo …; done` pays it
-twice a turn, so `test`, `[`, `:`, `echo`, `true` and `false` are builtins too —
-a few lines each, where the spawn *is* the runtime. The clause is closed and
-admits nothing else.
+`break`, `continue`, `return`, `.`, `eval`, `exec`, `help` and `command`, whose
+answer *is* that state — the function table and the builtin table, which no
+syscall shows anyone either. The second is that **its whole cost is the spawn**:
+a program costs an instantiation and a worker, roughly a millisecond (§4.4), and
+`while [ … ]; do echo …; done` pays it twice a turn, so `test`, `[`, `:`,
+`echo`, `true` and `false` are builtins too — a few lines each, where the spawn
+*is* the runtime. The clause is closed and admits nothing else.
 
 **A builtin of the second kind keeps its file in `/bin`.** The shadowing is at a
 prompt, not everywhere: `/bin/test` is what a future `find -exec` would run, and
@@ -596,7 +597,17 @@ will — `rm /bin/cd` finds nothing.
 **A shell function is looked up first**, ahead of both: it is the same rule
 named by the user, and it runs in the shell's own turn for the same reason a
 builtin does. So a command word resolves as **function, then builtin, then
-`/bin`**, and only the last of the three costs a process.
+`PATH`**, and only the last of the three costs a process.
+
+**`PATH` is the kernel's, not the shell's.** The search is in `exec_resolve`,
+which reads the one word out of the environment the spawn carries (§4.3), so it
+steers every spawn there is and not only a typed command: `timeout ls`,
+`watch ls`, `PATH=/x ls` and a script's own children all search the same list.
+A shell that resolved the word itself would leave the other three looking
+somewhere else, and a `PATH` that did not steer resolution would be a lie a
+script could believe. A word with a `/` in it is a path and is never searched;
+an environment naming no `PATH` searches `/bin`, which is where the archive puts
+the binaries and what the constant used to be.
 
 Either way a builtin pipes and redirects through descriptors like anything else,
 but runs **in its turn rather than alongside**, since nothing inside a process
@@ -655,18 +666,23 @@ interpreter, its one argument if the line carried one, the resolved path of the
 script, and then the caller's own arguments. Three bounds make it a rule rather
 than a search: the lookup is **one level deep**, so an interpreter that is
 itself a script is `Err(Invalid)`; the interpreter must be **absolute**, since
-there is no PATH and one directory is not a search path; and the first line must
-end within `PROC_SHEBANG_MAX` bytes, so a file is decided by its head. A script
-costs **one** process, not two — the resolution happens in `exec_resolve` before
-any process exists, so the depth and child caps count the interpreter exactly as
+`PATH` is the caller's and a file that named its interpreter by a bare word
+would run a different one depending on who ran the script; and the first line
+must end within `PROC_SHEBANG_MAX` bytes, so a file is decided by its head. A
+script costs **one** process, not two — the resolution happens in `exec_resolve`
+before any process exists, so the depth and child caps count the interpreter as
 they counted a binary, and every script shares the interpreter's
 already-compiled `Module`. The kernel does read file contents to decide what a
 program is; it always did, for the custom section. What it does not do is guess,
 and a text file with no `#!` is still `Err(Invalid)`. An interpreter that is not
 there is `Err(Invalid)` too, rather than the `Err(NotFound)` of a command that
 does not exist: 126 and not 127, because the file is there and it is the file
-that will not run. `test -x` answers from the same two rules, out of one
-`SYS_CHUNK`.
+that will not run. A search says the same thing the same way: a file on `PATH`
+that is neither kind does not shadow the binary behind it — there are no
+permissions, so being a program is the only executability test there is — and a
+search that found nothing else is `Err(Invalid)` rather than `Err(NotFound)`.
+`test -x` answers from the same two rules, out of one `SYS_CHUNK`, and is what
+`command -v` walks `PATH` with.
 
 ```
 process imports:  env.memory                        // the kernel's, so the cap is the kernel's
@@ -699,7 +715,9 @@ The wire's conventions:
   `argv_count` and `argv_at` read the payload unchanged. The block is never
   freed, so both are spans of views into it and a program may hold them to the
   end — which is why the runtime walks the environment on demand rather than
-  building a `Vec` every process would pay for.
+  building a `Vec` every process would pay for. **The kernel reads exactly one
+  word of it**, `PATH`, and only to resolve the command name; every other word
+  is the caller's business, as an argv word is.
 - **A reply payload begins with an `i32` status**: `_resume`'s signature has
   room for a buffer and not for an errno, and every asynchronous syscall needs
   both.
@@ -960,7 +978,8 @@ no `setenv` to change one after.
 | `trap … <signal>` | There are no signals, and the cancellation flag is sticky: once `^C` sets it every later await answers at once. | `trap … 0` on any normal exit, and `trap … 2` in an interactive shell, where the interrupt went to the stages and this process was never cancelled. `trap '' 2` is refused rather than accepted and dropped. |
 
 **What runs a command word is §4's rule**: a function, then a builtin, then a
-binary in `/bin` — and only the third costs an instantiation and a worker.
+binary on `PATH` — and only the third costs an instantiation and a worker.
+`command -v` is the builtin that says which of the three a word is.
 
 ---
 

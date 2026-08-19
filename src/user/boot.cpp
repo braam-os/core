@@ -365,11 +365,11 @@ Task<bool> boot_filesystem(const u32 &pid)
     co_return true;
 }
 
-// What init hands the shell. No PATH — a command word resolves as function,
-// then builtin, then /bin — and no TERM, since the terminal is a cell grid.
+// What init hands the shell. No TERM, since the terminal is a cell grid with no
+// terminfo entry that could describe it.
 bool base_env(String &out)
 {
-    constexpr Str WORDS[] = { "HOME=/home", "SHELL=/bin/sh" };
+    constexpr Str WORDS[] = { "PATH=/bin", "HOME=/home", "SHELL=/bin/sh" };
     constexpr usize N     = sizeof(WORDS) / sizeof(WORDS[0]);
 
     usize n = argv_size(WORDS, N);

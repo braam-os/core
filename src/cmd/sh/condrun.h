@@ -6,9 +6,15 @@
 #pragma once
 
 #include "kernel/args.h"
+#include "kernel/str.h"
 #include "kernel/task.h"
 #include "kernel/types.h"
 
 // 0 true, 1 false, 2 a malformed expression — reported as `test: why` on
 // `errfd`. `a` is the expression alone: no command name, and no closing `]`.
 Task<i32> cond_run(Args a, u32 errfd);
+
+// Whether `path` names a file the kernel would instantiate: a wasm module, or a
+// first line naming an interpreter. What `test -x` answers, and what `command
+// -v` and `help` walk PATH with.
+Task<bool> file_runnable(Str path);

@@ -1923,6 +1923,11 @@ void func_return(i32 status)
     g_return_status = status;
 }
 
+bool func_exists(Str name)
+{
+    return func_find(name) != nullptr;
+}
+
 bool func_unset(Str name)
 {
     Vec<FuncEntry *> &t = funcs();

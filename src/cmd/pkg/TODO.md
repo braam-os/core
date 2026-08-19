@@ -54,11 +54,13 @@ old number back.
 
 ### Command resolution
 
-A command word resolves as function, then builtin, then `/bin` (Concept.md §4).
-A fourth clause is added after `/bin`: read `/pkg/active`, read `/pkg/gen/<N>`,
-take the line naming that command. Two small reads on a `/bin` miss, and
-deliberately not cached — the reason the prompt's cwd is not cached either.
-`/bin` still wins, so nothing installed can shadow the system.
+A command word resolves as function, then builtin, then `PATH` (Concept.md §4).
+A clause is added after `PATH`: read `/pkg/active`, read `/pkg/gen/<N>`, take
+the line naming that command. Two small reads on a miss, and deliberately not
+cached — the reason the prompt's cwd is not cached either. `PATH` still wins, so
+nothing installed can shadow the system. **Weigh this against a generation whose
+commands are symlinked into a directory `PATH` names, which needs no kernel
+change at all** — see P12.
 
 ### Two new operations
 
@@ -292,7 +294,13 @@ built from nothing has the right shape.
 
 ### P12. The `exec_resolve` search path
 
-`src/user/exec.cpp` — the fourth clause, after `/bin`. This is the kernel half
+**Reconsider this one first: `exec_resolve` searches `PATH` now.** A generation
+whose commands are symlinked into one directory that `PATH` names is most of
+this step for none of the code, and it keeps the kernel out of `/pkg`'s file
+formats. What is written below is the alternative, and it needs an argument now
+that it did not need when `/bin` was the whole search.
+
+`src/user/exec.cpp` — a clause after `PATH`. This is the kernel half
 of activation and it is small: read `/pkg/active`, read `/pkg/gen/<N>`, take the
 line naming the command, resolve the binary under `/pkg/store/`.
 

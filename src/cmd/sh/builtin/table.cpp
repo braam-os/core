@@ -3,13 +3,14 @@
 namespace {
 
 // Sorted, because `help` prints it in order and a linear search over
-// twenty-six entries is not worth an index.
+// twenty-seven entries is not worth an index.
 constexpr Builtin TABLE[] = {
     { ".", "<file> — run a file's commands in this shell", builtin_dot },
     { ":", "[<arg>...] — do nothing, successfully", builtin_colon },
     { "[", "<expr> ] — evaluate a condition, as `test` does", builtin_bracket },
     { "break", "[<n>] — leave a loop, or n of them", builtin_break },
     { "cd", "[<dir>] — change the working directory, /home by default", builtin_cd },
+    { "command", "-v <name>... — say what a command word would run", builtin_command },
     { "continue", "[<n>] — start a loop's next turn", builtin_continue },
     { "echo", "[-n] [<word>...] — write the arguments", builtin_echo },
     { "eval", "[<arg>...] — join the arguments and run them as a command", builtin_eval },

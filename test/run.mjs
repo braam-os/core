@@ -763,6 +763,71 @@ if (mode === "--kernel") {
     // what a program that starts a program gets without doing anything.
     vshows("timeout -m 5000 env", "ev=yes");
 
+    // PATH. Init plants one and the kernel searches it, so the /bin that used
+    // to be a constant in exec_resolve is a value that a spawn carries.
+    vshows("echo $PATH", "/bin");
+    vrun("mkdir /home/pbin");
+    vrun("ln -s /bin/echo /home/pbin/hi");
+    if (!rows(vrun("hi one")).some((line) => line.startsWith("hi: not found")))
+        fail("a program outside PATH ran by name");
+
+    vrun("PATH=/home/pbin:/bin");
+    vshows("hi one", "one");
+
+    // An assignment marks it exported without being asked: an unexported PATH
+    // would never reach the kernel that reads it.
+    vshows("env", "PATH=/home/pbin:/bin");
+
+    // The point of resolving kernel-side: a program that spawns searches it
+    // too, and so does a nested shell.
+    vshows("timeout -m 5000 hi two", "two");
+    vshows("sh -c 'hi three'", "three");
+
+    // A file that is not a program does not shadow the binary behind it —
+    // there are no permissions, so being a program is the only test there is.
+    vrun("echo text > /home/pbin/ls");
+    vshows("ls /home", "pbin/");
+
+    // ...and when it is all the search found, that is 126 rather than 127.
+    s = vrun("PATH=/home/pbin ls");
+    if (!rows(s).some((line) => line.startsWith("ls: not executable")))
+        fail(`a search that found only a non-program: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes(prompt(126)))
+        fail(`a search that found only a non-program did not report 126: ${JSON.stringify(rows(s))}`);
+
+    // A PATH that is there and empty names no directories; an absent one is the
+    // kernel's default, which is how `env -i ls` still runs.
+    if (!rows(vrun("PATH= ls")).some((line) => line.startsWith("ls: not found")))
+        fail("an empty PATH still found a command");
+    vshows("env -i ls /home", "pbin/");
+    vrun("unset PATH");
+    vshows("echo [$PATH]", "[]");
+    vshows("ls /home", "pbin/");
+    vrun("PATH=/home/pbin:/bin");
+
+    // `command -v` says which of the three a word is, in the order they resolve.
+    vshows("command -v ls", "/bin/ls");
+    vshows("command -v cd", "cd");
+    vshows("command -v hi", "/home/pbin/hi");
+    vshows("command -v /bin/wc", "/bin/wc");
+    vshows("f() { echo fn; }; command -v f", "f");
+    s = vrun("command -v nosuch");
+    if (!rows(s).includes(prompt(1)))
+        fail(`command -v on a name that is nothing: ${JSON.stringify(rows(s))}`);
+    s = vrun("command ls");
+    if (!rows(s).includes(prompt(2)))
+        fail(`command without -v: ${JSON.stringify(rows(s))}`);
+
+    // `help` lists what PATH names, not the /bin it used to be told about.
+    vrun("clear");
+    s = vrun("help | grep 'program on PATH'");
+    if (!rows(s).some((line) => line.startsWith("  hi ")))
+        fail(`help did not list a program PATH names: ${JSON.stringify(rows(s))}`);
+
+    vrun("unset -f f");
+    vrun("rm -r /home/pbin");
+    vrun("PATH=/bin");
+
     // A command name and a redirection target out of a variable: the argv
     // words split and the target does not.
     vrun("c=echo");
@@ -1257,7 +1322,7 @@ if (mode === "--kernel") {
     console.error("VMSTAT-DEFAULT:\n" + vm.join("\n"));
     if (!vm[0] || !/^-+procs-+\s+-+memory-+\s+-+alloc-+\s+-+faults-+\s+-*loop-*$/.test(vm[0]))
         fail(`vmstat did not rule its groups: ${JSON.stringify(vm)}`);
-    if (vm[1] !== "  r  t  h  p      use    fre      al    fr  gr      in    sy    cs      tk")
+    if (vm[1] !== "  r  t  h  p      use    fre       al     fr  gr      in    sy    cs      tk")
         fail(`vmstat did not name its columns: ${JSON.stringify(vm[1])}`);
     // Thirteen numbers. vmstat is itself one of the tasks it counts — the syscall
     // server that generated the file is runnable and the stepper is parked on its
@@ -2183,9 +2248,9 @@ if (mode === "--kernel") {
     s = submit("clear", 9090);
     s = submit("help", 9091);
     const helped = rows(s).filter((line) => line.startsWith("  "));
-    for (const [i, name] of [".", ":", "[", "break", "cd", "continue", "echo", "eval", "exec",
-                             "exit", "export", "false", "fg", "help", "jobs", "kill", "read",
-                             "readonly", "return", "set", "shift", "test", "trap", "true",
+    for (const [i, name] of [".", ":", "[", "break", "cd", "command", "continue", "echo", "eval",
+                             "exec", "exit", "export", "false", "fg", "help", "jobs", "kill",
+                             "read", "readonly", "return", "set", "shift", "test", "trap", "true",
                              "unset", "wait"].entries())
         if (!helped[i] || !helped[i].startsWith(`  ${name} `))
             fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);

@@ -138,15 +138,10 @@ Str proc_env_at(usize i)
 
 Str proc_env(Str name)
 {
-    Rt &r   = rt();
-    usize n = argv_count(r.env, r.env_len);
-    for (usize i = 0; i < n; i++) {
-        Str w    = argv_at(r.env, r.env_len, i);
-        usize eq = w.find('=');
-        if (eq != Str::npos && w.substr(0, eq) == name)
-            return w.substr(eq + 1);
-    }
-    return Str();
+    Rt &r = rt();
+    Str v;
+    env_value(r.env, r.env_len, name, v);
+    return v;
 }
 
 u32 proc_spawn(Task<i32> t)

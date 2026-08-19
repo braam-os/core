@@ -29,20 +29,25 @@ struct Executable {
 // wants saying so.
 Result<ProcMeta> exec_meta(Str image);
 
-// /bin, then the name itself once it looks like a path. Err(NotFound) is "no
-// such command"; Err(Invalid) is "not executable". There is nothing to look at
-// before /bin any more: a builtin is the shell's own frame, and the shell is a
-// program that never asks the kernel for one.
+// PATH, or the name itself once it looks like a path. Err(NotFound) is "no such
+// command"; Err(Invalid) is "not executable", which is also what a search that
+// only ever found files that are not programs answers. There is nothing to look
+// at before PATH: a builtin is the shell's own frame, and the shell is a program
+// that never asks the kernel for one.
 //
 // A file that is not a module is looked at once more for a `#!` line naming an
 // absolute interpreter, resolved one level deep — an interpreter that is itself
 // a script is refused — and `out.path` becomes that interpreter's. An
 // interpreter that is not there is Err(Invalid), not Err(NotFound).
 //
-// `cwd` is what a name with a slash in it is relative to. Empty means the
-// kernel's own, which is what init runs /bin/sh from; a Sys::Spawn passes the
-// spawning process's.
-Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str());
+// `cwd` is what a name with a slash in it, and a relative PATH component, are
+// relative to. Empty means the kernel's own, which is what init runs /bin/sh
+// from; a Sys::Spawn passes the spawning process's.
+//
+// `env` is the environment the child will be entered with, and PATH is the one
+// word the kernel reads out of it. No PATH at all means SYS_PATH_DEFAULT; an
+// empty one names no directories and finds nothing.
+Task<Result<void>> exec_resolve(Str name, Executable &out, Str cwd = Str(), Str env = Str());
 
 // A program as its own instance. The task returned *is* the process: the
 // scheduler runs it, /proc lists it, ^C cancels it, and its destructor

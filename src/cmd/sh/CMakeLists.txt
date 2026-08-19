@@ -1,7 +1,7 @@
 # The shell, as a library its binary links (Concept.md §4). Every other program
 # in src/cmd/ is one translation unit; this one is a grammar, an expander, a line
-# editor, a job runtime and twenty-six builtins, so it is a directory of its own
-# beside them and main.cpp is its entry point.
+# editor, a job runtime and twenty-seven builtins, so it is a directory of its
+# own beside them and main.cpp is its entry point.
 #
 # cond.cpp, expand.cpp, match.cpp, parse.cpp and tokenize.cpp are pure, and
 # test/ compiles them into tests.wasm directly rather than linking this.
@@ -10,6 +10,7 @@
 add_library(braam_sh STATIC
     builtin/break.cpp
     builtin/cd.cpp
+    builtin/command.cpp
     builtin/dot.cpp
     builtin/echo.cpp
     builtin/eval.cpp

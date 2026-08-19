@@ -136,9 +136,10 @@ $ /home/hello
 Hello, world!
 ```
 
-A bare word with no slash in it means `/bin/<word>`, and `/bin` is a read-only
-view of the archive loaded beside the kernel — so putting a program *there* does
-mean rebuilding the image. Anywhere else needs nothing.
+A bare word with no slash in it is searched for along `PATH`, which is `/bin` at
+boot — a read-only view of the archive loaded beside the kernel, so putting a
+program *there* does mean rebuilding the image. Anywhere else needs nothing but
+a `PATH` that names it: `PATH=/home:$PATH` and the bare name runs.
 
 One thing to know while iterating: the host caches a compiled module by path, so
 replacing a program at a path that has already been run in this page does not
@@ -197,9 +198,10 @@ greetings world
 What is instantiated is the interpreter, entered with itself, its one argument
 if the line carried one, the resolved path of the script, and then your own
 arguments — so `$0` is the script and `$1` onwards are yours, exactly as
-`sh file` gives them. The interpreter must be **absolute**, since there is no
-PATH to search; the lookup is **one level deep**, so an interpreter that is
-itself a script is refused; and the first line must end within 128 bytes.
+`sh file` gives them. The interpreter must be **absolute**, since `PATH` is the
+caller's and a bare word would name a different interpreter depending on who ran
+the script; the lookup is **one level deep**, so an interpreter that is itself a
+script is refused; and the first line must end within 128 bytes.
 `test -x` answers by the same two rules, and a script costs one process rather
 than two.
 
@@ -299,6 +301,13 @@ changed** — there is no `setenv`, and nothing a program does reaches its paren
 or a child already running. What a program *can* choose is what its own children
 get: `spawn(argv, io)` hands them this process's, and `spawn(argv, io, &env)`
 hands them exactly the words named. `/bin/env` is the worked example of both.
+
+**One word of it is the kernel's**: `PATH` is what `spawn` resolves a bare
+command name along, so the environment a program hands a child decides where
+that child is looked for. `spawn(argv, io)` searches what this process was
+given; `spawn(argv, io, &env)` searches whatever `env` says, and an `env` naming
+no `PATH` searches `/bin`. A name with a `/` in it is a path and is never
+searched.
 
 `stat_of` answers a `FileInfo{kind, size, mtime}` and `list_dir` a `DirEntry`
 each, which is the same three fields plus a name. The `mtime` is milliseconds
@@ -520,7 +529,7 @@ node test/run.mjs --kernel build/kernel.wasm build/web/rootfs.zip /path/to/hello
   what a process costs, §4.5 is the shell's language, §2 is the three invariants
   everything else follows from.
 - [Shell.md](Shell.md) — the shell as a user sees it, which is the long form of
-  §4 above: the grammar, the expansions, the twenty-six builtins, the jobs and
+  §4 above: the grammar, the expansions, the twenty-seven builtins, the jobs and
   what is deliberately absent.
 - `src/cmd/` in the source tree — thirty-six worked examples, from `true.cpp` at
   six lines to the shell.

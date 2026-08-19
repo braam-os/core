@@ -7,6 +7,94 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## `PATH`
+
+"The environment crosses a spawn" below closed with the reason there was no
+`PATH`: *"a `PATH` that did not steer resolution would be a lie a script could
+believe."* That set the condition rather than the verdict, and this change meets
+it. `/bin` was the only place a program could live, so anything built, unpacked
+or fetched had to be copied there or typed with a slash.
+
+**It went where resolution already was, which is the kernel.** The `/bin/`
+prefix was a constant inside `exec_resolve` (`src/user/exec.cpp`), not something
+the shell built — the shell hands `Sys::Spawn` the word as typed. So the
+alternative was a shell that resolved words itself and spawned an absolute path,
+and that would have made `PATH` exactly the lie the old paragraph warned about:
+`timeout ls`, `watch ls`, a program's own `spawn()` and a `#!` script's children
+would all still have looked in `/bin` alone, and the shell would have needed a
+second copy of the "is this a program" test to boot. Instead `exec_resolve`
+takes the environment blob the spawn is carrying and reads one word out of it.
+Every spawn in the system steers by the same list, and `PATH=/x prog` steers the
+very spawn its prefix names, because the child's blob is assembled before the
+resolve.
+
+**One word, and the kernel still does not read the rest.** `System_Calls.md`
+said the kernel does not read the environment at all; that is now true of every
+word but `PATH`. `env_value` and `env_path_next` went into `sysabi.h` beside
+`argv_at` rather than into `exec.cpp`, because the shell's `command -v` and
+`help` need the same two and a second implementation is how a rule drifts.
+`proc_env` in `src/proc/rt.cpp` was that lookup already and is now a call to it.
+
+**An empty component is skipped rather than meaning the current directory.**
+v7's `::` and its leading `:` are a footgun with nothing to recommend them, and
+there is no compatibility to keep here. An absent `PATH` means
+`SYS_PATH_DEFAULT`, so `env -i ls` still runs and no existing spawn changed
+behaviour; a `PATH` that is *there and empty* names no directories and finds
+nothing. Those two had to be distinguishable, which is why `env_value` reports
+presence through its return value and leaves the out-parameter alone.
+
+**A file that is not a program does not shadow one behind it.** There are no
+permissions and OPFS stores no mode, so "is it a program" is the only
+executability test the system has; if a stray `notes` in an early component
+stopped the search, `PATH` would be unusable for anything but a curated
+directory. The search skips it and remembers, and reports `Err(Invalid)` — 126,
+`not executable` — rather than `Err(NotFound)` if it found nothing better. That
+is POSIX's found-but-not-executable rule, arrived at from the other direction.
+`Err(Unsupported)`, a binary of ours built against another kernel, stops the
+search instead: a stale-binary diagnostic is only a diagnostic if it survives.
+
+**The cost is one failed open per miss.** A hit reads the image, which
+resolution paid for anyway. Nothing bounds the component count but `SYS_ENV_MAX`
+— 8192 bytes of environment — and a cap would be a number to argue about for a
+case nobody has.
+
+**The shell exports `PATH` whether or not it is asked to.** `var_set` marks it,
+which is the one name in the table with a rule of its own. Without that,
+`unset PATH; PATH=/x` would leave a variable that looks right, prints right and
+steers nothing, since the kernel reads the *environment*. The mark is the
+smallest thing that makes the variable mean what it says. Init plants
+`PATH=/bin` beside `HOME` and `SHELL`, so `echo $PATH` answers and a script can
+prepend to it.
+
+**`command -v` is the twenty-seventh builtin, and the list is still closed.** It
+qualifies under the first clause, not a new one: its answer *is* the shell
+process's own state — the function table and the builtin table, which no syscall
+shows anyone — so no program could give it. It walks `PATH` with the probe
+`test -x` already used, lifted out of `condrun.cpp` as `file_runnable` so that
+`test -x`, `command -v` and `help` cannot disagree. That probe checks the wasm
+magic rather than the `braam` section, which is a divergence from the kernel
+that predates this and is documented where it is.
+
+**Only `-v`.** A bare `command <cmd>` means "run this with function lookup
+suppressed", and suppression has to reach the per-stage resolution in
+`exec_pipeline`; a builtin runs after that decision, not before it. Refused with
+a usage line and 2 rather than half-implemented.
+
+**`help` walks `PATH` too**, first directory naming something winning, because a
+listing that still said `/bin` would be answering a question nobody asked any
+more. It lists what the directories hold rather than what would run — as it
+always did, since checking each entry would cost two round trips a name.
+
+**It cost 971 bytes of kernel and 5,958 of `sh.wasm`** — the search itself is
+small; the builtin and the `help` rewrite are most of the second number.
+
+**`vmstat` grew two columns.** `al` and `fr` are adjacent with no gap, six wide,
+and a run allocating past a hundred thousand times a second ran them together —
+latent, and the new tests were what allocated enough to show it. Seven each; the
+row is still inside eighty columns.
+
+---
+
 ## `/bin/mv`, and a rename that sometimes cannot
 
 Modelled on v7's `mv`, whose structure is the whole design: try `rename`, and on
