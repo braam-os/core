@@ -246,6 +246,26 @@ export function makeFakeImports(mem, store, kernel) {
             return r.write(new TextEncoder().encode(target));
         }
 
+        case OP.RENAME: {
+            // Files and links alone, as OPFS move() is, so the caller's copy
+            // fallback is the path a directory takes here too. The mtime rides
+            // along: not rewriting the bytes is the whole point of the fast path.
+            const to = r.text();
+            if (store.dirs.has(path) || store.dirs.has(to))
+                return r.fail(E.UNSUPPORTED);
+            if (!store.files.has(path))
+                return r.fail(E.NOTFOUND);
+            if (notDir(store, to))
+                return r.fail(E.NOTDIR);
+            if (!store.dirs.has(dirname(to)))
+                return r.fail(E.NOTFOUND);
+            store.files.set(to, store.files.get(path));
+            store.mtimes.set(to, store.mtimes.get(path) || 0);
+            store.files.delete(path);
+            store.mtimes.delete(path);
+            return r.ok();
+        }
+
         default:
             return r.fail(E.UNSUPPORTED);
         }

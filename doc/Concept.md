@@ -482,6 +482,7 @@ the same gesture (§6) takes the text and nothing is typed.
       virtual Task<Result<void>>       touch(Str path);   // Unsupported by default
       virtual Task<Result<void>>       symlink(Str target, Str path);
       virtual Task<Result<String>>     readlink(Str path);
+      virtual Task<Result<void>>       rename(Str from, Str to);
 
       virtual Result<usize> read(u32 h, u64 off, u8 *buf, usize n);
       virtual Result<usize> write(u32 h, u64 off, const u8 *buf, usize n);
@@ -711,12 +712,11 @@ The wire's conventions:
   and its own scheduler job, so a socket read that never completes cannot starve
   the keystroke behind it.
 
-**The table is thirty-eight operations and `PROC_ABI` is 10**: four synchronous
-— `exit`, `getpid`, `now`, `stage` — and thirty-four asynchronous. `Dup` is the
-newest, and the only one added after the milestones: a shell cannot say `2>&1`
-without it, and cannot keep a descriptor across a `Spawn` — which *moves* one —
-without it either. [System_Calls.md](System_Calls.md) lists them all with what
-each carries.
+**The table is forty-two operations and `PROC_ABI` is 14**: four synchronous —
+`exit`, `getpid`, `now`, `stage` — and thirty-eight asynchronous. `Rename` is
+the newest: it is what `/bin/mv` tries before it falls back to copying, and the
+only way a move keeps a modification time the system has no setter for.
+[System_Calls.md](System_Calls.md) lists them all with what each carries.
 
 Four rules bound the table:
 
@@ -1061,6 +1061,15 @@ The Origin Private File System is private to the origin, invisible in the user's
 regular filesystem, and supported by Safari, Chrome, Edge and Firefox. It gives
 real directory handles, real file handles, seekable reads and writes, truncate,
 rename and remove — which maps onto §3.6's `Fs` almost one-to-one.
+
+Rename is the one that maps least well. `FileSystemHandle.move()` is
+implemented for a **file** handle alone, and not in every engine, so `Fs::rename`
+answers `Err(Unsupported)` for a directory and wherever the method is missing —
+and a caller that meant `mv` copies and removes instead. `web/fs.js` feature-
+tests rather than naming browsers, so an engine that gains a directory `move()`
+starts using it with nothing else changed. What the fast path buys is the
+modification time, which §5.2 has no setter for: a copy restamps and a move
+cannot.
 
 The detail that matters most: the high-performance **synchronous**
 `read()`/`write()` methods obtained via `createSyncAccessHandle()` are exposed

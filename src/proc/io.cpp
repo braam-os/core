@@ -224,6 +224,22 @@ Task<Result<String>> read_link(Str path)
     co_return move(out);
 }
 
+Task<Result<void>> rename_path(Str from, Str to)
+{
+    // Two paths in one payload, as make_link's are.
+    String payload;
+    u8 head[4];
+    sys_put_u32(head, u32(from.size()));
+    if (!payload.append(Str(reinterpret_cast<const char *>(head), 4)) || !payload.append(from) ||
+        !payload.append(to))
+        co_return Err(Error::NoMemory);
+
+    Result<SysReply> r = co_await sys_call(Sys::Rename, 0, payload.str());
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
 // One operation for both, so the kernel answers "where am I now" whichever was
 // asked. The reply is copied out: a Str into the waiter's buffer is only good
 // until that slot's next syscall.

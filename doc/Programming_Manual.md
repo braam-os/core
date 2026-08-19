@@ -278,7 +278,7 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with
 | Group | What is there |
 | --- | --- |
 | Streams | `write_all(fd, Str)`, `read_chunk(fd)`, `close_fd(fd)` |
-| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path`, `touch_path`, `make_link`, `read_link` |
+| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path`, `touch_path`, `make_link`, `read_link`, `rename_path` |
 | Directory | `cwd_get()`, `cwd_set(path)` — this process's own, inherited from whoever spawned it |
 | Children | `make_pipe()`, `spawn(Args, ChildIo, const Args *env)`, `wait_child(pid)`, `kill_child(pid)`, `set_fg(pid)` |
 | Terminal | `tty_of(fd)`, `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
@@ -319,6 +319,14 @@ at: walk a tree on `SYS_KIND_DIR` alone and it cannot follow a link out of the
 tree, which is why neither `ls -R` nor the shell's globber needs a cycle guard.
 `make_link` stores the target as written, so it may dangle and a relative one
 reads against the directory the link is in.
+
+`rename_path(from, to)` follows neither end and replaces the destination — and
+its `Err(Unsupported)` is an instruction rather than a failure: the store cannot
+move *this* one, so copy and remove instead. That is the answer for a move
+across mounts, for a directory, and on any engine whose OPFS has no
+`FileSystemHandle.move()`. Every other error is real. `/bin/mv` is the worked
+example, and the reason to bother trying: a rename keeps the mtime, and a copy
+cannot.
 
 `tty_of(SYS_STDOUT)` is how a program lays its output out: it reports whether
 that descriptor is the terminal and, if it is, how wide. The geometry is zero

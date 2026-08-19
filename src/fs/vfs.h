@@ -67,6 +67,11 @@ Task<Result<void>> vfs_symlink(Str target, Str path);
 // The target of a symbolic link, unresolved.
 Task<Result<String>> vfs_readlink(Str path);
 
+// One name for another, following neither and replacing the destination.
+// Err(Unsupported) — a different mount, or a node the store cannot move — means
+// the caller must copy and remove instead.
+Task<Result<void>> vfs_rename(Str from, Str to);
+
 // On an open descriptor, and therefore synchronous (Concept.md §5.2).
 Result<usize> vfs_read(i32 fd, u64 off, u8 *buf, usize n);
 Result<usize> vfs_write(i32 fd, u64 off, const u8 *buf, usize n);

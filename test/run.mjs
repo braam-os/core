@@ -296,7 +296,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 13)
+        if (m[0] !== 0x6d617262 || m[1] !== 14)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         if (m[4] !== 256)
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
@@ -487,7 +487,8 @@ if (mode === "--kernel") {
                         "echo", "edit",
                         "export", "false", "fexport", "fg", "fimport", "grep", "head", "help",
                         "jobs", "kill",
-                        "less", "ln", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd",
+                        "less", "ln", "ls", "mkdir", "mount", "mv", "pbcopy", "pbpaste", "ps",
+                        "pwd",
                         "readonly", "rm", "set", "shift", "sleep",
                         "tail", "timeout", "touch", "true", "uname", "unset", "vmstat",
                         "watch", "wc"])
@@ -2871,11 +2872,85 @@ if (mode === "--kernel") {
     }
 
 
+    // mv, both halves: Sys::Rename where the store can move a name, and the
+    // copy-and-remove fallback where it cannot. The fake answers Unsupported
+    // for a directory exactly as OPFS does, so both paths run here.
+    {
+        let mt = gt + 1;
+        const at = () => (mt += 0.01);
+        const shows = (line, want) => {
+            submit("clear", at());
+            const got = output(submit(line, at())).join("|");
+            if (got !== want)
+                fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+        };
+
+        submit("mkdir /home/m", at());
+        submit("mkdir /home/m/d", at());
+        submit("echo one > /home/m/a", at());
+        submit("echo two > /home/m/b", at());
+
+        // A rename moves the name and nothing else: the bytes and the stamp
+        // are the ones `a` had, which is what a copy could not manage.
+        shows("ls -l /home/m/a", "file 4 Jun 19 20:14 /home/m/a");
+        submit("mv /home/m/a /home/m/c", at());
+        shows("cat /home/m/c", "one");
+        shows("ls -l /home/m/c", "file 4 Jun 19 20:14 /home/m/c");
+        shows("ls /home/m", "b   c   d/");
+
+        // The destination is replaced, and a move onto itself is a no-op
+        // rather than the removal that would leave nothing behind.
+        submit("mv /home/m/b /home/m/c", at());
+        shows("cat /home/m/c", "two");
+        submit("mv /home/m/c /home/m/c", at());
+        shows("cat /home/m/c", "two");
+
+        // Several sources, the last operand being the directory they go in.
+        submit("echo x > /home/m/x", at());
+        submit("echo y > /home/m/y", at());
+        submit("mv /home/m/x /home/m/y /home/m/d", at());
+        shows("cat /home/m/d/x /home/m/d/y", "x|y");
+
+        // A link moves as itself: the target is not read and not rewritten.
+        submit("ln -s /home/m/c /home/m/link", at());
+        submit("mv /home/m/link /home/m/moved", at());
+        shows("ls -l /home/m/moved", "link 9 Jun 19 20:14 /home/m/moved@ -> /home/m/c");
+
+        // A directory: the store will not move one, so this is the copy path.
+        // The tree arrives whole and the source is gone.
+        submit("mv /home/m/d /home/m/e", at());
+        shows("cat /home/m/e/x /home/m/e/y", "x|y");
+        shows("ls /home/m", "c       e/      moved@");
+
+        // Into itself is refused rather than copied for ever.
+        shows("mv /home/m/e /home/m/e/sub", "mv: /home/m/e: cannot move a directory into itself");
+
+        // Diagnostics. A read-only mount refuses before anything is copied.
+        shows("mv /home/m/gone /home/m/z", "mv: /home/m/gone: not found");
+        shows("mv /home/m/c /proc/x", "mv: /home/m/c: permission denied");
+        shows("mv /home/m/e /home/m/c", "mv: /home/m/e: not a directory");
+        shows("mv /home/m/c /home/m/moved /home/m/e/x", "usage: mv [-fi] <src>... <dir>");
+
+        // -i asks before it clobbers, and the answer decides.
+        shows("echo n | mv -i /home/m/c /home/m/e/x", "overwrite /home/m/e/x?");
+        shows("cat /home/m/e/x", "x");
+        shows("echo y | mv -i /home/m/c /home/m/e/x", "overwrite /home/m/e/x?");
+        shows("cat /home/m/e/x", "two");
+
+        // -f overrides -i, as it does in v7: nothing is asked.
+        submit("echo three > /home/m/f", at());
+        shows("echo n | mv -fi /home/m/f /home/m/e/x", "");
+        shows("cat /home/m/e/x", "three");
+
+        submit("rm -r /home/m", at());
+    }
+
+
     // Command substitution: a pipe the shell drains itself. The unit suite has
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 2,569-byte file: more than the eight writes a pipe
+    // Three copies of a 2,716-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -2904,9 +2979,9 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 7,707 bytes is sixteen chunks against eight
+    // The many-writes case: 8,148 bytes is sixteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "132 1329 7983");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "135 1356 8148");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

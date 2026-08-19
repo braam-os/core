@@ -159,6 +159,15 @@ Task<Result<String>> OpfsFs::readlink(Str path)
     co_return move(out);
 }
 
+// Two paths, in symlink's shape: the record's argument and its buffer.
+Task<Result<void>> OpfsFs::rename(Str from, Str to)
+{
+    FsCall c(FsOp::Rename, from, 0);
+    if (!c.ok() || !c.put(to))
+        co_return Err(Error::NoMemory);
+    co_return co_await c;
+}
+
 Result<usize> OpfsFs::read(u32 h, u64 off, u8 *buf, usize n)
 {
     u32 at = TRY(off32(off));

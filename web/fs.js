@@ -20,6 +20,7 @@ export const OP = {
     TOUCH: 8,
     SYMLINK: 9,
     READLINK: 10,
+    RENAME: 11,
 };
 
 // src/fs/fs.h's NodeKind, which a reply carries as a whole word.
@@ -412,6 +413,30 @@ export class OpfsStore {
         await dir.getDirectoryHandle(name, { create: true });
     }
 
+    // move() is implemented for files alone, and not in every engine, so a
+    // directory and an engine without it are both UNSUPPORTED and the caller
+    // copies. The destination goes first: a rename replaces, and engines differ
+    // on whether move() will. A link is an ordinary file, so it moves as itself.
+    async rename(from, to) {
+        const fat = from.lastIndexOf("/");
+        const fdir = await this.dir(from.slice(0, fat), false);
+
+        let file;
+        try {
+            file = await fdir.getFileHandle(from.slice(fat + 1));
+        } catch {
+            throw { braam: E.UNSUPPORTED };
+        }
+        if (typeof file.move !== "function")
+            throw { braam: E.UNSUPPORTED };
+
+        const tat = to.lastIndexOf("/");
+        const tdir = await this.dir(to.slice(0, tat), false);
+        const name = to.slice(tat + 1);
+        await tdir.removeEntry(name).catch(() => {});
+        await file.move(tdir, name);
+    }
+
     // A link is an ordinary file here, so removeEntry drops the link and not
     // its target, and a recursive remove cannot walk out through one.
     async remove(path, recursive) {
@@ -502,6 +527,11 @@ export function makeFsImports(mem, store, reply) {
         case OP.READLINK:
             r.set("status", 0);
             r.write(new TextEncoder().encode(await store.readlink(r.arg())));
+            return;
+        case OP.RENAME:
+            // The old path is the argument, the new one the buffer.
+            await store.rename(r.arg(), r.text());
+            r.ok();
             return;
         default:
             r.fail(E.UNSUPPORTED);

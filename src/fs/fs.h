@@ -95,6 +95,15 @@ struct Fs {
         co_return Err(Error::Unsupported);
     }
 
+    // One name for another, within this mount and following neither. Replaces
+    // the destination. Err(Unsupported) means the caller must copy instead.
+    virtual Task<Result<void>> rename(Str from, Str to)
+    {
+        (void)from;
+        (void)to;
+        co_return Err(Error::Unsupported);
+    }
+
     // On an open handle, and therefore synchronous.
     virtual Result<usize> read(u32 h, u64 off, u8 *buf, usize n)        = 0;
     virtual Result<usize> write(u32 h, u64 off, const u8 *buf, usize n) = 0;

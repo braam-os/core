@@ -18,6 +18,7 @@ enum class FsOp : u32 {
     Touch,    // path -> the file's mtime moved to now, or Err(Unsupported)
     Symlink,  // path = the link, the record's buf carries the target
     ReadLink, // path -> the target, into buf
+    Rename,   // path = the old name, buf = the new one; Err(Unsupported) to copy
 };
 
 // FsOp::Stat's reply, packed by web/fs.js: u32 kind, u64 size, u64 mtime.

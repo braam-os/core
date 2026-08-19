@@ -202,6 +202,28 @@ struct TempFs final : Fs {
         co_return Result<void>{};
     }
 
+    // Files and links alone, as OPFS move() is: a directory is Unsupported and
+    // the caller copies.
+    Task<Result<void>> rename(Str from, Str to) override
+    {
+        Node *n = find(from);
+        if (!n)
+            co_return Err(Error::NotFound);
+        if (n->kind == NodeKind::Dir)
+            co_return Err(Error::Unsupported);
+
+        for (usize i = 0; i < nodes_.size(); i++) {
+            if (nodes_[i].name.str() == to) {
+                nodes_.erase(i);
+                break;
+            }
+        }
+        n = find(from); // erasing moved the nodes
+        if (!n || !n->name.assign(to))
+            co_return Err(Error::NoMemory);
+        co_return Result<void>{};
+    }
+
     Task<Result<String>> readlink(Str path) override
     {
         const Node *n = find(path);
@@ -587,6 +609,72 @@ void test_vfs()
         CHECK(run_now(vfs_remove("/home/rel", false)).is_ok());
         CHECK(run_now(vfs_remove("/home/dl", false)).is_ok());
         CHECK(run_now(vfs_remove("/home/d", true)).is_ok());
+    }
+
+    // Renaming. The policy is the VFS's and the mechanism the filesystem's, so
+    // most of what follows is refused before TempFs is asked at all.
+    {
+        fd = run_now(vfs_open("/home/one", O_WRITE | O_CREATE)).value();
+        CHECK(write(fd, 0, "hello").is_ok());
+        vfs_close(fd);
+
+        // `mv a a` is a no-op rather than a removal, however it is spelled.
+        CHECK(run_now(vfs_rename("/home/one", "/home/one")).is_ok());
+        CHECK(run_now(vfs_rename("/home/one", "/home/./one")).is_ok());
+        CHECK_EQ(run_now(vfs_stat("/home/one")).value().size, 5u);
+
+        // An ordinary move, with the mtime riding along untouched — which is
+        // what a copy could not do.
+        u64 stamp = run_now(vfs_stat("/home/one")).value().mtime;
+        CHECK(run_now(vfs_rename("/home/one", "/home/two")).is_ok());
+        CHECK(run_now(vfs_stat("/home/one")).error() == Error::NotFound);
+        CHECK_EQ(run_now(vfs_stat("/home/two")).value().mtime, stamp);
+
+        // A missing source is NotFound, never the Unsupported that means copy.
+        CHECK(run_now(vfs_rename("/home/gone", "/home/x")).error() == Error::NotFound);
+
+        // Across mounts is the caller's signal to copy; a read-only mount at
+        // either end is a refusal.
+        CHECK(run_now(vfs_rename("/home/two", "/two")).error() == Error::Unsupported);
+        CHECK(run_now(vfs_rename("/share/x", "/home/x")).error() == Error::Perm);
+        CHECK(run_now(vfs_rename("/home/two", "/share/x")).error() == Error::Perm);
+
+        // A mount point is not the filesystem's to move, as it is not its to
+        // drop — and answering Unsupported would send the caller off to copy it.
+        CHECK(run_now(vfs_rename("/home", "/elsewhere")).error() == Error::Perm);
+
+        // A directory is the store's Unsupported, which is what puts every
+        // directory move on the caller's copy path.
+        CHECK(run_now(vfs_mkdir("/home/d")).is_ok());
+        CHECK(run_now(vfs_rename("/home/d", "/home/e")).error() == Error::Unsupported);
+
+        // One into itself is refused before that, so no caller ever copies it.
+        CHECK(run_now(vfs_rename("/home/d", "/home/d/sub")).error() == Error::Invalid);
+
+        // The kinds must agree, and two directories are Exists rather than a
+        // merge — all three before the Unsupported above.
+        CHECK(run_now(vfs_mkdir("/home/d2")).is_ok());
+        CHECK(run_now(vfs_rename("/home/two", "/home/d")).error() == Error::IsDir);
+        CHECK(run_now(vfs_rename("/home/d", "/home/two")).error() == Error::NotDir);
+        CHECK(run_now(vfs_rename("/home/d", "/home/d2")).error() == Error::Exists);
+
+        // A link moves as itself rather than being followed.
+        CHECK(run_now(vfs_symlink("/home/two", "/home/link")).is_ok());
+        CHECK(run_now(vfs_rename("/home/link", "/home/moved")).is_ok());
+        CHECK(run_now(vfs_stat("/home/moved", false)).value().kind == NodeKind::Link);
+        CHECK(run_now(vfs_readlink("/home/moved")).value().str() == "/home/two");
+
+        // An open descriptor pins the name: OpenShared keys on the path, and
+        // OPFS holds the file exclusively anyway.
+        fd = run_now(vfs_open("/home/two", O_READ)).value();
+        CHECK(run_now(vfs_rename("/home/two", "/home/three")).error() == Error::Perm);
+        vfs_close(fd);
+        CHECK(run_now(vfs_rename("/home/two", "/home/three")).is_ok());
+
+        CHECK(run_now(vfs_remove("/home/three", false)).is_ok());
+        CHECK(run_now(vfs_remove("/home/moved", false)).is_ok());
+        CHECK(run_now(vfs_remove("/home/d", true)).is_ok());
+        CHECK(run_now(vfs_remove("/home/d2", true)).is_ok());
     }
 
     // Two descriptors still on one file at reset: ~Vfs drops each reference and

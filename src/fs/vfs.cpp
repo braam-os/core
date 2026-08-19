@@ -88,6 +88,17 @@ OpenShared *shared_of(Fs *fs, Str abs)
     return nullptr;
 }
 
+// Whether any descriptor is open on `abs` or below it. A rename would move the
+// file out from under OpenShared::path, which is what shared_of keys on.
+bool open_under(Fs *fs, Str abs)
+{
+    Vfs &v = vfs();
+    for (OpenFile &f : v.files)
+        if (f.used && f.s->fs == fs && path_under(abs, f.s->path.str()))
+            return true;
+    return false;
+}
+
 // A descriptor on `s`, taking a reference only if it succeeds.
 i32 slot_alloc(OpenShared *s, u32 flags)
 {
@@ -534,6 +545,58 @@ Task<Result<String>> vfs_readlink(Str path)
         co_return Err(Error::NotFound);
 
     Task<Result<String>> t = m->fs->readlink(sub);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
+// Follows neither end: a link is moved as itself, as vfs_remove drops one.
+Task<Result<void>> vfs_rename(Str from, Str to)
+{
+    String abs_from, abs_to, phys_from, phys_to;
+    CO_TRY_VOID(vfs_abs(from, abs_from));
+    CO_TRY_VOID(vfs_abs(to, abs_to));
+    CO_TRY_VOID(deny_readonly(abs_from.str()));
+    CO_TRY_VOID(deny_readonly(abs_to.str()));
+
+    Stat sf         = CO_TRY(co_await vfs_resolve(abs_from.str(), false, phys_from));
+    Result<Stat> st = co_await vfs_resolve(abs_to.str(), false, phys_to);
+    if (st.is_err() && st.error() != Error::NotFound)
+        co_return Err(st.error());
+
+    // rename(2)'s answer to `mv a a`, and what keeps a caller from removing the
+    // destination and then moving a file that is no longer there.
+    if (phys_from == phys_to.str())
+        co_return {};
+    if (path_under(phys_from.str(), phys_to.str()))
+        co_return Err(Error::Invalid); // a directory into itself
+
+    if (st.is_ok()) {
+        bool from_dir = sf.kind == NodeKind::Dir;
+        bool to_dir   = st.value().kind == NodeKind::Dir;
+        if (from_dir != to_dir)
+            co_return Err(to_dir ? Error::IsDir : Error::NotDir);
+        if (to_dir)
+            co_return Err(Error::Exists); // no empty-directory case
+    }
+
+    Str sub_from, sub_to;
+    const Mount *mf = vfs_lookup(phys_from.str(), sub_from);
+    const Mount *mt = vfs_lookup(phys_to.str(), sub_to);
+    if (!mf || !mt)
+        co_return Err(Error::NotFound);
+    // Before the cross-mount answer: a mount point cannot be moved by copying
+    // either, so telling the caller to try would be a lie.
+    if (mf->prefix == phys_from.str())
+        co_return Err(Error::Perm);
+    if (mf != mt)
+        co_return Err(Error::Unsupported); // the caller copies instead
+    if (!mf->fs->writable())
+        co_return Err(Error::Perm);
+    if (open_under(mf->fs, phys_from.str()))
+        co_return Err(Error::Perm);
+
+    Task<Result<void>> t = mf->fs->rename(sub_from, sub_to);
     if (!t)
         co_return Err(Error::NoMemory);
     co_return co_await t;

@@ -259,7 +259,7 @@ it, and how much memory to give it. It lives in a wasm custom section named
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 12
+    u32 abi;            // PROC_ABI, currently 14
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -730,6 +730,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 26 | `Dup` | fd | — | a second fd for the same thing | — |
 | 27 | `Symlink` | — | `u32 target_len`, the target, the link's own path | 0 | — |
 | 28 | `ReadLink` | — | the path | 0 | the target, unresolved |
+| 29 | `Rename` | — | `u32 from_len`, the old path, the new one | 0 | — |
 | 32 | `Sleep` | — | `u32 ms` | 0 | — |
 | 48 | `Clock` | — | — | 0 | `u64 epoch_ms`, `i32 tz_min` |
 | 49 | `Storage` | — | — | 0 | `u64 quota`, `u64 usage`, `u32 flags` |
@@ -793,6 +794,33 @@ met a file where a directory had to be, and therefore the only failure a link in
 the middle of a path can produce — costs more. `Error::Loop` bounds it at
 `FS_LINK_MAX` hops.
 
+**`Rename`'s `Err(Unsupported)` is an instruction, not a failure.** It takes
+`Symlink`'s two-path shape and follows neither end — a link is moved as itself,
+as `Remove` drops one — and it is the third operation that does not follow. The
+answer says the store cannot move *this*: the two paths landed in different
+mounts, or the node is one OPFS will not move. Every other error is real, and a
+caller that meant `mv` copies and removes instead, which is `rename(2)`'s
+`EXDEV` with a wider definition of "different device". `/bin/mv` is the caller
+and the only one.
+
+The store does files and links and no directory, because
+`FileSystemHandle.move()` is implemented for a file handle alone and not in
+every engine (Concept.md §5.2) — so a directory move is *always* the copy path
+today, and `web/fs.js` feature-tests rather than naming browsers, so an engine
+that gains one starts using it. What the fast path buys is the mtime: there is
+no setter, so a copy restamps and a move cannot. That is what the smoke test
+asserts, and what makes the two paths distinguishable from a shell.
+
+The policy is the VFS's and the mechanism the store's, which is why
+`vfs_rename` refuses ahead of the round trip: the two paths naming one file is
+`Ok` and nothing done — `rename(2)`'s answer, and what keeps `mv a a` from
+removing the file it was about to move — a directory into itself is
+`Err(Invalid)`, a mount point is `Err(Perm)` before the cross-mount answer since
+copying one is no better, disagreeing kinds are `Err(IsDir)`/`Err(NotDir)`, and
+two directories are `Err(Exists)` rather than a merge. A source with an open
+descriptor is `Err(Perm)`: `OpenShared` is keyed on the path, and OPFS holds an
+open file exclusively anyway.
+
 **`..` stays lexical**, which is `cd -L`: `path_resolve` pops a component
 textually and never sees a link, so `/a/link/..` is `/a`. That is what keeps it
 a pure synchronous function — the dispatcher resolves a process's path against
@@ -812,7 +840,8 @@ environment moved it from 10 to 11, without adding an operation: the blob rides
 widening `Stat` and `List`'s replies and taking op 24 for `Touch`, which pushed
 `Chdir` and `Dup` up one. Symbolic links moved it from 12 to 13, taking ops
 27 and 28 — the sparse numbering meant nothing had to move for once — adding a
-third value to `SYS_KIND_*` and an argument to `Stat`.) That operation used to
+third value to `SYS_KIND_*` and an argument to `Stat`. `Rename` moved it from 13
+to 14, taking op 29 beside them.) That operation used to
 refuse a handle with
 `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
 *descriptor* raises that count too, so every duplicated fd would have been

@@ -25,6 +25,7 @@ ln       -s [-f] <target> <name> — make a symbolic link
 ls       [-1CRSdhlrt] [<path>...] — list directories, in columns on a terminal
 mkdir    <dir>... — create directories
 mount    list the mounted filesystems
+mv       [-fi] <src>... <dst> — move or rename files
 pbcopy   [<file>...] — put the input on the clipboard
 pbpaste  write the clipboard to the output
 ps       list the tasks the kernel is running, and which are processes

@@ -756,6 +756,34 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             break;
         }
 
+        // Symlink's two-path payload, but both paths are paths here — a link
+        // target is stored as written and a destination is not.
+        case Sys::Rename: {
+            if (payload.size() < 4) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u32 from_len = sys_get_u32(c.stage);
+            if (usize(from_len) + 4 > payload.size()) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+
+            String from, to;
+            if (Result<void> a = proc_path(p, payload.substr(4, from_len), from); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
+            if (Result<void> a = proc_path(p, payload.substr(4 + from_len), to); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
+            Result<void> r = Err(Error::NoMemory);
+            CO_CALL(r, vfs_rename(from.str(), to.str()));
+            status = r.is_err() ? -i32(r.error()) : 0;
+            break;
+        }
+
         // Get and set in one operation, as KeyClaim and ScreenEnter are: the
         // answer to both is the resulting cwd, and a program that has just
         // moved wants it as much as one that only asked.

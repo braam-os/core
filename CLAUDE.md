@@ -435,6 +435,17 @@ adding one is a design change to argue in Concept.md first.
   and answers `Err(Unsupported)` when it did not. That confirmation is the only
   thing standing between a `touch` that works and one that lies, and no fake
   backend can test it — `make serve` in a real browser is where it is checked.
+- **A rename is only sometimes a rename**, and `mv` copies for the rest.
+  `Sys::Rename` is backed by OPFS `FileSystemHandle.move()`, which is
+  implemented for a *file* handle alone and not in every engine, so a directory,
+  a cross-mount move and an engine without the method all answer
+  `Err(Unsupported)` — which `/bin/mv` reads as "copy and remove instead", and
+  nothing else does. The copy restamps, since there is no mtime setter, and is
+  not atomic: it removes the destination before it writes, so an interrupted
+  directory move leaves a partial tree. `vfs_rename` refuses ahead of the round
+  trip — a mount point, an open descriptor on the source, a directory into
+  itself, disagreeing kinds — and answers a move onto the same file with `Ok`
+  and nothing done, which is what keeps `mv a a` from eating the file.
 - **No system at all without OPFS.** Boot says so and starts no shell —
   deliberately, since the memory fallback that used to be here would look like a
   system and lose everything at the reload. It retires M5's third acceptance
@@ -462,9 +473,9 @@ adding one is a design change to argue in Concept.md first.
   newline, `cwd_get`, prompt `echo`, `key_read`). Both are floors: the cwd is
   deliberately not cached, since a wrong prompt is believed, and going lower
   means fusing the keyboard into the paint — a worse ABI than it would save.
-- **The boot archive is ~710 KiB unpacked** and 287 KiB as `rootfs.zip`. §4.4's
+- **The boot archive is ~774 KiB unpacked** and 312 KiB as `rootfs.zip`. §4.4's
   duplication: every binary carries the allocator, the string types and the
-  coroutine runtime, and `sh.wasm` is 214 KiB of it — nearly a third of the
+  coroutine runtime, and `sh.wasm` is 218 KiB of it — nearly a third of the
   tree, since the shell is a language (§4.5). The staging *tree* carries the
   size budget and the binaries do not, so that number is where the duplication
   stays visible — the archive is deflated and would hide it.

@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 13;
+constexpr u32 PROC_ABI       = 14;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -141,6 +141,11 @@ enum class Sys : u32 {
     // shape, since no other filesystem operation names two.
     Symlink = 27, // payload = u32 target_len, the target, the link's own path
     ReadLink,     // payload = the path;  data = the target, unresolved
+
+    // One name for another, in Symlink's two-path shape and following neither.
+    // Err(Unsupported) means "not here — copy instead": across mounts, or a
+    // node the store cannot move. Every other error is real.
+    Rename, // payload = u32 from_len, the old path, the new one
 
     // Time. The timer queue is the kernel's, and Sys::Now is monotonic and
     // says nothing about a day, so both of these have to be asked for.

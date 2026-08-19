@@ -7,6 +7,93 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## `/bin/mv`, and a rename that sometimes cannot
+
+Modelled on v7's `mv`, whose structure is the whole design: try `rename`, and on
+`EXDEV` copy and remove instead. What is new here is how wide `EXDEV` had to
+become.
+
+**There was no rename anywhere in the stack.** Not in `Sys::`, not in `Fs`, not
+in `web/fs.js`'s `OP` table — which is why there was no `mv` either. So the
+choice was between doing it all in userland and adding the operation. Userland
+alone would have worked: `open`, `read_chunk`, `write_all`, `remove_path` are
+all there. It would also have made every rename a rewrite — two syscalls per 512
+bytes, so `mv sh.wasm sh.old` is 850 round trips — and, worse, it would have
+lost the modification time on every move, because §5.2 has a `touch` that sets
+the stamp to *now* and no setter at all. Renaming a file is not editing it, and
+a system where it looks edited afterwards is lying about its own files.
+
+**But the operation cannot replace the copy, only get in front of it.** OPFS's
+`FileSystemHandle.move()` is implemented for a **file** handle alone, and not in
+every engine. A directory move is therefore always the copy path today, on every
+browser, and so is any move on an engine without the method. That is why
+`Sys::Rename`'s `Err(Unsupported)` is specified as an *instruction* rather than
+a failure — "not here, copy instead" — and why `/bin/mv` falls back on that one
+error and reports every other. It is `EXDEV` with a wider definition of
+"different device": a different mount, a directory, an engine that will not.
+
+`web/fs.js` feature-tests the method rather than naming browsers, so an engine
+that gains a directory `move()` starts using it with nothing else changed.
+
+**Policy in the kernel, mechanism in the store.** `vfs_rename` decides what may
+replace what — kinds must agree, two directories are `Err(Exists)` rather than a
+merge, a mount point is refused, a read-only mount at either end is refused —
+and every one of those is answered before the round trip. The store and the two
+fakes do nothing but "remove the destination, move the handle". That split is
+what keeps the fakes honest: they cannot disagree with OPFS about semantics
+because they hold none.
+
+They do have to agree about *capability*, though, and that is deliberate.
+`test/fakefs.mjs` answers `UNSUPPORTED` for a directory exactly as OPFS does,
+and `TempFs` in the unit suite does the same. A fake that could move a directory
+would have hidden the copy path from every test — the path that, in a real
+browser, is the only one a directory ever takes. This is the same lesson the
+symbolic-link work wrote down about `Err(NotDir)`: a fake that is easier than
+the thing it stands for is a fake that tests nothing.
+
+**`mv a a` is where the data loss was.** The fallback removes the destination
+before it copies, because a rename replaces. If the two paths name one file,
+that removal eats the file about to be moved and the copy then has nothing to
+read. `vfs_rename` answers `Ok` having done nothing when the two *resolved
+physical* paths are equal — which is `rename(2)`'s answer — and `/bin/mv`
+repeats the check on its own two absolute paths, because it is the half that
+holds the removal. Resolved and physical, so `mv a ./a` and a move through a
+link are the same no-op.
+
+**Two orderings in `vfs_rename` are load-bearing.** A mount point is refused
+*before* the cross-mount answer: `/home` cannot be moved by copying either, so
+`Unsupported` would send the caller off to copy a whole store and then fail to
+remove it. And the kind checks come before it too, so `mv file existingdir`
+is `Err(IsDir)` rather than a copy that lands somewhere surprising.
+
+**A source with an open descriptor is `Err(Perm)`.** `OpenShared` is keyed on
+the path, so a rename underneath one leaves a record naming a file that is no
+longer there — and OPFS holds an open file exclusively anyway, so the move would
+have failed in the store with a worse error. Refusing is the honest answer, and
+the copy fallback would fail on the same lock.
+
+**What the fallback costs, kept rather than papered over.** It restamps, for the
+reason above. It is not atomic: the destination is removed before the copy, so
+an interrupted directory move leaves a partial tree and no original destination.
+Both are visible from the shell — a moved file keeps its `ls -l` stamp and a
+moved directory does not — and the smoke test asserts exactly that, which is how
+the two paths are told apart without a probe for which one ran.
+
+**The directory walk is an explicit stack, not recursion.** `ls -R`'s shape, and
+for `ls -R`'s reason twice over: a coroutine frame per level would make a deep
+tree a deep chain of frames, and descending on `SYS_KIND_DIR` alone means a link
+is recreated rather than followed, so no cycle guard is needed. A link moves as
+itself throughout — `vfs_rename` follows neither end, as `vfs_remove` follows
+neither.
+
+**`-f` and `-i` are v7's, and `-f` still wins.** There are no permissions here
+and nothing to override, so `-f`'s only remaining job is the one v7 gives it
+regardless of order: it silences `-i`. The prompt goes to stderr and the answer
+comes through the `Input`/`LineReader` already in `proc/io.h`, so `mv -i` reads
+one line per source whether that is a cooked console line or a script's stdin.
+
+`PROC_ABI` moved from 13 to 14, taking op 29 beside the two link operations.
+
 ## Symbolic links
 
 A third node kind, and the first change to the filesystem's type system since
