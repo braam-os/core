@@ -132,7 +132,7 @@ Result<void> HostCall::await_resume() const
 
     if (r_->h.status < 0) {
         u32 e = u32(-r_->h.status);
-        return Err(e && e <= u32(Error::NotEmpty) ? Error(e) : Error::Io);
+        return Err(e && e <= u32(Error::Loop) ? Error(e) : Error::Io);
     }
     return {};
 }

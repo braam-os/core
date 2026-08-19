@@ -480,6 +480,8 @@ the same gesture (§6) takes the text and nothing is typed.
       virtual Task<Result<void>>       mkdir(Str path);
       virtual Task<Result<void>>       remove(Str path, bool all);
       virtual Task<Result<void>>       touch(Str path);   // Unsupported by default
+      virtual Task<Result<void>>       symlink(Str target, Str path);
+      virtual Task<Result<String>>     readlink(Str path);
 
       virtual Result<usize> read(u32 h, u64 off, u8 *buf, usize n);
       virtual Result<usize> write(u32 h, u64 off, const u8 *buf, usize n);
@@ -495,6 +497,14 @@ the same gesture (§6) takes the text and nothing is typed.
   has to know where it was mounted. A mount table maps prefix → `Fs`, longest
   prefix winning, and an open-file table above it holds the descriptors.
   Implementations in §5.1.
+
+  A `Stat` is `{kind, size, mtime}` and a `NodeKind` is `File`, `Dir` or `Link`
+  — three, and no inode, mode, owner or link count. **A store reports a link
+  and never resolves one**: following is `vfs_resolve`'s, above the mount table,
+  because a target may name a path in a different filesystem and nothing below
+  that line can see the table. It is also what lets a listing stay a listing —
+  `ls -R` and the globber descend on `Dir` alone, so a walk cannot follow a link
+  out of the tree it is walking (§5.2).
 - **Programs are not kernel objects.** One file in `src/cmd/`, built into a
   binary of its own (§4). The job table is not one either: it is the shell
   process's own memory.
@@ -1089,6 +1099,44 @@ is: the host rewrites the file with its own bytes and then reads the stamp back,
 answering `Unsupported` if the browser did not restamp. Milliseconds rather than
 seconds because a build step here finishes in well under one, and a `make` that
 cannot tell a target from the source it was made from is no `make`.
+
+**A symbolic link is a file the store agrees to read as one.** OPFS holds files
+and directories and nothing else — a `FileSystemHandle` carries `kind` and
+`name`, and there is no extended attribute, no mode and no setter for either —
+so a link has to be Braam's own convention over what OPFS does offer. The two
+candidates were a sidecar index per directory and a marker inside the file, and
+the sidecar was rejected for the reason the per-file read-only flag was: nothing
+stops a user rewriting whatever holds it, and a truth kept beside the data is a
+truth that goes stale. So a link is a file whose **whole contents** are the
+magic `!<braamlink>` and then the target.
+
+The cost of that is a classification, and the bound on it is size: a file
+outside `[len(magic), len(magic) + 1024]` cannot be a link, and both `stat` and
+`list` already await a `File` there to learn a size. So no wasm binary in `/bin`
+is ever read, and what is read is one small slice on a call that was already
+asynchronous. The honest edge is that a file whose entire contents happen to be
+that magic and a plausible target *is* a link as far as the system is concerned.
+That is the price of a store with nowhere to put a type, and it is stated here
+rather than hidden: the magic is twelve bytes chosen not to occur, and the
+target must additionally be non-empty and hold no NUL.
+
+Three things fall out of the representation rather than being built:
+
+- **`rm` cannot follow a link**, and neither can `rm -r`. `removeEntry` sees a
+  file, so it drops the link and never what it points at, and a recursive remove
+  cannot walk out of the tree it was given. Nothing in the host knows about
+  links in order to be right about them.
+- **A link in the middle of a path announces itself.** The store walks a path a
+  component at a time, and `getDirectoryHandle` on a *file* is a
+  `TypeMismatchError` — `Err(NotDir)`. That is the only failure a link in the
+  middle can produce, so it is also the only one worth a walk: a plain
+  `Err(NotFound)` says every component above the leaf was a directory and there
+  is nothing there to follow. A path with no links in it therefore costs exactly
+  the one round trip it always did.
+- **The open-file table is keyed on the *resolved* path.** Two names for one
+  file are one entry, or the exclusive lock below would be asked for twice and
+  refuse the second — which is the same rule as the one below, arrived at from
+  the other direction.
 
 Two constraints to build around:
 

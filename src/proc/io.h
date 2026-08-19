@@ -42,8 +42,11 @@ Task<void> close_fd(u32 fd);
 Task<Result<u32>> dup_fd(u32 fd);
 
 // What Sys::Stat answers with, and one entry of what Sys::List answers with.
-// `kind` is SYS_KIND_FILE or SYS_KIND_DIR; `mtime` is milliseconds since the
-// epoch, 0 when the filesystem keeps none — every directory, and all of /proc.
+// `kind` is SYS_KIND_FILE, SYS_KIND_DIR or SYS_KIND_LINK; `mtime` is
+// milliseconds since the epoch, 0 when the filesystem keeps none — every
+// directory, and all of /proc. A listing never resolves a link, so a DirEntry
+// says SYS_KIND_LINK whatever it points at; a FileInfo does so only when the
+// stat was asked not to follow.
 struct FileInfo {
     u32 kind  = SYS_KIND_FILE;
     u64 size  = 0;
@@ -57,7 +60,8 @@ struct DirEntry {
     u64 mtime = 0;
 };
 
-Task<Result<FileInfo>> stat_of(Str path);
+// `follow` false reports a symbolic link itself rather than its target.
+Task<Result<FileInfo>> stat_of(Str path, bool follow = true);
 
 Task<Result<Vec<DirEntry>>> list_dir(Str path);
 
@@ -68,6 +72,14 @@ Task<Result<void>> remove_path(Str path, bool all);
 // Moves an existing file's mtime to now. Err(Unsupported) where the store
 // cannot be made to restamp one.
 Task<Result<void>> touch_path(Str path);
+
+// Creates `path` as a symbolic link to `target`. The target is kept as written
+// and not checked, so a link may point at nothing; a relative one reads against
+// the directory the link is in.
+Task<Result<void>> make_link(Str target, Str path);
+
+// The target of a symbolic link, unresolved. Err(Invalid) for anything else.
+Task<Result<String>> read_link(Str path);
 
 // This process's own working directory, which every relative path above
 // resolves against. Inherited from whoever spawned it — the shell, for a

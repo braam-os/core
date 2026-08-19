@@ -18,7 +18,36 @@ export const OP = {
     MKDIR: 6,
     REMOVE: 7,
     TOUCH: 8,
+    SYMLINK: 9,
+    READLINK: 10,
 };
+
+// src/fs/fs.h's NodeKind, which a reply carries as a whole word.
+export const KIND = { FILE: 0, DIR: 1, LINK: 2 };
+
+// A symbolic link is a file whose whole contents are this magic and the target
+// (Concept.md §5.2). Size rules one out before it is read.
+export const LINK_MAGIC = "!<braamlink>";
+export const LINK_TARGET_MAX = 1024;
+
+// A whole file's link target, or null. The target must be the entire rest of
+// the file, non-empty, within LINK_TARGET_MAX and free of NUL.
+export function linkTarget(bytes) {
+    if (bytes.length <= LINK_MAGIC.length ||
+        bytes.length > LINK_MAGIC.length + LINK_TARGET_MAX)
+        return null;
+    for (let i = 0; i < LINK_MAGIC.length; i++)
+        if (bytes[i] !== LINK_MAGIC.charCodeAt(i))
+            return null;
+    const rest = bytes.subarray(LINK_MAGIC.length);
+    if (rest.includes(0))
+        return null;
+    return new TextDecoder().decode(rest);
+}
+
+export function linkBytes(target) {
+    return new TextEncoder().encode(LINK_MAGIC + target);
+}
 
 export const SYNC = {
     READ: 1,
@@ -46,7 +75,7 @@ export function packEntries(entries) {
     let at = 0;
     entries.forEach((e, i) => {
         const n = names[i];
-        words[at >> 2] = e.dir ? 1 : 0;
+        words[at >> 2] = e.link ? KIND.LINK : e.dir ? KIND.DIR : KIND.FILE;
         words[(at >> 2) + 1] = e.size >>> 0;
         words[(at >> 2) + 2] = Math.floor(e.size / 4294967296) >>> 0;
         words[(at >> 2) + 3] = (e.mtime || 0) >>> 0;
@@ -62,7 +91,7 @@ export function packEntries(entries) {
 export function packStat(s) {
     const out = new Uint8Array(20);
     const words = new Uint32Array(out.buffer);
-    words[0] = s.dir ? 1 : 0;
+    words[0] = s.link ? KIND.LINK : s.dir ? KIND.DIR : KIND.FILE;
     words[1] = s.size >>> 0;
     words[2] = Math.floor(s.size / 4294967296) >>> 0;
     words[3] = (s.mtime || 0) >>> 0;
@@ -260,21 +289,39 @@ export class OpfsStore {
         return slot;
     }
 
-    // A directory has no timestamp in OPFS, so it reports mtime 0.
+    // A file's link target, or null. Only one small enough to be a link is read.
+    async linkOf(file) {
+        if (file.size <= LINK_MAGIC.length ||
+            file.size > LINK_MAGIC.length + LINK_TARGET_MAX)
+            return null;
+        return linkTarget(new Uint8Array(await file.arrayBuffer()));
+    }
+
+    // A directory has no timestamp in OPFS, so it reports mtime 0. A link
+    // reports itself; resolving one is the VFS's job.
     async stat(path) {
         if (path === "/")
             return { dir: true, size: 0, mtime: 0 };
         const at = path.lastIndexOf("/");
         const dir = await this.dir(path.slice(0, at), false);
         const name = path.slice(at + 1);
+
+        // getFileHandle throws TypeMismatchError on a directory, so the
+        // fallback is unconditional. A link mid-path is this.dir()'s NOTDIR.
+        let file = null;
         try {
-            const handle = await dir.getFileHandle(name);
-            const file = await handle.getFile();
-            return { dir: false, size: file.size, mtime: file.lastModified };
+            file = await (await dir.getFileHandle(name)).getFile();
         } catch {
             await dir.getDirectoryHandle(name);
             return { dir: true, size: 0, mtime: 0 };
         }
+        const target = await this.linkOf(file);
+        return {
+            dir: false,
+            link: target !== null,
+            size: target !== null ? target.length : file.size,
+            mtime: file.lastModified,
+        };
     }
 
     async list(path) {
@@ -283,14 +330,40 @@ export class OpfsStore {
         for await (const [name, handle] of dir.entries()) {
             const isDir = handle.kind === "directory";
             const file = isDir ? null : await handle.getFile();
+            const target = file ? await this.linkOf(file) : null;
             out.push({
                 name,
                 dir: isDir,
-                size: file ? file.size : 0,
+                link: target !== null,
+                size: target !== null ? target.length : file ? file.size : 0,
                 mtime: file ? file.lastModified : 0,
             });
         }
         return out;
+    }
+
+    async symlink(path, target) {
+        const at = path.lastIndexOf("/");
+        const dir = await this.dir(path.slice(0, at), false);
+        const file = await dir.getFileHandle(path.slice(at + 1), { create: true });
+        const handle = await file.createSyncAccessHandle();
+        try {
+            handle.truncate(0);
+            handle.write(linkBytes(target), { at: 0 });
+            handle.flush();
+        } finally {
+            handle.close();
+        }
+    }
+
+    async readlink(path) {
+        const at = path.lastIndexOf("/");
+        const dir = await this.dir(path.slice(0, at), false);
+        const file = await (await dir.getFileHandle(path.slice(at + 1))).getFile();
+        const target = await this.linkOf(file);
+        if (target === null)
+            throw Object.assign(new Error("not a link"), { braam: E.INVALID });
+        return target;
     }
 
     // OPFS cannot set a modification time, so the file is rewritten with its
@@ -339,6 +412,8 @@ export class OpfsStore {
         await dir.getDirectoryHandle(name, { create: true });
     }
 
+    // A link is an ordinary file here, so removeEntry drops the link and not
+    // its target, and a recursive remove cannot walk out through one.
     async remove(path, recursive) {
         const at = path.lastIndexOf("/");
         const dir = await this.dir(path.slice(0, at), false);
@@ -418,6 +493,15 @@ export function makeFsImports(mem, store, reply) {
         case OP.TOUCH:
             await store.touch(r.arg());
             r.ok();
+            return;
+        case OP.SYMLINK:
+            // The path is the argument, the target the buffer: two paths.
+            await store.symlink(r.arg(), r.text());
+            r.ok();
+            return;
+        case OP.READLINK:
+            r.set("status", 0);
+            r.write(new TextEncoder().encode(await store.readlink(r.arg())));
             return;
         default:
             r.fail(E.UNSUPPORTED);

@@ -28,6 +28,20 @@ Result<void> proc_path(Proc &p, Str in, String &out)
     return path_resolve(p.cwd.str(), in, out);
 }
 
+// The same mapping for node kinds, and for the same reason.
+u32 sys_kind_of(NodeKind k)
+{
+    switch (k) {
+    case NodeKind::Dir:
+        return SYS_KIND_DIR;
+    case NodeKind::Link:
+        return SYS_KIND_LINK;
+    case NodeKind::File:
+        break;
+    }
+    return SYS_KIND_FILE;
+}
+
 // A process's flags are its own numbers (sysabi.h), mapped rather than shared:
 // the filesystem's are free to move without breaking a compiled binary.
 u32 vfs_flags(u32 f)
@@ -621,13 +635,13 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 break;
             }
             Result<Stat> r = Err(Error::NoMemory);
-            CO_CALL(r, vfs_stat(abs.str()));
+            CO_CALL(r, vfs_stat(abs.str(), !(sys_op_arg(c.op) & SYS_STAT_NOFOLLOW)));
             if (r.is_err()) {
                 status = -i32(r.error());
                 break;
             }
-            if (!reply_u32(reply, r.value().kind == NodeKind::Dir ? SYS_KIND_DIR : SYS_KIND_FILE,
-                           u32(r.value().size), u32(r.value().size >> 32), u32(r.value().mtime),
+            if (!reply_u32(reply, sys_kind_of(r.value().kind), u32(r.value().size),
+                           u32(r.value().size >> 32), u32(r.value().mtime),
                            u32(r.value().mtime >> 32)))
                 co_return Err(Error::NoMemory);
             status = 0;
@@ -650,9 +664,8 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             if (!reply_u32(reply, u32(r.value().size())))
                 co_return Err(Error::NoMemory);
             for (const Entry &e : r.value())
-                if (!reply_u32(reply, e.kind == NodeKind::Dir ? SYS_KIND_DIR : SYS_KIND_FILE,
-                               u32(e.size), u32(e.size >> 32), u32(e.mtime), u32(e.mtime >> 32),
-                               u32(e.name.size())) ||
+                if (!reply_u32(reply, sys_kind_of(e.kind), u32(e.size), u32(e.size >> 32),
+                               u32(e.mtime), u32(e.mtime >> 32), u32(e.name.size())) ||
                     !reply.append(e.name.str()))
                     co_return Err(Error::NoMemory);
             status = 0;
@@ -698,6 +711,48 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             status = 0;
             if (r.is_err())
                 status = -i32(r.error());
+            break;
+        }
+
+        case Sys::Symlink: {
+            if (payload.size() < 4) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u32 target_len = sys_get_u32(c.stage);
+            if (usize(target_len) + 4 > payload.size()) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            Str target = payload.substr(4, target_len);
+
+            // The target is stored as written, so it is not made absolute.
+            String abs;
+            if (Result<void> a = proc_path(p, payload.substr(4 + target_len), abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
+            Result<void> r = Err(Error::NoMemory);
+            CO_CALL(r, vfs_symlink(target, abs.str()));
+            status = r.is_err() ? -i32(r.error()) : 0;
+            break;
+        }
+
+        case Sys::ReadLink: {
+            String abs;
+            if (Result<void> a = proc_path(p, payload, abs); a.is_err()) {
+                status = -i32(a.error());
+                break;
+            }
+            Result<String> r = Err(Error::NoMemory);
+            CO_CALL(r, vfs_readlink(abs.str()));
+            if (r.is_err()) {
+                status = -i32(r.error());
+                break;
+            }
+            if (!reply.append(r.value().str()))
+                co_return Err(Error::NoMemory);
+            status = 0;
             break;
         }
 

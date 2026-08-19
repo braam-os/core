@@ -160,12 +160,14 @@ struct Walk {
         }
 
         // The file primaries, whose answer somebody else went and got. The
-        // letter is the operator's second byte.
-        if (a0 == "-r" || a0 == "-w" || a0 == "-x" || a0 == "-d" || a0 == "-f" || a0 == "-s") {
+        // letter is the operator's second byte, except -L, which is -h under a
+        // second name; those two alone do not follow a link.
+        if (a0 == "-r" || a0 == "-w" || a0 == "-x" || a0 == "-d" || a0 == "-f" || a0 == "-s" ||
+            a0 == "-h" || a0 == "-L") {
             Str f = need();
             if (bad)
                 return false;
-            return ask(a0[1], f);
+            return ask(a0 == "-L" ? 'h' : a0[1], f);
         }
         if (a0 == "-t") {
             // A literal per branch: Str's length folds only when the pointer

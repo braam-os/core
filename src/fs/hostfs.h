@@ -16,6 +16,8 @@ enum class FsOp : u32 {
     Mkdir,    // path
     Remove,   // path, flags bit 0 = recursive
     Touch,    // path -> the file's mtime moved to now, or Err(Unsupported)
+    Symlink,  // path = the link, the record's buf carries the target
+    ReadLink, // path -> the target, into buf
 };
 
 // FsOp::Stat's reply, packed by web/fs.js: u32 kind, u64 size, u64 mtime.

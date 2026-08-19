@@ -12,7 +12,7 @@ Result<usize> sync_call(FsSyncOp op, u32 h, u32 ptr, u32 len, u32 off)
     i32 r = host_fs_sync(u32(op), h, ptr, len, off);
     if (r < 0) {
         u32 e = u32(-r);
-        return Err(e && e <= u32(Error::NotEmpty) ? Error(e) : Error::Io);
+        return Err(e && e <= u32(Error::Loop) ? Error(e) : Error::Io);
     }
     return usize(r);
 }
@@ -24,6 +24,16 @@ Result<u32> off32(u64 v)
     if (v > 0xffffffffull)
         return Err(Error::Invalid);
     return u32(v);
+}
+
+// An unknown kind word is a file, never a directory.
+NodeKind fs_decode_kind(u32 w)
+{
+    if (w == 1)
+        return NodeKind::Dir;
+    if (w == 2)
+        return NodeKind::Link;
+    return NodeKind::File;
 }
 
 } // namespace
@@ -45,7 +55,7 @@ Result<Vec<Entry>> fs_decode_entries(const char *p, usize n)
             return Err(Error::Io);
 
         Entry e;
-        e.kind  = head[0] ? NodeKind::Dir : NodeKind::File;
+        e.kind  = fs_decode_kind(head[0]);
         e.size  = u64(head[1]) | (u64(head[2]) << 32);
         e.mtime = u64(head[3]) | (u64(head[4]) << 32);
         if (!e.name.assign(Str(p + at, len)) || !out.push(move(e)))
@@ -66,7 +76,7 @@ Task<Result<Stat>> OpfsFs::stat(Str path)
 
     u32 w[5];
     __builtin_memcpy(w, c.req().buf.data(), sizeof(w));
-    co_return Stat{ w[0] ? NodeKind::Dir : NodeKind::File, u64(w[1]) | (u64(w[2]) << 32),
+    co_return Stat{ fs_decode_kind(w[0]), u64(w[1]) | (u64(w[2]) << 32),
                     u64(w[3]) | (u64(w[4]) << 32) };
 }
 
@@ -123,6 +133,30 @@ Task<Result<void>> OpfsFs::touch(Str path)
     if (!c.ok())
         co_return Err(Error::NoMemory);
     co_return co_await c;
+}
+
+Task<Result<void>> OpfsFs::symlink(Str target, Str path)
+{
+    if (target.empty() || target.size() > FS_LINK_TARGET_MAX)
+        co_return Err(Error::Invalid);
+
+    FsCall c(FsOp::Symlink, path, 0);
+    if (!c.ok() || !c.put(target))
+        co_return Err(Error::NoMemory);
+    co_return co_await c;
+}
+
+Task<Result<String>> OpfsFs::readlink(Str path)
+{
+    FsCall c(FsOp::ReadLink, path, 0);
+    if (!c.ok() || !c.reserve(FS_LINK_TARGET_MAX))
+        co_return Err(Error::NoMemory);
+    CO_TRY_VOID(co_await c);
+
+    String out;
+    if (!out.assign(Str(c.req().buf.data(), c.req().h.buf_len)))
+        co_return Err(Error::NoMemory);
+    co_return move(out);
 }
 
 Result<usize> OpfsFs::read(u32 h, u64 off, u8 *buf, usize n)

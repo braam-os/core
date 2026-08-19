@@ -721,13 +721,15 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 17 | `Read` | fd | — | bytes read, 0 at end | the chunk |
 | 18 | `Open` | `SYS_O_*` | the path | the fd | — |
 | 19 | `Close` | fd | — | 0 | — |
-| 20 | `Stat` | — | the path | 0 | `u32 kind`, `u64 size`, `u64 mtime` |
+| 20 | `Stat` | bit 0 = do not follow a final link | the path | 0 | `u32 kind`, `u64 size`, `u64 mtime` |
 | 21 | `List` | — | the path | 0 | `u32 count`, then per entry `u32 kind`, `u64 size`, `u64 mtime`, `u32 name_len`, the name |
 | 22 | `MkDir` | — | the path | 0 | — |
 | 23 | `Remove` | bit 0 = recursive | the path | 0 | — |
 | 24 | `Touch` | — | the path | 0 | — |
 | 25 | `Chdir` | bit 0 = set, else report | the path, when setting | 0 | the resulting absolute cwd |
 | 26 | `Dup` | fd | — | a second fd for the same thing | — |
+| 27 | `Symlink` | — | `u32 target_len`, the target, the link's own path | 0 | — |
+| 28 | `ReadLink` | — | the path | 0 | the target, unresolved |
 | 32 | `Sleep` | — | `u32 ms` | 0 | — |
 | 48 | `Clock` | — | — | 0 | `u64 epoch_ms`, `i32 tz_min` |
 | 49 | `Storage` | — | — | 0 | `u64 quota`, `u64 usage`, `u32 flags` |
@@ -768,6 +770,35 @@ way to move one: there is no setter in OPFS, so the host rewrites the file with
 its own bytes and checks that the browser restamped it, answering `Unsupported`
 when it did not. `ls -l`, `ls -t` and `test -nt`/`-ot` are the callers.
 
+**`Symlink` and `ReadLink` are the only two operations that do not follow a
+symbolic link**, and everything else naming a path does. A link is a third
+`SYS_KIND_*` value rather than a flag on a file, because a *listing* has to be
+able to report one without resolving it: `ls -R` and the shell's globber descend
+on `SYS_KIND_DIR` alone, so a link is not a directory to them whatever it points
+at, and a tree walk stays finite with nothing written to make it so.
+
+`Symlink` carries two paths, which no other filesystem operation does, so it
+takes `Fetch`'s shape — `u32 target_len`, the target, then the link's own path —
+rather than inventing a second convention. The target is stored as written and
+resolved only when the link is walked, so it may dangle and a relative one reads
+against the directory the link is in. `Stat` grew an argument instead of a
+twenty-ninth operation, since the reply is the same reply either way; `ls -l`,
+`test -h`/`-L` and `ln -s` are the callers.
+
+Resolution is the VFS's and never a store's (`vfs_resolve`,
+`src/fs/vfs.cpp`). A store walks a whole multi-component path itself, so a path
+with no links in it costs the one round trip it always did; only a leaf that
+really is a link, or an `Err(NotDir)` — which is what a store reports when it
+met a file where a directory had to be, and therefore the only failure a link in
+the middle of a path can produce — costs more. `Error::Loop` bounds it at
+`FS_LINK_MAX` hops.
+
+**`..` stays lexical**, which is `cd -L`: `path_resolve` pops a component
+textually and never sees a link, so `/a/link/..` is `/a`. That is what keeps it
+a pure synchronous function — the dispatcher resolves a process's path against
+its own cwd *before* its first await, because another task of the same process
+may move that cwd underneath it, and a `Task` there would reopen that.
+
 **`Dup` is the only way to say `2>&1`, and the only way a shell keeps a
 descriptor across a `Spawn`.** One handle stands behind both numbers, so a
 file's offset is shared — which is what makes `>f 2>&1` interleave rather than
@@ -779,7 +810,10 @@ Adding it moved `PROC_ABI` from 9 to 10 and relaxed one rule in `Spawn`. (The
 environment moved it from 10 to 11, without adding an operation: the blob rides
 `Spawn`'s payload and `_start`'s. Modification times moved it from 11 to 12,
 widening `Stat` and `List`'s replies and taking op 24 for `Touch`, which pushed
-`Chdir` and `Dup` up one.) That operation used to refuse a handle with
+`Chdir` and `Dup` up one. Symbolic links moved it from 12 to 13, taking ops
+27 and 28 — the sparse numbering meant nothing had to move for once — adding a
+third value to `SYS_KIND_*` and an argument to `Stat`.) That operation used to
+refuse a handle with
 `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
 *descriptor* raises that count too, so every duplicated fd would have been
 unspawnable. The test is now the `busy_r`/`busy_w` flags, which is what the
@@ -938,7 +972,8 @@ failure.
 | `SYS_STAGE_MAX` | 1 MiB | the cap on `Sys::Stage`, which is the largest blit there can be |
 | `SYS_BLIT_HEAD` | 7 | `ScreenBlit`'s header, in `u32`s |
 | `SYS_O_READ`…`APPEND` | 1, 2, 4, 8, 16 | open flags, restated rather than shared with the VFS |
-| `SYS_KIND_FILE`/`DIR` | 0, 1 | what `Stat` and `List` report |
+| `SYS_KIND_FILE`/`DIR`/`LINK` | 0, 1, 2 | what `Stat` and `List` report |
+| `SYS_STAT_NOFOLLOW` | 1 | `Stat`'s arg: report a final symbolic link itself |
 | `SYS_STORE_*` | 1, 2, 4, 8 | OPFS, sync, persisted, and "the host answered at all" |
 | `SYS_SPAWN_HEAD` | 3 | the descriptor words before `Spawn`'s argv blob, in `u32`s |
 | `SYS_SPAWN_ENV` | 1 | `Spawn`'s arg bit: an env blob follows argv, else the child inherits the caller's |
@@ -974,8 +1009,8 @@ is the top size class on both sides of the wire, and one byte more costs a whole
 
 The wire carries `src/kernel/result.h`'s `Error`, negated: `Invalid` 1,
 `NoMemory` 2, `NotFound` 3, `Exists` 4, `NotDir` 5, `IsDir` 6, `Perm` 7, `Io` 8,
-`Cancelled` 9, `Again` 10, `Unsupported` 11, `Closed` 12, `NotEmpty` 13.
-`web/abi.js:9-13` mirrors the list.
+`Cancelled` 9, `Again` 10, `Unsupported` 11, `Closed` 12, `NotEmpty` 13, `Loop`
+14. `web/abi.js:9-13` mirrors the list.
 
 Two never reach a process. `Again` is retried inside `proc_syscall` rather than
 reported, and `Cancelled` means the process is being destroyed, so `serve()`

@@ -7,6 +7,88 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## Symbolic links
+
+A third node kind, and the first change to the filesystem's type system since
+it had one. The motive is `/bin/pkg`: a package manager installs
+`/bin/vi -> /share/pkg/vim/bin/vim`, and without links the only alternatives are
+copying a binary per name or teaching the shell a second lookup rule.
+
+**The whole design is where resolution lives.** Braam's VFS was purely lexical:
+`path_resolve` normalised a string, `vfs_lookup` picked a mount by longest
+prefix, and the *whole* remaining path went to one backend, which walked it
+itself. Nothing had ever looked at a path one component at a time. A textbook
+`namei` would be one host round trip per component on every path operation, in a
+system that documents a keystroke's two round trips as a floor worth defending.
+
+So resolution is lazy, and rests on a fact about the store rather than on
+bookkeeping: **a link in the middle of a path announces itself as
+`Err(NotDir)`.** OPFS walks with `getDirectoryHandle`, which raises
+`TypeMismatchError` on a file, and a link *is* a file. So `vfs_resolve` hands
+the whole path to the backend exactly as before; a success with a non-link leaf
+is the answer, and only `Err(NotDir)` — the one failure a link in the middle can
+produce — is worth walking. A path with no links in it costs the round trip it
+always did, a leaf that really is a link costs one more, and a plain
+`Err(NotFound)` costs nothing extra, because it proves every component above the
+leaf was a directory.
+
+That fact had to be *made* true in the two fakes. `test/fakefs.mjs` and the unit
+suite's `TempFs` are flat maps keyed by whole path; both would have answered
+`NotFound` where OPFS answers `NotDir`, and the walk would never have run under
+test. Each grew the same six-line ancestor check. A fake that is easier than the
+thing it stands for is a fake that tests nothing.
+
+**A listing never resolves.** `Sys::List` reports `SYS_KIND_LINK` whatever the
+link points at. That was chosen for tree walks rather than for fidelity: `ls -R`
+and the shell's globber both descend on `SYS_KIND_DIR` alone, so neither can
+follow a link out of the tree it is walking, and both stayed correct with no
+cycle guard added to either. The `-R` entry above used to justify its unbounded
+stack by saying the VFS had no links; it now justifies it by saying a link is
+not a directory. Only the globber changed, and only for a trailing-slash
+pattern, where a link to a directory *should* match — so it stats the links in a
+listing and nothing else.
+
+**`..` stays lexical**, which is `cd -L` and what shells do by default.
+Resolving it physically would mean `path_resolve` could no longer pop a
+component textually, and that function is not only shared with every process
+binary but is what `proc_path` relies on being *synchronous*: the dispatcher
+makes a process's path absolute against that process's cwd before its first
+await, because another task of the same process may move the cwd underneath it.
+Making it a `Task` reopens that race to buy a `..` almost nobody types after a
+link. The cwd is stored logically for the same reason, so `cd` through a link
+and `pwd` says the link.
+
+**A store has nowhere to put a type**, so a link is a file whose whole contents
+are `!<braamlink>` and the target — the reasoning, and the rejected sidecar, are
+in Concept.md §5.2. Two things fell out of that rather than being written:
+`removeEntry` sees a file, so `rm` and `rm -r` cannot follow a link and needed
+no code to stop them; and the magic-plus-target form made the fake and the real
+store share one classifier instead of holding two ideas of the format.
+
+**One latent bug surfaced.** The open-file table was keyed on the lexical path.
+That is fine when a path names one file, and wrong the moment two do: opening
+`/bin/vi` and `/share/pkg/vim/bin/vim` would have asked OPFS for two sync access
+handles on one file, and OPFS takes an exclusive lock. It is keyed on the
+resolved path now, which is the same rule §5.2 already stated from the other
+direction — one backend handle per file — and it is what the unit case about a
+reader refusing a writer *through the other name* is guarding.
+
+**What this is not.** There are no hard links: OPFS keeps no link count and one
+file has one name, so `ln` without `-s` says so rather than pretending. There is
+no `readlink` program — `ls -l` prints the target and `Sys::ReadLink` has its
+caller there — and no `-L` on `ls`. And `tools/pack.py` does not carry a link
+into `rootfs.zip`: nothing in `rootfs/` is one, so the code would be written
+against a case that does not exist and tested against none. `/bin/pkg` writing
+links into the store at install time is the case that will ask for it.
+
+**Cost.** `PROC_ABI` 12 → 13, invalidating every stamped binary. Ops 27 and 28
+were free — the sparse numbering finally paid for itself, and nothing had to
+move. `kernel.wasm` went from 154,751 to 167,373 bytes against its 256 KiB
+budget, and the boot tree from ~710 KiB to 754,623 against 1 MiB, of which
+`/bin/ln` is 13,595.
+
+---
+
 ## A package policy, written before the package manager
 
 `/bin/pkg` will be the first thing in the system that fetches bytes from
@@ -2136,8 +2218,11 @@ wrong shape for a tree. One heap `Vec<String>` holds what is still to list;
 children are pushed in reverse of the order they printed, so they pop in it,
 which is BSD's depth-first pre-order for free. Memory is bounded by sibling
 counts along the current path rather than by the tree, and there are no cycles
-to guard against — this VFS has no symlinks. The entry vector, that stack, the
-operand list and the row buffer are one heap block for §8.2's reason, the same
+to guard against: symbolic links arrived afterwards and a listing reports one as
+`SYS_KIND_LINK` rather than as what it points at, so `-R` — which pushes on
+`SYS_KIND_DIR` alone — still cannot walk through one. The entry vector, that
+stack, the operand list and the row buffer are one heap block for §8.2's
+reason, the same
 one `less` has a `Pager` for.
 
 **What could not be brought across at all**: `-t`, `-i`, `-s`, `-o`, `-T` and
@@ -2145,12 +2230,15 @@ one `less` has a `Pager` for.
 owner, link count or inode anywhere in `Stat`, `Entry` or the `Sys::List` wire
 format. Any of those is a change reaching both storage backends and the ABI, not
 a change to `ls`. (`-t` since arrived, by making exactly that change — see
-"Files have a modification time", above. The other five stand.) `-a`/`-A` were left out for a different reason: nothing in the
-tree creates a dotfile and nothing hides one, so the flag would introduce the
-concept of a hidden file rather than expose it. `-F` is already there and
-unconditional — the trailing slash on a directory is the only thing
-distinguishing it from a file in the short form, and under columns it earns its
-place twice over.
+"Files have a modification time", above. `-L` has since become *answerable*, and
+is still not there: with links in the system it would mean "follow them", and
+what `-l` does instead is decline to follow an *operand*, which is the case
+worth having. The other four stand.) `-a`/`-A` were left out for a different
+reason: nothing in the tree creates a dotfile and nothing hides one, so the flag
+would introduce the concept of a hidden file rather than expose it. `-F` is
+already there and unconditional — the trailing slash on a directory is the only
+thing distinguishing it from a file in the short form, and under columns it
+earns its place twice over.
 
 **vmstat's rate columns went from five wide to six.** `W_RATE = 5` gave a
 five-digit rate no separator from the column on its left, so `sy` and `cs` ran

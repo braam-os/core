@@ -278,7 +278,7 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with
 | Group | What is there |
 | --- | --- |
 | Streams | `write_all(fd, Str)`, `read_chunk(fd)`, `close_fd(fd)` |
-| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path`, `touch_path` |
+| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path`, `touch_path`, `make_link`, `read_link` |
 | Directory | `cwd_get()`, `cwd_set(path)` — this process's own, inherited from whoever spawned it |
 | Children | `make_pipe()`, `spawn(Args, ChildIo, const Args *env)`, `wait_child(pid)`, `kill_child(pid)`, `set_fg(pid)` |
 | Terminal | `tty_of(fd)`, `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
@@ -308,6 +308,17 @@ since OPFS has no timestamp on one, and all of `/proc`, which is generated at
 `civil()` from `proc/time.h`, which `date` and `ls -l` both use. `touch_path`
 moves a file's mtime to now and is the only thing that can — there is no setter
 in OPFS, so a store that cannot be made to restamp answers `Unsupported`.
+
+`kind` is `SYS_KIND_FILE`, `SYS_KIND_DIR` or `SYS_KIND_LINK`. Everything above
+that names a path **follows a symbolic link**, except `remove_path`, which drops
+the link rather than what it points at, and `read_link`, which is the only way
+to see a target. `stat_of(path, false)` reports a final link itself — that is
+how `test -h` is written, and the only way to stat one that dangles. A listing
+never resolves, so a `DirEntry` says `SYS_KIND_LINK` whatever the link points
+at: walk a tree on `SYS_KIND_DIR` alone and it cannot follow a link out of the
+tree, which is why neither `ls -R` nor the shell's globber needs a cycle guard.
+`make_link` stores the target as written, so it may dangle and a relative one
+reads against the directory the link is in.
 
 `tty_of(SYS_STDOUT)` is how a program lays its output out: it reports whether
 that descriptor is the terminal and, if it is, how wide. The geometry is zero

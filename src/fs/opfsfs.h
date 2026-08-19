@@ -17,6 +17,8 @@ struct OpfsFs final : Fs {
     Task<Result<void>> mkdir(Str path) override;
     Task<Result<void>> remove(Str path, bool all) override;
     Task<Result<void>> touch(Str path) override;
+    Task<Result<void>> symlink(Str target, Str path) override;
+    Task<Result<String>> readlink(Str path) override;
 
     Result<usize> read(u32 h, u64 off, u8 *buf, usize n) override;
     Result<usize> write(u32 h, u64 off, const u8 *buf, usize n) override;

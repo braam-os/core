@@ -8,7 +8,9 @@
 // and the tick that issued the request drains the queue on its way out. Set
 // `defer` to hold replies back and prove the parked path as well.
 
-import { E, OP, Request, SYNC, installOps, packEntries, packInfo, packStat } from "../web/fs.js";
+import {
+    E, OP, Request, SYNC, installOps, linkBytes, linkTarget, packEntries, packInfo, packStat,
+} from "../web/fs.js";
 
 const O_CREATE = 4, O_TRUNC = 8;
 
@@ -19,6 +21,15 @@ const CLOCK_START = 1781900000000, CLOCK_STEP = 1000;
 function dirname(p) {
     const at = p.lastIndexOf("/");
     return at <= 0 ? "/" : p.slice(0, at);
+}
+
+// OPFS walks a component at a time, so a file where a directory had to be is
+// NOTDIR. This flat map has to say the same, or the VFS's link walk never runs.
+function notDir(store, path) {
+    for (let at = path.indexOf("/", 1); at > 0; at = path.indexOf("/", at + 1))
+        if (store.files.has(path.slice(0, at)))
+            return true;
+    return false;
 }
 
 function removeTree(store, path) {
@@ -83,6 +94,8 @@ export class FakeStore {
 export function makeFakeImports(mem, store, kernel) {
     function perform(r, op) {
         const path = op === OP.INFO || op === OP.UNPACK ? "" : r.arg();
+        if (path && notDir(store, path))
+            return r.fail(E.NOTDIR);
         switch (op) {
         case OP.INFO:
             return r.write(packInfo({
@@ -140,9 +153,11 @@ export function makeFakeImports(mem, store, kernel) {
             const data = store.files.get(path);
             if (!data)
                 return r.fail(E.NOTFOUND);
+            const target = linkTarget(data);
             return r.write(packStat({
                 dir: false,
-                size: data.length,
+                link: target !== null,
+                size: target !== null ? target.length : data.length,
                 mtime: store.mtimes.get(path) || 0,
             }));
         }
@@ -156,13 +171,16 @@ export function makeFakeImports(mem, store, kernel) {
                 if (name !== "/" && dirname(name) === path)
                     out.push({ name: name.slice(under.length), dir: true, size: 0, mtime: 0 });
             for (const [name, data] of store.files)
-                if (dirname(name) === path)
+                if (dirname(name) === path) {
+                    const target = linkTarget(data);
                     out.push({
                         name: name.slice(under.length),
                         dir: false,
-                        size: data.length,
+                        link: target !== null,
+                        size: target !== null ? target.length : data.length,
                         mtime: store.mtimes.get(name) || 0,
                     });
+                }
             r.set("status", 0);
             return r.write(packEntries(out));
         }
@@ -205,6 +223,28 @@ export function makeFakeImports(mem, store, kernel) {
                 return r.fail(store.dirs.has(path) ? E.NOTDIR : E.NOTFOUND);
             store.stamp(path);
             return r.ok();
+
+        case OP.SYMLINK: {
+            // The bytes the real store holds, so one linkTarget() serves both.
+            if (store.dirs.has(path) || store.files.has(path))
+                return r.fail(E.EXISTS);
+            if (!store.dirs.has(dirname(path)))
+                return r.fail(E.NOTFOUND);
+            store.files.set(path, linkBytes(r.text()));
+            store.stamp(path);
+            return r.ok();
+        }
+
+        case OP.READLINK: {
+            const data = store.files.get(path);
+            if (!data)
+                return r.fail(store.dirs.has(path) ? E.INVALID : E.NOTFOUND);
+            const target = linkTarget(data);
+            if (target === null)
+                return r.fail(E.INVALID);
+            r.set("status", 0);
+            return r.write(new TextEncoder().encode(target));
+        }
 
         default:
             return r.fail(E.UNSUPPORTED);

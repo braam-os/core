@@ -64,7 +64,7 @@ Task<i32> builtin_help(Args args, ShIo io)
             width = b.name.size();
     if (bin.is_ok())
         for (const DirEntry &e : bin.value())
-            if (e.kind == SYS_KIND_FILE && e.name.size() > width)
+            if (e.kind != SYS_KIND_DIR && e.name.size() > width)
                 width = e.name.size();
 
     // Built whole and written once, which is the discipline a builtin in a
@@ -81,7 +81,8 @@ Task<i32> builtin_help(Args args, ShIo io)
                 manifest = move(r.value());
 
         for (const DirEntry &e : bin.value()) {
-            if (e.kind != SYS_KIND_FILE)
+            // A program under a second name in /bin is SYS_KIND_LINK.
+            if (e.kind == SYS_KIND_DIR)
                 continue;
             // Once per name: `echo` and `test` are both a builtin and a file,
             // and the builtin is what typing the name runs.

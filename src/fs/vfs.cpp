@@ -123,6 +123,61 @@ Result<i32> share(OpenShared *s, u32 flags)
     return fd;
 }
 
+// One stat against whatever mount `abs` lands in. Never follows.
+Task<Result<Stat>> stat_at(Str abs)
+{
+    Str sub;
+    const Mount *m = vfs_lookup(abs, sub);
+    if (!m)
+        co_return Err(Error::NotFound);
+    Task<Result<Stat>> t = m->fs->stat(sub);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
+Task<Result<String>> readlink_at(Str abs)
+{
+    Str sub;
+    const Mount *m = vfs_lookup(abs, sub);
+    if (!m)
+        co_return Err(Error::NotFound);
+    Task<Result<String>> t = m->fs->readlink(sub);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
+// `whole` with its first `end` bytes — a link — replaced by `target` and
+// normalised, keeping the tail. A relative target joins the link's directory.
+Result<void> link_splice(Str whole, usize end, Str target, String &out)
+{
+    if (target.empty() || target.size() > FS_LINK_TARGET_MAX)
+        return Err(Error::Io);
+
+    String joined;
+    if (target.starts_with("/")) {
+        if (!joined.assign(target))
+            return Err(Error::NoMemory);
+    } else {
+        TRY_VOID(path_join(path_dirname(whole.substr(0, end)), target, joined));
+    }
+    if (!joined.append(whole.substr(end)))
+        return Err(Error::NoMemory);
+    return path_resolve("/", joined.str(), out);
+}
+
+// Err(Perm) for a read-only mount, before the path is walked. The mount a link
+// lands in is checked again after.
+Result<void> deny_readonly(Str abs)
+{
+    Str sub;
+    const Mount *m = vfs_lookup(abs, sub);
+    if (m && !m->fs->writable())
+        return Err(Error::Perm);
+    return {};
+}
+
 // Case-free byte order, which is all the shell needs.
 bool name_less(Str a, Str b)
 {
@@ -197,21 +252,66 @@ Result<void> vfs_abs(Str path, String &out)
     return path_resolve(vfs().cwd.str(), path, out);
 }
 
+// Err(NotDir) is the only failure a link in mid-path can produce, so it is the
+// only one worth a walk (Release_Notes.md, "Symbolic links").
+Task<Result<Stat>> vfs_resolve(Str abs, bool follow_final, String &out)
+{
+    if (!out.assign(abs))
+        co_return Err(Error::NoMemory);
+
+    for (u32 hop = 0; hop <= FS_LINK_MAX; hop++) {
+        Result<Stat> s = co_await stat_at(out.str());
+
+        if (s.is_ok()) {
+            if (s.value().kind != NodeKind::Link || !follow_final)
+                co_return s;
+
+            String target = CO_TRY(co_await readlink_at(out.str()));
+            String next;
+            CO_TRY_VOID(link_splice(out.str(), out.size(), target.str(), next));
+            out = move(next);
+            continue;
+        }
+        if (s.error() != Error::NotDir)
+            co_return Err(s.error());
+
+        // The first component that is a link, spliced in. Not the leaf: the
+        // stat above already spoke for it.
+        bool spliced = false;
+        for (usize at = 1; at < out.size();) {
+            usize end = at;
+            while (end < out.size() && out[end] != '/')
+                end++;
+            if (end == out.size())
+                break;
+
+            Result<Stat> ps = co_await stat_at(out.str().substr(0, end));
+            if (ps.is_err())
+                co_return Err(ps.error());
+            if (ps.value().kind == NodeKind::Link) {
+                String target = CO_TRY(co_await readlink_at(out.str().substr(0, end)));
+                String next;
+                CO_TRY_VOID(link_splice(out.str(), end, target.str(), next));
+                out     = move(next);
+                spliced = true;
+                break;
+            }
+            at = end + 1;
+        }
+        if (!spliced)
+            co_return Err(s.error());
+    }
+    co_return Err(Error::Loop);
+}
+
 Task<Result<void>> vfs_chdir(Str path)
 {
     String abs;
     CO_TRY_VOID(vfs_abs(path, abs));
 
-    Str sub;
-    const Mount *m = vfs_lookup(abs.str(), sub);
-    if (!m)
-        co_return Err(Error::NotFound);
-
-    Task<Result<Stat>> t = m->fs->stat(sub);
-    if (!t)
-        co_return Err(Error::NoMemory);
-
-    Stat s = CO_TRY(co_await t);
+    // The cwd is the logical path: `cd` through a link and `pwd` says the link.
+    String phys;
+    Stat s = CO_TRY(co_await vfs_resolve(abs.str(), true, phys));
     if (s.kind != NodeKind::Dir)
         co_return Err(Error::NotDir);
     if (!vfs().cwd.assign(abs.str()))
@@ -219,29 +319,23 @@ Task<Result<void>> vfs_chdir(Str path)
     co_return {};
 }
 
-Task<Result<Stat>> vfs_stat(Str path)
+Task<Result<Stat>> vfs_stat(Str path, bool follow)
 {
     String abs;
     CO_TRY_VOID(vfs_abs(path, abs));
 
-    Str sub;
-    const Mount *m = vfs_lookup(abs.str(), sub);
-    if (!m)
-        co_return Err(Error::NotFound);
-
-    Task<Result<Stat>> t = m->fs->stat(sub);
-    if (!t)
-        co_return Err(Error::NoMemory);
-    co_return co_await t;
+    String phys;
+    co_return co_await vfs_resolve(abs.str(), follow, phys);
 }
 
 Task<Result<Vec<Entry>>> vfs_list(Str path)
 {
-    String abs;
+    String abs, phys;
     CO_TRY_VOID(vfs_abs(path, abs));
+    CO_TRY(co_await vfs_resolve(abs.str(), true, phys));
 
     Str sub;
-    const Mount *m = vfs_lookup(abs.str(), sub);
+    const Mount *m = vfs_lookup(phys.str(), sub);
     if (!m)
         co_return Err(Error::NotFound);
 
@@ -254,7 +348,7 @@ Task<Result<Vec<Entry>>> vfs_list(Str path)
     // table itself supplies the entry. Without this, `ls /` would not show
     // /home at all.
     for (const Mount &mount : vfs_mounts()) {
-        if (mount.prefix.size() == 1 || path_dirname(mount.prefix.str()) != abs.str())
+        if (mount.prefix.size() == 1 || path_dirname(mount.prefix.str()) != phys.str())
             continue;
         Str name  = path_basename(mount.prefix.str());
         bool seen = false;
@@ -278,11 +372,16 @@ Task<Result<Vec<Entry>>> vfs_list(Str path)
 
 Task<Result<i32>> vfs_open(Str path, u32 flags)
 {
-    String abs;
+    String abs, phys;
     CO_TRY_VOID(vfs_abs(path, abs));
 
+    // Only the leaf may be absent, and only when creating it.
+    if (Result<Stat> s = co_await vfs_resolve(abs.str(), true, phys);
+        s.is_err() && (s.error() != Error::NotFound || !(flags & O_CREATE)))
+        co_return Err(s.error());
+
     Str sub;
-    const Mount *m = vfs_lookup(abs.str(), sub);
+    const Mount *m = vfs_lookup(phys.str(), sub);
     if (!m)
         co_return Err(Error::NotFound);
     if ((flags & O_WRITE) && !m->fs->writable())
@@ -290,8 +389,9 @@ Task<Result<i32>> vfs_open(Str path, u32 flags)
 
     // Concept.md §5.2: descriptors share one handle rather than asking for a
     // second, which an OPFS sync access handle refuses. No backend is opened
-    // twice, so the rule does not depend on which one a path lands in.
-    if (OpenShared *s = shared_of(m->fs, abs.str()))
+    // twice, so the rule does not depend on which one a path lands in. Keyed on
+    // the physical path: two links to one file are one open file.
+    if (OpenShared *s = shared_of(m->fs, phys.str()))
         co_return share(s, flags);
 
     Task<Result<u32>> t = m->fs->open(sub, flags);
@@ -302,7 +402,7 @@ Task<Result<i32>> vfs_open(Str path, u32 flags)
     // That await was a window: another task may have opened the file while it
     // ran, and on OPFS that is exactly why `r` failed. Nothing below suspends,
     // so the loser always sees the winner's record here.
-    if (OpenShared *s = shared_of(m->fs, abs.str())) {
+    if (OpenShared *s = shared_of(m->fs, phys.str())) {
         if (r.is_ok())
             m->fs->close(r.value());
         co_return share(s, flags);
@@ -311,7 +411,7 @@ Task<Result<i32>> vfs_open(Str path, u32 flags)
         co_return Err(r.error());
 
     OpenShared *s = heap_new<OpenShared>();
-    if (!s || !s->path.assign(abs.str())) {
+    if (!s || !s->path.assign(phys.str())) {
         heap_delete(s);
         m->fs->close(r.value());
         co_return Err(Error::NoMemory);
@@ -329,13 +429,18 @@ Task<Result<i32>> vfs_open(Str path, u32 flags)
     co_return fd;
 }
 
+// The leaf must not exist, so Err(NotFound) is the expected answer.
 Task<Result<void>> vfs_mkdir(Str path)
 {
-    String abs;
+    String abs, phys;
     CO_TRY_VOID(vfs_abs(path, abs));
+    CO_TRY_VOID(deny_readonly(abs.str()));
+    if (Result<Stat> s = co_await vfs_resolve(abs.str(), false, phys);
+        s.is_err() && s.error() != Error::NotFound)
+        co_return Err(s.error());
 
     Str sub;
-    const Mount *m = vfs_lookup(abs.str(), sub);
+    const Mount *m = vfs_lookup(phys.str(), sub);
     if (!m)
         co_return Err(Error::NotFound);
     if (!m->fs->writable())
@@ -347,18 +452,21 @@ Task<Result<void>> vfs_mkdir(Str path)
     co_return co_await t;
 }
 
+// Removes the link itself, never what it points at.
 Task<Result<void>> vfs_remove(Str path, bool all)
 {
-    String abs;
+    String abs, phys;
     CO_TRY_VOID(vfs_abs(path, abs));
+    CO_TRY_VOID(deny_readonly(abs.str()));
+    CO_TRY(co_await vfs_resolve(abs.str(), false, phys));
 
     Str sub;
-    const Mount *m = vfs_lookup(abs.str(), sub);
+    const Mount *m = vfs_lookup(phys.str(), sub);
     if (!m)
         co_return Err(Error::NotFound);
     if (!m->fs->writable())
         co_return Err(Error::Perm);
-    if (m->prefix == abs.str())
+    if (m->prefix == phys.str())
         co_return Err(Error::Perm); // a mount point is not the filesystem's to drop
 
     Task<Result<void>> t = m->fs->remove(sub, all);
@@ -369,17 +477,63 @@ Task<Result<void>> vfs_remove(Str path, bool all)
 
 Task<Result<void>> vfs_touch(Str path)
 {
-    String abs;
+    String abs, phys;
     CO_TRY_VOID(vfs_abs(path, abs));
+    CO_TRY_VOID(deny_readonly(abs.str()));
+    CO_TRY(co_await vfs_resolve(abs.str(), true, phys));
 
     Str sub;
-    const Mount *m = vfs_lookup(abs.str(), sub);
+    const Mount *m = vfs_lookup(phys.str(), sub);
     if (!m)
         co_return Err(Error::NotFound);
     if (!m->fs->writable())
         co_return Err(Error::Perm);
 
     Task<Result<void>> t = m->fs->touch(sub);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
+Task<Result<void>> vfs_symlink(Str target, Str path)
+{
+    String abs, phys;
+    CO_TRY_VOID(vfs_abs(path, abs));
+    CO_TRY_VOID(deny_readonly(abs.str()));
+    if (Result<Stat> s = co_await vfs_resolve(abs.str(), false, phys);
+        s.is_err() && s.error() != Error::NotFound)
+        co_return Err(s.error());
+    else if (s.is_ok())
+        co_return Err(Error::Exists);
+
+    Str sub;
+    const Mount *m = vfs_lookup(phys.str(), sub);
+    if (!m)
+        co_return Err(Error::NotFound);
+    if (!m->fs->writable())
+        co_return Err(Error::Perm);
+
+    Task<Result<void>> t = m->fs->symlink(target, sub);
+    if (!t)
+        co_return Err(Error::NoMemory);
+    co_return co_await t;
+}
+
+Task<Result<String>> vfs_readlink(Str path)
+{
+    String abs, phys;
+    CO_TRY_VOID(vfs_abs(path, abs));
+
+    Stat s = CO_TRY(co_await vfs_resolve(abs.str(), false, phys));
+    if (s.kind != NodeKind::Link)
+        co_return Err(Error::Invalid);
+
+    Str sub;
+    const Mount *m = vfs_lookup(phys.str(), sub);
+    if (!m)
+        co_return Err(Error::NotFound);
+
+    Task<Result<String>> t = m->fs->readlink(sub);
     if (!t)
         co_return Err(Error::NoMemory);
     co_return co_await t;

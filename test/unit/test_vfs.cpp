@@ -56,6 +56,8 @@ struct TempFs final : Fs {
     {
         if (path == "/")
             co_return Stat{ NodeKind::Dir, 0 };
+        if (blocked(path))
+            co_return Err(Error::NotDir);
         const Node *n = find(path);
         if (!n)
             co_return Err(Error::NotFound);
@@ -190,6 +192,29 @@ struct TempFs final : Fs {
             open_[h] = 0;
     }
 
+    Task<Result<void>> symlink(Str target, Str path) override
+    {
+        if (find(path))
+            co_return Err(Error::Exists);
+        Node *n = make(path, NodeKind::Link);
+        if (!n || !n->data.assign(target))
+            co_return Err(Error::NoMemory);
+        co_return Result<void>{};
+    }
+
+    Task<Result<String>> readlink(Str path) override
+    {
+        const Node *n = find(path);
+        if (!n)
+            co_return Err(Error::NotFound);
+        if (n->kind != NodeKind::Link)
+            co_return Err(Error::Invalid);
+        String out;
+        if (!out.assign(n->data.str()))
+            co_return Err(Error::NoMemory);
+        co_return move(out);
+    }
+
 private:
     // Named by an id rather than an index, so erasing one does not move the
     // file another descriptor is holding.
@@ -210,6 +235,21 @@ private:
     }
 
     const Node *find(Str path) const { return const_cast<TempFs *>(this)->find(path); }
+
+    // A store walks a component at a time, so a non-directory where a directory
+    // had to be is Err(NotDir). This flat map has to say the same, or the VFS's
+    // link walk never runs.
+    bool blocked(Str path) const
+    {
+        for (usize i = 1; i < path.size(); i++) {
+            if (path[i] != '/')
+                continue;
+            const Node *n = find(path.substr(0, i));
+            if (n && n->kind != NodeKind::Dir)
+                return true;
+        }
+        return false;
+    }
 
     Node *make(Str path, NodeKind kind)
     {
@@ -467,6 +507,86 @@ void test_vfs()
         CHECK(home[0].name == "a");
         CHECK(home[1].name == "notes");
         CHECK(home[2].name == "z");
+    }
+
+    // ------------------------------------------------------ symbolic links
+    {
+        CHECK(run_now(vfs_mkdir("/home/d")).is_ok());
+        i32 lfd = run_now(vfs_open("/home/d/inner", O_WRITE | O_CREATE)).value();
+        CHECK(write(lfd, 0, "deep").value() == 4);
+        vfs_close(lfd);
+
+        // Its own kind; stat follows, lstat does not.
+        CHECK(run_now(vfs_symlink("/home/notes", "/home/link")).is_ok());
+        CHECK(run_now(vfs_stat("/home/link", false)).value().kind == NodeKind::Link);
+        CHECK(run_now(vfs_stat("/home/link")).value().kind == NodeKind::File);
+        CHECK(run_now(vfs_readlink("/home/link")).value().str() == "/home/notes");
+        CHECK(run_now(vfs_readlink("/home/notes")).error() == Error::Invalid);
+
+        // A listing never resolves one.
+        {
+            Vec<Entry> home = move(run_now(vfs_list("/home")).value());
+            for (const Entry &e : home)
+                if (e.name == "link")
+                    CHECK(e.kind == NodeKind::Link);
+        }
+
+        // Reading through a link reads the target.
+        lfd = run_now(vfs_open("/home/link", O_READ)).value();
+        CHECK(vfs_read(lfd, 0, buf, 6).value() == 6);
+        CHECK(Str(reinterpret_cast<const char *>(buf), 6) == "hello!");
+        vfs_close(lfd);
+
+        // Mid-path: the store answers NotDir and the walk takes over.
+        CHECK(run_now(vfs_symlink("/home/d", "/home/dl")).is_ok());
+        CHECK(run_now(vfs_stat("/home/dl/inner")).value().size == 4);
+        CHECK(run_now(vfs_list("/home/dl")).value().size() == 1);
+
+        // A relative target reads against the directory holding the link.
+        CHECK(run_now(vfs_symlink("notes", "/home/rel")).is_ok());
+        CHECK(run_now(vfs_stat("/home/rel")).value().kind == NodeKind::File);
+
+        // Two names for one file are one entry in the open-file table, keyed on
+        // the physical path — so a reader through one refuses a writer through
+        // the other.
+        i32 rd = run_now(vfs_open("/home/notes", O_READ)).value();
+        CHECK(run_now(vfs_open("/home/link", O_WRITE)).error() == Error::Perm);
+        vfs_close(rd);
+        i32 wr = run_now(vfs_open("/home/link", O_WRITE)).value();
+        vfs_close(wr);
+
+        // A link may cross a mount: every hop goes back through the table.
+        CHECK(run_now(vfs_symlink("/share", "/home/tomount")).is_ok());
+        CHECK(run_now(vfs_stat("/home/tomount")).value().kind == NodeKind::Dir);
+        CHECK(run_now(vfs_stat("/home/tomount", false)).value().kind == NodeKind::Link);
+        CHECK(run_now(vfs_list("/home/tomount")).is_ok());
+        // The mount it lands in decides a write, not the one named.
+        CHECK(run_now(vfs_mkdir("/home/tomount/x")).error() == Error::Perm);
+        CHECK(run_now(vfs_remove("/home/tomount", false)).is_ok());
+
+        // A dangling link stats as a link and resolves to nothing.
+        CHECK(run_now(vfs_symlink("/home/nothing", "/home/dangle")).is_ok());
+        CHECK(run_now(vfs_stat("/home/dangle", false)).value().kind == NodeKind::Link);
+        CHECK(run_now(vfs_stat("/home/dangle")).error() == Error::NotFound);
+
+        // Removing a link leaves what it pointed at.
+        CHECK(run_now(vfs_remove("/home/link", false)).is_ok());
+        CHECK(run_now(vfs_stat("/home/notes")).is_ok());
+
+        // A cycle is bounded.
+        CHECK(run_now(vfs_symlink("/home/y", "/home/x")).is_ok());
+        CHECK(run_now(vfs_symlink("/home/x", "/home/y")).is_ok());
+        CHECK(run_now(vfs_stat("/home/x")).error() == Error::Loop);
+
+        // Not silently replaced.
+        CHECK(run_now(vfs_symlink("/home/notes", "/home/rel")).error() == Error::Exists);
+
+        CHECK(run_now(vfs_remove("/home/x", false)).is_ok());
+        CHECK(run_now(vfs_remove("/home/y", false)).is_ok());
+        CHECK(run_now(vfs_remove("/home/dangle", false)).is_ok());
+        CHECK(run_now(vfs_remove("/home/rel", false)).is_ok());
+        CHECK(run_now(vfs_remove("/home/dl", false)).is_ok());
+        CHECK(run_now(vfs_remove("/home/d", true)).is_ok());
     }
 
     // Two descriptors still on one file at reset: ~Vfs drops each reference and

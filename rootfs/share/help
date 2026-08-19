@@ -21,6 +21,7 @@ grep     [-i] [-v] <text> [<file>...] — pass matching lines
 head     [-n <count>] [<file>...] — the first lines, ten by default
 hog      take memory until the cap refuses more
 less     [<file>] — page through a file, or the input; q quits
+ln       -s [-f] <target> <name> — make a symbolic link
 ls       [-1CRSdhlrt] [<path>...] — list directories, in columns on a terminal
 mkdir    <dir>... — create directories
 mount    list the mounted filesystems

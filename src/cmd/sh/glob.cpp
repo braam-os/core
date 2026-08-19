@@ -119,8 +119,22 @@ Task<Result<void>> glob_one(const Field &f, Vec<Field> &out)
                 }
                 w->ents = move(r.value());
                 for (const DirEntry &e : w->ents) {
-                    if (dirs && e.kind != SYS_KIND_DIR)
+                    // A listing never resolves a link, so a component to
+                    // descend into costs a stat when it is one.
+                    if (dirs && e.kind == SYS_KIND_LINK) {
+                        String full;
+                        if (!full.assign(p.str()) || !full.append(e.name.str()))
+                            co_return Err(Error::NoMemory);
+                        Result<FileInfo> s = Err(Error::NotFound);
+                        if (Task<Result<FileInfo>> t = stat_of(full.str()))
+                            s = co_await t;
+                        if (s.is_err() && s.error() == Error::Cancelled)
+                            co_return Err(Error::Cancelled);
+                        if (s.is_err() || s.value().kind != SYS_KIND_DIR)
+                            continue;
+                    } else if (dirs && e.kind != SYS_KIND_DIR) {
                         continue;
+                    }
                     // A leading dot has to be asked for.
                     if (e.name.size() && e.name[0] == '.' && comp[0] != '.')
                         continue;

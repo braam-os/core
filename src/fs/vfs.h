@@ -28,10 +28,20 @@ Str vfs_cwd();
 
 Task<Result<void>> vfs_chdir(Str path);
 
-// Resolves against the cwd and normalises (path.h).
+// Resolves against the cwd and normalises (path.h). Lexical: '..' pops a
+// component textually and never sees a symbolic link, which is `cd -L` and is
+// what keeps this synchronous.
 Result<void> vfs_abs(Str path, String &out);
 
-Task<Result<Stat>> vfs_stat(Str path);
+// The physical path of an already-absolute one, with its symbolic links
+// followed. `follow_final` follows a link named by the last component too; the
+// operations acting on the link itself pass false. `out` is filled whatever
+// happens, so a caller creating the leaf may use it after Err(NotFound). The
+// Stat returned is the leaf's.
+Task<Result<Stat>> vfs_resolve(Str abs, bool follow_final, String &out);
+
+// `follow` false reports a final symbolic link itself, which is lstat.
+Task<Result<Stat>> vfs_stat(Str path, bool follow = true);
 
 // Directory entries, sorted by name, with any mount point directly beneath the
 // listed directory folded in — that is what makes /home visible in `ls /`.
@@ -49,6 +59,13 @@ Task<Result<void>> vfs_remove(Str path, bool all);
 
 // Moves an existing file's mtime to now.
 Task<Result<void>> vfs_touch(Str path);
+
+// Creates `path` as a symbolic link to `target`. The target is stored as given,
+// so it may dangle; a relative one reads against the link's own directory.
+Task<Result<void>> vfs_symlink(Str target, Str path);
+
+// The target of a symbolic link, unresolved.
+Task<Result<String>> vfs_readlink(Str path);
 
 // On an open descriptor, and therefore synchronous (Concept.md §5.2).
 Result<usize> vfs_read(i32 fd, u64 off, u8 *buf, usize n);

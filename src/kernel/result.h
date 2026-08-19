@@ -19,6 +19,7 @@ enum class Error : u8 {
     Unsupported,
     Closed,   // the far end of a stream is gone: EOF to a reader, EPIPE to a writer
     NotEmpty, // a directory with children, removed without -r
+    Loop,     // a path with more than FS_LINK_MAX symbolic links in it
 };
 
 Str error_name(Error e);

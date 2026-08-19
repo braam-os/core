@@ -495,12 +495,18 @@ groups, and the parens must be separate words.
 | `-w f` | `f` is on a writable mount and can be opened for writing |
 | `-x f` | the kernel would instantiate `f`: it begins `\0asm`, or is a valid `#!` |
 | `-f f` / `-d f` | `f` is a regular file / a directory |
+| `-h f` / `-L f` | `f` is a symbolic link — two names for one primary |
 | `-s f` | `f` is not empty |
 | `-t [n]` | descriptor `n` is a console; with no operand, descriptor 1 |
 | `-n s` / `-z s` | `s` is not empty / is empty |
 | `s = s2`, `s != s2` | the strings compare |
 | `n -eq -ne -gt -ge -lt -le n2` | the numbers compare |
 | one bare word | it is not empty |
+
+**Every primary above follows a symbolic link except `-h`/`-L`**, which is
+what makes them the only two that answer for a link that dangles: `-f` on one
+is false because there is nothing at the end of it, and `-h` is true because the
+link is there.
 
 **`-a` and `-o` do not short-circuit** — both sides are always evaluated,
 because the file tests are answered in a pass of their own before the expression

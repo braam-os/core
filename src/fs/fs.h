@@ -18,6 +18,7 @@
 enum class NodeKind : u8 {
     File = 0,
     Dir  = 1,
+    Link = 2,
 };
 
 // `mtime` is milliseconds since the epoch, 0 when the filesystem keeps none.
@@ -49,6 +50,11 @@ enum : u32 {
 // class: a byte more costs a whole 64 KiB span (Concept.md §8.2).
 constexpr usize FS_BLOCK = 512;
 
+// The longest link target, and the most links a path may cross before the walk
+// gives up with Err(Error::Loop).
+constexpr usize FS_LINK_TARGET_MAX = 1024;
+constexpr u32 FS_LINK_MAX          = 8;
+
 struct Fs {
     virtual ~Fs() = default;
 
@@ -69,6 +75,21 @@ struct Fs {
 
     // Moves an existing file's mtime to now. A filesystem keeping none refuses.
     virtual Task<Result<void>> touch(Str path)
+    {
+        (void)path;
+        co_return Err(Error::Unsupported);
+    }
+
+    // Symbolic links, defaulted like touch(). `stat` and `list` report
+    // NodeKind::Link and never resolve one; vfs_resolve does that.
+    virtual Task<Result<void>> symlink(Str target, Str path)
+    {
+        (void)target;
+        (void)path;
+        co_return Err(Error::Unsupported);
+    }
+
+    virtual Task<Result<String>> readlink(Str path)
     {
         (void)path;
         co_return Err(Error::Unsupported);

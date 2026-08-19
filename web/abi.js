@@ -9,7 +9,7 @@
 export const E = {
     INVALID: 1, NOMEMORY: 2, NOTFOUND: 3, EXISTS: 4, NOTDIR: 5, ISDIR: 6,
     PERM: 7, IO: 8, CANCELLED: 9, AGAIN: 10, UNSUPPORTED: 11, CLOSED: 12,
-    NOTEMPTY: 13,
+    NOTEMPTY: 13, LOOP: 14,
 };
 
 // Field offsets in words, matching struct HostRequest.

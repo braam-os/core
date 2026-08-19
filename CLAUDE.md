@@ -10,8 +10,8 @@ and compiled to WebAssembly, deployable as a static site with no server and no
 special HTTP headers.
 
 It is a working system; the bar for any change is that nothing below regresses.
-`kernel.wasm` is ~149 KiB against a 256 KiB budget, the boot archive's staging
-tree ~710 KiB against 1 MiB, the wasm ABI is six imports and nine exports, and
+`kernel.wasm` is ~163 KiB against a 256 KiB budget, the boot archive's staging
+tree ~737 KiB against 1 MiB, the wasm ABI is six imports and nine exports, and
 the three CTest cases pass.
 
 ## Documents
@@ -413,6 +413,18 @@ adding one is a design change to argue in Concept.md first.
   `/proc` is the one read-write store. `rm /bin/sh` is therefore reachable; what
   stands behind it is that `no_shell` offers to unpack `rootfs.zip` again. **The
   archive, not the store, is what the system recovers from.**
+- **Symbolic links only, and no hard links.** A link is a store file whose whole
+  contents are `!<braamlink>` and the target, since OPFS has nowhere to put a
+  type (Concept.md §5.2); OPFS keeps no link count, so `ln` without `-s` refuses
+  rather than pretending. Resolution is `vfs_resolve`'s alone — a store reports
+  `NodeKind::Link` and never follows one — and it is *lazy*: the whole path goes
+  to the backend as before, and only a leaf that is a link, or the `Err(NotDir)`
+  a link in mid-path produces, costs a second round trip. **A listing never
+  resolves**, which is why `ls -R` and the globber need no cycle guard: they
+  descend on `SYS_KIND_DIR` alone. `..` stays **lexical** (`cd -L`), because
+  `path_resolve` must stay synchronous for `proc_path`. Bounded at
+  `FS_LINK_MAX` hops with `Error::Loop`. `tools/pack.py` does not carry a link
+  into `rootfs.zip`, and there is no `/bin/readlink`: `ls -l` prints a target.
 - **A directory has no modification time, and neither does `/proc`.** `Stat` and
   `Entry` carry an `mtime` in milliseconds, straight off the `File` that
   `getFile()` already yields, but OPFS puts no timestamp on a directory handle

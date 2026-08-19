@@ -127,9 +127,9 @@ u64 wide(const u8 *p)
 
 } // namespace
 
-Task<Result<FileInfo>> stat_of(Str path)
+Task<Result<FileInfo>> stat_of(Str path, bool follow)
 {
-    Result<SysReply> r = co_await sys_call(Sys::Stat, 0, path);
+    Result<SysReply> r = co_await sys_call(Sys::Stat, follow ? 0 : SYS_STAT_NOFOLLOW, path);
     if (r.is_err())
         co_return Err(r.error());
     if (r.value().data.size() < 20)
@@ -193,6 +193,35 @@ Task<Result<void>> touch_path(Str path)
     if (r.is_err())
         co_return Err(r.error());
     co_return {};
+}
+
+Task<Result<void>> make_link(Str target, Str path)
+{
+    // Two paths in one payload, length-prefixed as Sys::Fetch's are.
+    String payload;
+    u8 head[4];
+    sys_put_u32(head, u32(target.size()));
+    if (!payload.append(Str(reinterpret_cast<const char *>(head), 4)) ||
+        !payload.append(target) || !payload.append(path))
+        co_return Err(Error::NoMemory);
+
+    Result<SysReply> r = co_await sys_call(Sys::Symlink, 0, payload.str());
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return {};
+}
+
+Task<Result<String>> read_link(Str path)
+{
+    Result<SysReply> r = co_await sys_call(Sys::ReadLink, 0, path);
+    if (r.is_err())
+        co_return Err(r.error());
+
+    // Copied out: a Str into the waiter's buffer lasts only to its next syscall.
+    String out;
+    if (!out.assign(r.value().data))
+        co_return Err(Error::NoMemory);
+    co_return move(out);
 }
 
 // One operation for both, so the kernel answers "where am I now" whichever was

@@ -72,7 +72,8 @@ Task<bool> answer(const CondProbe &p)
                               : a.value().mtime < b.value().mtime;
     }
 
-    Task<Result<FileInfo>> t = stat_of(p.arg);
+    // -h asks about the link, everything else about what it points at.
+    Task<Result<FileInfo>> t = stat_of(p.arg, p.op != 'h');
     if (!t)
         co_return false;
     Result<FileInfo> r = co_await t;
@@ -84,6 +85,8 @@ Task<bool> answer(const CondProbe &p)
         co_return r.value().kind == SYS_KIND_DIR;
     case 'f':
         co_return r.value().kind == SYS_KIND_FILE;
+    case 'h':
+        co_return r.value().kind == SYS_KIND_LINK;
     case 's':
         co_return r.value().size > 0;
     default:

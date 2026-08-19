@@ -296,7 +296,7 @@ if (mode === "--kernel") {
         if (meta.length !== 1)
             fail(`${basename(binary)} carries ${meta.length} braam sections, expected 1`);
         const m = new Uint32Array(meta[0]);
-        if (m[0] !== 0x6d617262 || m[1] !== 12)
+        if (m[0] !== 0x6d617262 || m[1] !== 13)
             fail(`${basename(binary)}'s metadata is ${m[0].toString(16)}/${m[1]}`);
         if (m[4] !== 256)
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
@@ -487,7 +487,7 @@ if (mode === "--kernel") {
                         "echo", "edit",
                         "export", "false", "fexport", "fg", "fimport", "grep", "head", "help",
                         "jobs", "kill",
-                        "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd",
+                        "less", "ln", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd",
                         "readonly", "rm", "set", "shift", "sleep",
                         "tail", "timeout", "touch", "true", "uname", "unset", "vmstat",
                         "watch", "wc"])
@@ -2767,7 +2767,7 @@ if (mode === "--kernel") {
             fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
     };
 
-    gshows("echo /bin/l*", "/bin/less /bin/ls");
+    gshows("echo /bin/l*", "/bin/less /bin/ln /bin/ls");
     gshows("echo /home/g/*", "/home/g/aaa /home/g/bb /home/g/sub");
     gshows("echo /home/g/.*", "/home/g/.dot"); // a leading dot is asked for
     gshows("echo /home/g/?b", "/home/g/bb");
@@ -2785,6 +2785,91 @@ if (mode === "--kernel") {
     gshows("case hi in a) echo no;; esac", ""); // no arm ran
     gshows("case /home/g/bb in */bb) echo path;; esac", "path");
     submit("rm -r /home/g", (gt += 0.01));
+
+    // Symbolic links, end to end. The unit suite reaches the VFS; only a real
+    // shell reaches `ln`, `ls -l`, `test -h` and a glob.
+    {
+        let lt = gt + 1;
+        const at = () => (lt += 0.01);
+        const shows = (line, want) => {
+            submit("clear", at());
+            const got = output(submit(line, at())).join("|");
+            if (got !== want)
+                fail(`\`${line}\` printed ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+        };
+
+        submit("mkdir /home/s", at());
+        submit("mkdir /home/s/dir", at());
+        submit("echo hello > /home/s/file", at());
+        submit("echo deep > /home/s/dir/inner", at());
+
+        // Read through, and its own kind in a listing.
+        submit("ln -s /home/s/file /home/s/tofile", at());
+        shows("cat /home/s/tofile", "hello");
+        shows("ls /home/s", "dir/     file     tofile@");
+        shows("test -h /home/s/tofile && echo yes", "yes");
+        shows("test -f /home/s/tofile && echo yes", "yes"); // -f follows
+        shows("test -h /home/s/file || echo no", "no");
+        shows("test -L /home/s/tofile && echo yes", "yes"); // -L is -h's name
+
+        // -l inside a directory: the name is joined to it to read the target.
+        shows("ls -l /home/s", "total 2|dir   0            - dir/|" +
+            "file  6 Jun 19 20:14 file|link 12 Jun 19 20:14 tofile@ -> /home/s/file");
+
+        // An intermediate component: the store answers NotDir, the walk takes
+        // over.
+        submit("ln -s /home/s/dir /home/s/todir", at());
+        shows("cat /home/s/todir/inner", "deep");
+        shows("test -d /home/s/todir && echo yes", "yes");
+
+        // -R descends on directories alone, so dir is entered and todir is not.
+        shows("ls -R /home/s", "/home/s:|dir/     file     todir@   tofile@||/home/s/dir:|inner");
+
+        // A relative target reads against the directory holding the link.
+        submit("ln -s file /home/s/rel", at());
+        shows("cat /home/s/rel", "hello");
+
+        // A link may cross a mount: every hop goes back through the table.
+        submit("ln -s /proc/uptime /home/s/up", at());
+        shows("test -f /home/s/up && echo yes", "yes");
+        shows("test -s /home/s/up && echo yes", "yes"); // read through, non-empty
+        // ...and the mount it lands in refuses the write, not the one named.
+        shows("echo x > /home/s/up", "/home/s/up: permission denied");
+
+        // The target is printed as written rather than resolved.
+        shows("ls -l /home/s/rel", "link 4 Jun 19 20:14 /home/s/rel@ -> file");
+        shows("ls -l /home/s/todir", "link 11 Jun 19 20:14 /home/s/todir@ -> /home/s/dir");
+
+        // A dangling link is still a link.
+        submit("ln -s /home/s/nothing /home/s/dangle", at());
+        shows("test -h /home/s/dangle && echo yes", "yes");
+        shows("test -f /home/s/dangle || echo no", "no");
+
+        // A trailing-slash pattern means directories, and a link to one counts.
+        shows("echo /home/s/*/", "/home/s/dir/ /home/s/todir/");
+
+        // Removing a link leaves what it pointed at.
+        submit("rm /home/s/tofile", at());
+        shows("cat /home/s/file", "hello");
+
+        // No hard links, and `ln` says so rather than making a copy.
+        shows("ln /home/s/file /home/s/hard", "ln: only symbolic links; use -s");
+        shows("test -r /home/s/hard || echo none", "none"); // -r is existence
+
+        // An existing name needs -f, which removes without following.
+        shows("ln -s /home/s/dir /home/s/rel", "ln: /home/s/rel: already exists");
+        submit("ln -sf /home/s/dir /home/s/rel", at());
+        shows("ls -l /home/s/rel", "link 11 Jun 19 20:14 /home/s/rel@ -> /home/s/dir");
+        shows("cat /home/s/file", "hello"); // the old target is untouched
+
+        // A cycle is bounded rather than walked for ever.
+        submit("ln -s /home/s/b /home/s/a", at());
+        submit("ln -s /home/s/a /home/s/b", at());
+        shows("cat /home/s/a", "cat: /home/s/a: too many symbolic links");
+
+        submit("rm -r /home/s", at());
+    }
+
 
     // Command substitution: a pipe the shell drains itself. The unit suite has
     // the hook against a canned callback; what it cannot reach is a real
@@ -2821,7 +2906,7 @@ if (mode === "--kernel") {
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
     // The many-writes case: 7,707 bytes is sixteen chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "129 1299 7809");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "132 1329 7983");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

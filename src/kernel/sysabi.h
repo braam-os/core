@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 12;
+constexpr u32 PROC_ABI       = 13;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -116,7 +116,8 @@ enum class Sys : u32 {
     Read,       // arg = fd;                                   data = the chunk, empty at end
     Open,       // arg = SYS_O_* flags;  payload = the path;   status = the fd
     Close,      // arg = fd
-    Stat,       // payload = the path;   data = u32 kind, u64 size, u64 mtime
+    Stat,       // arg bit 0 = do not follow a final link;  payload = the path;
+                //                                       data = u32 kind, u64 size, u64 mtime
     List,       // payload = the path;   data = u32 count, then that many entries
     MkDir,      // payload = the path
     Remove,     // arg bit 0 = recursive; payload = the path
@@ -134,6 +135,12 @@ enum class Sys : u32 {
     // moves a descriptor rather than copying it. One handle behind both, so a
     // file's offset is shared and the two streams interleave.
     Dup, // arg = fd;  status = the new fd
+
+    // Symbolic links. Every operation above that names a path follows one;
+    // neither of these two does. The payload carries two paths, in Fetch's
+    // shape, since no other filesystem operation names two.
+    Symlink = 27, // payload = u32 target_len, the target, the link's own path
+    ReadLink,     // payload = the path;  data = the target, unresolved
 
     // Time. The timer queue is the kernel's, and Sys::Now is monotonic and
     // says nothing about a day, so both of these have to be asked for.
@@ -287,6 +294,13 @@ constexpr u32 SYS_STAGE_MAX = 1u << 20;
 // today speaks must not move because the filesystem's did.
 constexpr u32 SYS_KIND_FILE = 0;
 constexpr u32 SYS_KIND_DIR  = 1;
+constexpr u32 SYS_KIND_LINK = 2;
+
+// A listing names what is in the directory, so a link reports itself and never
+// what it points at; a tree walk descends on SYS_KIND_DIR alone.
+
+// Sys::Stat's argument: report the link itself rather than what it points at.
+constexpr u32 SYS_STAT_NOFOLLOW = 1;
 
 // The flags word Sys::Storage answers with (Concept.md §5.3).
 enum : u32 {

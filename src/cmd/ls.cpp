@@ -45,6 +45,10 @@ struct Lister {
     i64 now_secs = 0;
     i32 tz_min   = 0;
 
+    // The directory `ents` came from, for -l to name a link. Empty for the
+    // operand block, whose names are whole paths already.
+    String dir;
+
     Vec<DirEntry> ents; // the block being printed
     Vec<String> dirs;   // the directory operands, in the order given
     Vec<String> stack;  // -R: directories still to list, deepest last
@@ -66,16 +70,25 @@ usize disp_width(Str s)
     return n;
 }
 
+// The suffix a name carries: '/' for a directory, '@' for a symbolic link.
+char name_mark(const DirEntry &e)
+{
+    if (e.kind == SYS_KIND_DIR)
+        return '/';
+    return e.kind == SYS_KIND_LINK ? '@' : 0;
+}
+
 usize entry_width(const DirEntry &e)
 {
-    return disp_width(e.name.str()) + (e.kind == SYS_KIND_DIR ? 1 : 0);
+    return disp_width(e.name.str()) + (name_mark(e) ? 1 : 0);
 }
 
 bool put_name(String &out, const DirEntry &e)
 {
     if (!out.append(e.name.str()))
         return false;
-    return e.kind != SYS_KIND_DIR || out.push('/');
+    char mark = name_mark(e);
+    return !mark || out.push(mark);
 }
 
 bool pad(String &out, usize n)
@@ -246,13 +259,32 @@ Task<i32> emit_long(Lister &st, bool with_total)
         // A size and a stamp are ASCII, so put_right's byte padding is cell
         // padding here.
         Buf<64> t;
-        t.put(e.kind == SYS_KIND_DIR ? Str("dir  ") : Str("file "));
+        t.put(e.kind == SYS_KIND_DIR    ? Str("dir  ")
+              : e.kind == SYS_KIND_LINK ? Str("link ")
+                                        : Str("file "));
         t.put_right(num.str(), w).put(' ');
         put_stamp(t, st, e.mtime);
         t.put(' ');
 
         st.row.clear();
-        if (!st.row.append(t.str()) || !put_name(st.row, e) || !st.row.push('\n'))
+        if (!st.row.append(t.str()) || !put_name(st.row, e))
+            co_return 1;
+
+        // Read rather than resolved, so a dangling link still prints a target.
+        if (e.kind == SYS_KIND_LINK) {
+            String full;
+            if (st.dir.empty() ? !full.assign(e.name.str())
+                               : path_join(st.dir.str(), e.name.str(), full).is_err())
+                co_return 1;
+            if (Task<Result<String>> t2 = read_link(full.str())) {
+                Result<String> got = co_await t2;
+                if (got.is_err() && got.error() == Error::Cancelled)
+                    co_return 130;
+                if (got.is_ok() && (!st.row.append(" -> ") || !st.row.append(got.value().str())))
+                    co_return 1;
+            }
+        }
+        if (!st.row.push('\n'))
             co_return 1;
         if (Result<void> x = co_await write_all(SYS_STDOUT, st.row.str()); x.is_err())
             co_return write_bad(x.error());
@@ -309,9 +341,12 @@ Task<i32> list_one(Lister &st, Str path)
     }
 
     st.ents = move(r.value());
+    if (!st.dir.assign(path))
+        co_return 1;
     sort_block(st);
 
-    // Pushed in reverse of the order they will print, so they pop in it.
+    // Pushed in reverse of the order they will print, so they pop in it. A link
+    // is not SYS_KIND_DIR, so -R cannot walk through one.
     if (st.recurse)
         for (usize i = st.ents.size(); i > 0; i--) {
             const DirEntry &e = st.ents[i - 1];
@@ -342,8 +377,10 @@ Task<i32> run(Lister &st, Args paths)
     for (usize k = 0; k == 0 || k < count; k++) {
         Str p = count ? paths[k] : Str(".");
 
+        // -l reports an operand that is a link rather than its target; without
+        // it a link to a directory is followed and listed.
         Result<FileInfo> s = Err(Error::NoMemory);
-        if (Task<Result<FileInfo>> t = stat_of(p))
+        if (Task<Result<FileInfo>> t = stat_of(p, !st.detail))
             s = co_await t;
         if (s.is_err()) {
             if (s.error() == Error::Cancelled)
