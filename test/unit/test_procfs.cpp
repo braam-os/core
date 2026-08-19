@@ -64,11 +64,13 @@ void test_procfs()
     CHECK(slurp("/proc/host").str().contains("\nmachine  wasm32\nscreen   "));
     CHECK(slurp("/proc/jobs").empty()); // no background jobs in this case
 
-    // stat agrees with what a read produces, which is what `ls -l` shows.
-    Result<Stat> st = run_now(vfs_stat("/proc/meminfo"));
+    // stat agrees with what a read produces, which is what `ls -l` shows. Asked
+    // of a file whose text does not move: stat generates its own snapshot, so
+    // /proc/meminfo's counters can gain a digit between the two.
+    Result<Stat> st = run_now(vfs_stat("/proc/version"));
     CHECK(st.is_ok());
     CHECK_EQ(st.value().kind == NodeKind::File, true);
-    CHECK_EQ(st.value().size, slurp("/proc/meminfo").size());
+    CHECK_EQ(st.value().size, slurp("/proc/version").size());
     CHECK(run_now(vfs_stat("/proc")).value().kind == NodeKind::Dir);
 
     // Generated at open, so there is no moment to report: mtime 0 throughout,

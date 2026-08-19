@@ -7,6 +7,26 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## A `/proc` size is a snapshot, and the test asked the wrong file
+
+`test_procfs` checked that `vfs_stat` agrees with a read — what `ls -l`
+promises — and asked it of `/proc/meminfo`. A `/proc` file has no stored size:
+`ProcFs::stat` generates the text, measures it and throws it away, so the
+answer describes the moment of the `stat`, not the moment of the read.
+`/proc/meminfo` carries `allocs` and `frees`, which the intervening read moves
+— it allocates a `String` and grows it — so the two texts differ in length
+whenever a counter gains a digit between them. The check passed for as long as
+it did by luck, and failed on CI once the suite's own allocation total drifted
+onto a power of ten (71 bytes against 72).
+
+The check is worth keeping, so it moved to `/proc/version`, whose text is a
+build constant. Making `meminfo` stable was never an option: live counters are
+what the file is for, and the alternative — caching the generated text between
+`stat` and `open` — would buy a test a lie, since the two are separate calls
+with a tick between them and nothing says the numbers should not have moved.
+Linux answers 0 for every `/proc` size for the same reason; Braam answers the
+true length of one snapshot instead, which is more useful and no more binding.
+
 ## `PATH`
 
 "The environment crosses a spawn" below closed with the reason there was no
