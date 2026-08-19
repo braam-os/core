@@ -1,6 +1,6 @@
 # The shell, as a library its binary links (Concept.md §4). Every other program
 # in src/cmd/ is one translation unit; this one is a grammar, an expander, a line
-# editor, a job runtime and twenty-seven builtins, so it is a directory of its
+# editor, a job runtime and twenty-six builtins, so it is a directory of its
 # own beside them and main.cpp is its entry point.
 #
 # cond.cpp, expand.cpp, match.cpp, parse.cpp and tokenize.cpp are pure, and
@@ -18,7 +18,6 @@ add_library(braam_sh STATIC
     builtin/exit.cpp
     builtin/export.cpp
     builtin/fg.cpp
-    builtin/help.cpp
     builtin/jobs.cpp
     builtin/kill.cpp
     builtin/read.cpp

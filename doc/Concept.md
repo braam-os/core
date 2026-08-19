@@ -575,19 +575,22 @@ user's own `exit` and the end of the session. It is bounded at three deaths in
 quick succession; a shell *waiting* for a worker is not one, since it has not
 started. A replaced shell is a fresh one: kernel `/home`, empty job table.
 
-**A shell builtin is not kernel code**: the twenty-seven of them live inside
+**A shell builtin is not kernel code**: the twenty-six of them live inside
 `/bin/sh`, in `src/cmd/sh/builtin/`. Two clauses make one. The first is that it
 touches the shell *process's own* state — its working directory, which a typed
 command inherits at spawn; its job table, which no syscall shows anyone; its
 variables, its options, its traps, its loop. That is `cd`, `fg`, `jobs`, `kill`,
 `exit`, `set`, `shift`, `read`, `trap`, `wait`, `export`, `readonly`, `unset`,
-`break`, `continue`, `return`, `.`, `eval`, `exec`, `help` and `command`, whose
-answer *is* that state — the function table and the builtin table, which no
-syscall shows anyone either. The second is that **its whole cost is the spawn**:
-a program costs an instantiation and a worker, roughly a millisecond (§4.4), and
-`while [ … ]; do echo …; done` pays it twice a turn, so `test`, `[`, `:`,
-`echo`, `true` and `false` are builtins too — a few lines each, where the spawn
-*is* the runtime. The clause is closed and admits nothing else.
+`break`, `continue`, `return`, `.`, `eval`, `exec` and `command`, whose answer
+*is* that state — the function table and the builtin table, which no syscall
+shows anyone either. **`help` is not one of them**: what a command is for is a
+document rather than state, so it is `/share/help` and the `#!` script that
+pages it, and the table carries no usage string to go stale. The second is that
+**its whole cost is the spawn**: a program costs an instantiation and a worker,
+roughly a millisecond (§4.4), and `while [ … ]; do echo …; done` pays it twice a
+turn, so `test`, `[`, `:`, `echo`, `true` and `false` are builtins too — a few
+lines each, where the spawn *is* the runtime. The clause is closed and admits
+nothing else.
 
 **A builtin of the second kind keeps its file in `/bin`.** The shadowing is at a
 prompt, not everywhere: `/bin/test` is what a future `find -exec` would run, and

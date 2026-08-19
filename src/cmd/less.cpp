@@ -1,6 +1,7 @@
-// A pager. It reads its input to the end before it paints anything, which is
-// not the laziness a real `less` has: CancelState::waiting is a single slot, so
-// one task cannot be parked on a pipe and on the keyboard at the same time.
+// A pager on a terminal, a `cat` when stdout is not one. It reads its input to
+// the end before it paints anything, which is not the laziness a real `less`
+// has: CancelState::waiting is a single slot, so one task cannot be parked on a
+// pipe and on the keyboard at the same time.
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/traits.h"
@@ -45,6 +46,29 @@ Task<i32> proc_main(Args args)
     if (args.size() > 2) {
         co_await write_all(SYS_STDERR, "usage: less [file]\n");
         co_return 2;
+    }
+
+    // Before the keyboard claim: a stage that will not page must not take the
+    // keys from one that will.
+    Result<TtyInfo> tty = Err(Error::Unsupported);
+    if (Task<Result<TtyInfo>> t = tty_of(SYS_STDOUT))
+        tty = co_await t;
+    if (tty.is_err() && tty.error() == Error::Cancelled)
+        co_return 130;
+
+    if (tty.is_err() || !tty.value().console) {
+        // cat.cpp's loop: chunks, so a last line without a newline stays one.
+        Input files(args.tail(), SYS_STDIN, "less");
+        for (;;) {
+            Result<String> r = co_await files.read();
+            if (r.is_err()) {
+                if (r.error() == Error::Closed)
+                    co_return 0;
+                co_return r.error() == Error::Cancelled ? 130 : 1;
+            }
+            if ((co_await write_all(SYS_STDOUT, r.value().str())).is_err())
+                co_return 1;
+        }
     }
 
     Pager *p = heap_new<Pager>();

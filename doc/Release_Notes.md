@@ -7,6 +7,61 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## `help` is a document, and `less` is a `cat` off a terminal
+
+`help` was the twenty-seventh builtin: it printed the table with a usage string
+carried on every row, then walked `PATH` and decorated each name it found with a
+line looked up in `/share/help`. Around a hundred lines of C++ and a `Str` field
+per builtin, inside `sh.wasm` — nearly a third of the boot archive — to render a
+list that changes when a program is added and at no other time. **What a command
+is for is a document, not state**, and the shell had no business holding it: the
+first clause of §4.5's rule is about the shell *process's own* state, and a
+usage line is not that. So `/share/help` became the whole text, `/bin/help` is
+`#!/bin/sh` over `less /share/help`, and `Builtin` lost its `usage` field along
+with `builtins()`, which had no other caller. `sh.wasm` fell by 5,877 bytes and
+`less.wasm` rose by 1,691 for the copy path below; with the document 2,622
+bytes longer for the builtin lines it now carries, the staging tree came out
+1,444 bytes smaller at 797,935.
+
+**The document ships as one file, and that is the loss.** The old `help` listed
+what the directories on `PATH` actually held, so a program dropped anywhere
+appeared in it unasked. The new one lists what the archive ships. That is the
+right trade for the system as it stands — the only way a name gets onto `PATH`
+today is by hand — but it is `/bin/pkg`'s problem the moment packages install
+programs: an installer will have to append to `/share/help`, or the file will
+have to gain an "and whatever else is out there" section. Two smaller losses go
+with it: `help <arg>` pages rather than answering with a usage line and 2, and a
+name that is both a builtin and a file (`echo`, `test`, `[`, `true`, `false`)
+now appears in both sections, where the builtin's listing deduplicated it. The
+second is arguably better — the two entries say different things, one about what
+a prompt runs and one about what a spawn gets.
+
+**`less` had to learn the difference between a terminal and a pipe**, or
+`help | grep ls` would have hung with an invisible pager holding the keyboard.
+`Sys::Tty` already answers it and `ls` already asks, so the probe is `tty_of`
+copied from `ls.cpp`; off a console `less` runs cat.cpp's chunk loop instead and
+claims nothing. **It goes before the keyboard claim**, which is the whole of it:
+a stage that will not page must not take the keys from one that will. That fixed
+`less a | less b` too, which used to be a pager and a refusal and is now a copy
+and a pager. The refusal is still worth a test, and `edit … | less` is what
+reaches it now — `edit` claims the terminal whatever its output is, and asks
+second because it opens its file first.
+
+**The accuracy problem moved rather than vanished.** A generated listing could
+not go stale; a document can, and nothing at run time notices. So `test/run.mjs`
+checks the shipped `/share/help` against the builtin names in `table.cpp` and
+the `bin/` entries of the archive it already unpacks: each named once, and
+nothing named that is not there. The archive rather than the source tree,
+because what ships is what a reader gets. It is the same discipline as the
+exact-import assertion — a list that must not drift, asserted against the thing
+it describes.
+
+The worker pool's expected size moved from one to two with this, and that is a
+real change rather than a fudged number: `help | cat` is four processes at once
+— the shell, the script's interpreter, the pager it runs and `cat` — which is
+the widest moment the smoke test ever reaches, and the pool grows to the widest
+pipeline it has seen.
+
 ## A `/proc` size is a snapshot, and the test asked the wrong file
 
 `test_procfs` checked that `vfs_stat` agrees with a read — what `ls -l`

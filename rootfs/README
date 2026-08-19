@@ -27,8 +27,8 @@ disk on its own:
     fimport                pick files; they land in /import
     fexport notes          download notes out of the browser
 
-help lists every command. uname -a says what this is and what it is running
-on, and df shows how much room the browser gave it. ps lists what is running,
-and which of those are processes of their own.
+help pages every command, and q quits it. uname -a says what this is and what
+it is running on, and df shows how much room the browser gave it. ps lists
+what is running, and which of those are processes of their own.
 
 /proc is the system describing itself as plain text — try cat /proc/host.

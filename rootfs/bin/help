@@ -1,0 +1,3 @@
+#!/bin/sh
+# Off a terminal `less` copies instead of paging, so `help | grep ls` works.
+less /share/help

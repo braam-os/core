@@ -529,7 +529,7 @@ node test/run.mjs --kernel build/kernel.wasm build/web/rootfs.zip /path/to/hello
   what a process costs, §4.5 is the shell's language, §2 is the three invariants
   everything else follows from.
 - [Shell.md](Shell.md) — the shell as a user sees it, which is the long form of
-  §4 above: the grammar, the expansions, the twenty-seven builtins, the jobs and
+  §4 above: the grammar, the expansions, the twenty-six builtins, the jobs and
   what is deliberately absent.
 - `src/cmd/` in the source tree — thirty-six worked examples, from `true.cpp` at
   six lines to the shell.

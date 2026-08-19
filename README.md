@@ -89,7 +89,7 @@ could not be anything else: `cd`, `jobs`, `fg`, `kill`, `exit`, `set`, `read`,
 `trap` and the rest. Six more are built in only because their whole cost is the
 spawn: `test`, `[`, `:`, `echo`, `true` and `false`, which keep their file in
 `/bin` all the same. Either way they are still ordinary pipeline stages, so
-`help | grep ls` works.
+`jobs | grep sleep` works.
 
 **An embedding API.** `web/braam.js` puts a terminal on any web page with
 `mount({ canvas })`, and `web/embed.html` is a working example.

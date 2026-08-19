@@ -17,7 +17,6 @@ Task<i32> builtin_exit(Args args, ShIo io);
 Task<i32> builtin_export(Args args, ShIo io);
 Task<i32> builtin_false(Args args, ShIo io);
 Task<i32> builtin_fg(Args args, ShIo io);
-Task<i32> builtin_help(Args args, ShIo io);
 Task<i32> builtin_jobs(Args args, ShIo io);
 Task<i32> builtin_kill(Args args, ShIo io);
 Task<i32> builtin_read(Args args, ShIo io);

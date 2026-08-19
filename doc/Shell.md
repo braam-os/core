@@ -2,7 +2,7 @@
 
 `/bin/sh` is a Bourne shell, and the reference for every decision in it is v7's.
 It has variables, functions, the three loops, `case`, globbing, here-documents,
-command substitution, job control, twenty-seven builtins and a line editor — and
+command substitution, job control, twenty-six builtins and a line editor — and
 it is an ordinary wasm binary in `/bin`, running in a worker of its own, asking
 for everything it needs through the same system calls any program can call. This
 document is the whole of it.
@@ -467,7 +467,7 @@ first `n`.
 
 **The shell reads exactly five variables**: `IFS` (§6), `PS2` and `PS4` (§2),
 `HOME`, which `cd` with no operand uses and which falls back to the literal
-`/home`, and `PATH`, which `command -v` and `help` walk — though what *runs* a
+`/home`, and `PATH`, which `command -v` walks — though what *runs* a
 command word is the kernel reading the same variable out of the environment
 (§4). It plants none of its own. The environment init hands `/bin/sh` is
 `PATH=/bin`, `HOME=/home` and `SHELL=/bin/sh`, and everything in an incoming
@@ -555,7 +555,7 @@ test: ] missing
 
 ## 10. The builtins
 
-Twenty-seven, and the list is closed. A builtin is one of two things: something
+Twenty-six, and the list is closed. A builtin is one of two things: something
 that touches the shell **process's** own state and so could not be a file — its
 working directory, its job table, its variables, its options, its traps, its
 loop — or something whose **whole cost is the spawn**, which is `test`, `[`,
@@ -564,8 +564,8 @@ loop — or something whose **whole cost is the spawn**, which is `test`, `[`,
 others have no file and never will.
 
 A builtin is an ordinary pipeline stage and redirects like anything else, so
-`help | grep ls` works — but it runs **in its turn** rather than alongside, so
-it buffers its output and writes it once.
+`jobs | grep sleep` works — but it runs **in its turn** rather than alongside,
+so it buffers its output and writes it once.
 
 Unless said otherwise, a usage error prints `usage: …` on standard error and
 exits **2**.
@@ -668,13 +668,6 @@ Brings a background job to the foreground: echoes its command text, gives it the
 keyboard and the foreground, and waits. With no operand, the most recent job.
 The `%` is optional. An unknown job is `fg: no such job`, status 1; a `^C` while
 waiting is 130.
-
-### `help`
-
-Lists the builtins with the usage lines the table carries, then every program on
-`PATH` that a builtin does not shadow, with the usage line `/share/help` carries
-for it. One line per name, the first directory naming it winning, which is the
-order the kernel searches them in.
 
 ### `jobs`
 
@@ -868,8 +861,8 @@ run past a hole; at a prompt it abandons the line and asks again.
 
 Everything not in §10 is an ordinary program in `/bin`, in a worker of its own —
 `/bin` being where the archive puts them and what `PATH` names at boot. `help`
-prints this list at run time with the usage lines `/share/help` carries; each
-program also answers for itself.
+is a `#!` script that pages `/share/help`, which carries this list and the
+builtins with it; each program also answers for itself.
 
 | | |
 | --- | --- |
@@ -887,11 +880,14 @@ program also answers for itself.
 | `fimport` | copy files from the browser into `/import` |
 | `grep` | pass matching lines; a substring search, with no regular expressions |
 | `head` | the first lines, ten by default |
+| `help` | page `/share/help`, which is this list and the builtins |
 | `hog` | take memory until the cap refuses more |
-| `less` | page through a file, or the input; `q` quits |
+| `less` | page a file on a terminal, copy it off one; `q` quits |
+| `ln` | make a symbolic link |
 | `ls` | list directories, in columns on a terminal |
 | `mkdir` | create directories |
 | `mount` | list the mounted filesystems |
+| `mv` | move or rename files |
 | `pbcopy` / `pbpaste` | the system clipboard, in and out |
 | `ps` | list the tasks the kernel is running |
 | `pwd` | print the working directory |

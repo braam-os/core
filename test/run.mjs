@@ -302,6 +302,53 @@ if (mode === "--kernel") {
             fail(`${basename(binary)} asks for ${m[4]} pages, expected 256`);
     }
 
+    // /share/help is the whole of `help` now — /bin/help pages it — so nothing
+    // in the system notices when it goes stale. This does: every builtin the
+    // table carries and every binary the archive ships is named once, and the
+    // document names nothing else. The archive rather than the source tree,
+    // since what ships is what a reader gets.
+    if (rootfs) {
+        const doc = store.entries.find((e) => e.name === "share/help");
+        if (!doc)
+            fail("the archive carries no share/help");
+        const text = new TextDecoder().decode(doc.bytes);
+
+        // A section is a heading at the left margin; an entry inside one is two
+        // spaces and a name. A continuation line is indented past that.
+        const section = (heading) => {
+            const at = text.indexOf(`\n${heading}\n`);
+            if (at < 0)
+                fail(`/share/help has no ${JSON.stringify(heading)} section`);
+            const rest = text.slice(at + heading.length + 2);
+            const end = rest.search(/\n[^\s-]/);
+            return (end < 0 ? rest : rest.slice(0, end))
+                .split("\n")
+                .map((line) => /^ {2}(\S+)\s/.exec(line))
+                .filter(Boolean)
+                .map((m) => m[1]);
+        };
+
+        const table = readFileSync(new URL("../src/cmd/sh/builtin/table.cpp", import.meta.url),
+                                   "utf8");
+        const listed = {
+            "Shell builtins": [...table.matchAll(/^ {4}\{ "(.+?)", builtin_/gm)].map((m) => m[1]),
+            "Programs in /bin": store.entries.filter((e) => /^bin\/[^/]+$/.test(e.name))
+                                             .map((e) => e.name.slice(4)),
+        };
+        for (const [heading, want] of Object.entries(listed)) {
+            const got = section(heading);
+            if (want.length === 0)
+                fail(`nothing to check ${heading} against`);
+            for (const name of want)
+                if (got.filter((n) => n === name).length !== 1)
+                    fail(`/share/help names ${name} ${got.filter((n) => n === name).length} ` +
+                         `times under ${heading}, expected once`);
+            for (const name of got)
+                if (!want.includes(name))
+                    fail(`/share/help lists ${name} under ${heading}, which is not there`);
+        }
+    }
+
     instance.exports.init(0);
 
     if (logged.length !== 1)
@@ -478,20 +525,19 @@ if (mode === "--kernel") {
     if (pasted("a\r\nb\tc").join() !== [97, KEY.ENTER, 98, KEY.TAB, 99].join())
         fail(`pasted() gave [${pasted("a\r\nb\tc")}]`);
 
-    submit("clear", 1045); // the builtins and the programs need a tall grid
-    addr = instance.exports.resize(100, 64);
+    submit("clear", 1045); // the document needs a tall grid
+    addr = instance.exports.resize(100, 120);
     if (addr === 0)
         fail("the resize before help failed");
-    s = submit("help", 1050);
-    for (const name of ["break", "cat", "cd", "chat", "clear", "continue", "curl", "date", "df",
-                        "echo", "edit",
-                        "export", "false", "fexport", "fg", "fimport", "grep", "head", "help",
-                        "jobs", "kill",
-                        "less", "ln", "ls", "mkdir", "mount", "mv", "pbcopy", "pbpaste", "ps",
-                        "pwd",
-                        "readonly", "rm", "set", "shift", "sleep",
-                        "tail", "timeout", "touch", "true", "uname", "unset", "vmstat",
-                        "watch", "wc"])
+    // M3, first criterion. `help` is a #! script over `less`, and `less` off a
+    // terminal is a `cat`, so the document reaches a pipe unchanged. That it
+    // names every builtin and every binary is asserted against the archive
+    // above; what is asserted here is that the command runs at all.
+    s = submit("help | cat", 1050);
+    for (const heading of ["Shell builtins", "Programs in /bin"])
+        if (!rows(s).includes(heading))
+            fail(`help printed no ${heading} section: ${JSON.stringify(rows(s))}`);
+    for (const name of ["cd", "echo", "export", "trap", "cat", "help", "less", "ls", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
             fail(`help did not list ${name}: ${JSON.stringify(rows(s))}`);
 
@@ -818,11 +864,12 @@ if (mode === "--kernel") {
     if (!rows(s).includes(prompt(2)))
         fail(`command without -v: ${JSON.stringify(rows(s))}`);
 
-    // `help` lists what PATH names, not the /bin it used to be told about.
-    vrun("clear");
-    s = vrun("help | grep 'program on PATH'");
-    if (!rows(s).some((line) => line.startsWith("  hi ")))
-        fail(`help did not list a program PATH names: ${JSON.stringify(rows(s))}`);
+    // A #! script is a program to all three, `help` being the one the archive
+    // ships: `command -v` and `test -x` answer from the same probe the kernel
+    // resolves with, and none of them wants a mode bit the store has nowhere
+    // to keep.
+    vshows("command -v help", "/bin/help");
+    vshows("test -x /bin/help && echo runnable", "runnable");
 
     vrun("unset -f f");
     vrun("rm -r /home/pbin");
@@ -1807,18 +1854,34 @@ if (mode === "--kernel") {
     if (row(s, s.cursor_y) !== prompt())
         fail(`less did not give the screen back: ${JSON.stringify(rows(s))}`);
 
-    // Two claimants at once, which spawning made natural and a pipeline of two
-    // pagers reaches from the prompt. The terminal has one holder: whichever
-    // stage asks second is refused, rather than snapshotting the blanked grid
-    // the first is painting and handing that back as the shell's screen.
+    // Two pagers in a pipeline, and only one of them is one: the first stage's
+    // output is a pipe, so it copies and claims nothing, and the second pages
+    // what it was handed. Without that split the pair would deadlock on the
+    // keyboard rather than reading as `cat`.
     s = submit("clear", 3061);
     s = submit("less /README | less", 3062);
-    if (!rows(s).some((line) => line.includes("q quits")))
-        fail(`neither pager took the screen: ${JSON.stringify(rows(s))}`);
+    if (rows(s).some((line) => line === "less: no keyboard"))
+        fail(`the first stage claimed the keyboard: ${JSON.stringify(rows(s))}`);
+    if (row(s, 0) !== readme_top || !rows(s).some((line) => line.startsWith(" stdin ")))
+        fail(`the second stage did not page the first's output: ${JSON.stringify(rows(s))}`);
     press("q".codePointAt(0));
     run(3063);
     s = descriptor(addr);
-    if (!rows(s).some((line) => line === "less: no keyboard"))
+    if (!row(s, s.cursor_y).endsWith("$"))
+        fail(`the screen did not come back: ${JSON.stringify(rows(s))}`);
+
+    // Two claimants at once, which spawning made natural: `edit` takes the
+    // terminal whatever its output is, so a pager on the console beside it is
+    // a pair that both want the keys. One holder, and the second asker is
+    // refused — here the editor, which opens its file before it claims while
+    // the pager claims first thing. Its message is on the shell's grid, under
+    // the alternate screen until the pager gives that back.
+    s = submit("clear", 3064);
+    s = submit("edit /home/m7.txt | less", 3065);
+    press("q".codePointAt(0));
+    run(3066);
+    s = descriptor(addr);
+    if (!rows(s).some((line) => line === "edit: no keyboard"))
         fail(`the second claimant was not refused: ${JSON.stringify(rows(s))}`);
     if (!row(s, s.cursor_y).endsWith("$"))
         fail(`the screen did not come back: ${JSON.stringify(rows(s))}`);
@@ -1983,14 +2046,33 @@ if (mode === "--kernel") {
     if (!rows(s).includes(prompt(126)))
         fail(`a non-binary left ${row(s, s.cursor_y)}, expected ${prompt(126)}`);
 
-    // help lists what is runnable.
-    addr = instance.exports.resize(100, 64);
+    // The archive's own #! script, run as a program: /bin/help is `#!/bin/sh`
+    // over `less /share/help`, so this is an interpreter spawned by the kernel,
+    // a shell that is not a job of its own, and a screen claimed by its child.
+    // On a terminal it pages rather than printing, and q gives the screen back.
     s = submit("clear", 9040);
     s = submit("help", 9041);
-    for (const name of ["echo", "hog", "sleep", "spin", "tail", "wc"])
-        if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
-            fail(`help did not list ${name}`);
-    addr = instance.exports.resize(60, 16);
+    if (row(s, 0) !== "braam — the commands")
+        fail(`help did not page the document: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).some((line) => line.startsWith(" /share/help ")))
+        fail(`the pager named something else: ${JSON.stringify(rows(s))}`);
+    press("q".codePointAt(0));
+    run(9042);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== prompt())
+        fail(`help did not give the screen back: ${JSON.stringify(rows(s))}`);
+
+    // ^C reaches both of them: the shell armed the script's pid, and the pager
+    // it spawned is a child cancelled by its destructor rather than by a pid
+    // anyone named.
+    s = submit("help", 9043);
+    press("c".codePointAt(0), CTRL);
+    run(9044);
+    s = descriptor(addr);
+    if (row(s, s.cursor_y) !== prompt(130))
+        fail(`^C on a script left ${row(s, s.cursor_y)}, expected ${prompt(130)}`);
+    if (others() !== 0)
+        fail(`${others()} instances outlived ^C on a #! script`);
 
     // M9. Every program runs in a worker of its own, the shell included, so
     // everything above this line already did — those assertions are M4's to
@@ -2013,12 +2095,15 @@ if (mode === "--kernel") {
     if (net.terminated.length !== 0)
         fail("a process that exited had its worker terminated rather than pooled");
     // Every hire this run has made, less the workers that went with the
-    // processes it killed, less the one the shell is holding: 18, 16 and 1
+    // processes it killed, less the one the shell is holding: 24, 22 and 1
     // here. The pool grows only for a pipeline wider than what is idle and
     // shrinks only on a kill, so spin's own is in it — put back rather than
     // terminated, which is the assertion above. The shell's is not: it is a
     // process for as long as the system is up, so one worker is out of the pool
-    // from boot and each of the reboots above terminated the rest.
+    // from boot and each of the reboots above terminated the rest. The widest
+    // moment is `help | cat`, four processes at once — the shell, the #!
+    // script's interpreter, the pager it runs and cat — and the ^C on that
+    // script above took a pair of those workers away again.
     if (net.proc.pooled() !== 1)
         fail(`the pool holds ${net.proc.pooled()} workers, expected one`);
 
@@ -2242,27 +2327,7 @@ if (mode === "--kernel") {
         fail(`the shell did not survive ^C on a spawned pair: ${JSON.stringify(rows(s))}`);
 
     // The builtins are the shell's own state, so they are not files: `cd` is
-    // not in /bin and never resolves through it, and `help` prints them ahead
-    // of everything else, with the usage line the table carries.
-    addr = instance.exports.resize(100, 64);
-    s = submit("clear", 9090);
-    s = submit("help", 9091);
-    const helped = rows(s).filter((line) => line.startsWith("  "));
-    for (const [i, name] of [".", ":", "[", "break", "cd", "command", "continue", "echo", "eval",
-                             "exec", "exit", "export", "false", "fg", "help", "jobs", "kill",
-                             "read", "readonly", "return", "set", "shift", "test", "trap", "true",
-                             "unset", "wait"].entries())
-        if (!helped[i] || !helped[i].startsWith(`  ${name} `))
-            fail(`help listed ${JSON.stringify(helped[i])} at ${i}, expected ${name}`);
-    if (!helped.some((line) => line.startsWith("  wc ") && line.includes("count lines")))
-        fail(`help did not carry /share/help's usage for wc: ${JSON.stringify(helped)}`);
-    // Once per name: `echo` is a builtin *and* a file, and the builtin is what
-    // typing the name runs, so that is the line help prints.
-    for (const name of ["echo", "true", "false", "test"])
-        if (helped.filter((line) => line.startsWith(`  ${name} `)).length !== 1)
-            fail(`help listed ${name} more than once: ${JSON.stringify(helped)}`);
-    addr = instance.exports.resize(60, 16);
-
+    // not in /bin and never resolves through it.
     s = submit("clear", 9092);
     s = submit("ls /bin", 9093);
     if (words(s).includes("cd"))
@@ -3015,7 +3080,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 2,716-byte file: more than the eight writes a pipe
+    // Three copies of a 5,338-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -3044,9 +3109,9 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 8,148 bytes is sixteen chunks against eight
+    // The many-writes case: 16,014 bytes is thirty-one chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "135 1356 8148");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "309 2538 16014");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

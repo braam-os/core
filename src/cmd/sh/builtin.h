@@ -22,7 +22,6 @@
 #pragma once
 
 #include "kernel/args.h"
-#include "kernel/span.h"
 #include "kernel/task.h"
 #include "proc/io.h"
 
@@ -36,12 +35,10 @@ struct ShIo {
 
 struct Builtin {
     Str name;
-    Str usage; // one line, what `help` prints
     Task<i32> (*run)(Args, ShIo);
 };
 
 // Null when the name is not a builtin, which is when it is looked for in /bin.
+// The only way in: what a builtin is *for* is a line in /share/help, which
+// /bin/help pages, so the table carries no usage string to go stale.
 const Builtin *builtin_find(Str name);
-
-// Iteration for `help`, in name order.
-Span<const Builtin> builtins();

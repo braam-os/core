@@ -1,45 +1,103 @@
-# What `help` prints for each program in /bin: one `name  usage` line, the
-# name first and the rest of the line its one-line usage. A binary the file
-# does not mention still lists, without a usage — the listing comes from the
-# directory, and this only decorates it.
-#
-# It lives here rather than in the kernel because a program is a file now, and
-# the kernel has no usage string for one it has never run.
-cat      [<file>...] — copy files, or the input, to the output
-chat     <url> [<nick>] — talk over a WebSocket to whoever else is there
-clear    blank the screen
-curl     [-i] [-X <method>] [-H <header>] [-d <data>] <url> — fetch a URL
-date     [-u] — print the date and time
-df       [-h] — report filesystem space, and with -h in scaled units
-echo     [-n] [<word>...] — write the arguments
-edit     <file> — a full-screen editor; ^S saves, ^Q quits
-env      [-i] [<name>=<value>...] [<command> [<arg>...]] — print the environment, or change it
-false    fail
-fexport  <file> [<name>] — download a file out of the browser
-fimport  [<dir>] — copy files from the browser into /import
-grep     [-i] [-v] <text> [<file>...] — pass matching lines
-head     [-n <count>] [<file>...] — the first lines, ten by default
-hog      take memory until the cap refuses more
-less     [<file>] — page through a file, or the input; q quits
-ln       -s [-f] <target> <name> — make a symbolic link
-ls       [-1CRSdhlrt] [<path>...] — list directories, in columns on a terminal
-mkdir    <dir>... — create directories
-mount    list the mounted filesystems
-mv       [-fi] <src>... <dst> — move or rename files
-pbcopy   [<file>...] — put the input on the clipboard
-pbpaste  write the clipboard to the output
-ps       list the tasks the kernel is running, and which are processes
-pwd      print the working directory
-rm       [-r] <path>... — remove files, or directories with -r
-sh       [-eux] [-s | -c <command> | <file>] [<arg>...] — the shell
-sleep    [-m] <secs> — wait, in seconds, or milliseconds with -m
-spin     [<millions>] — loop without yielding, to be killed
-tail     [-n <count>] [<file>...] — the last lines, ten by default
-test     <expr> — evaluate a condition and report it as a status
-timeout  [-m] <secs> <command> [<arg>...] — run a command, killing it after a delay (124)
-touch    <file>... — create empty files, or move an existing one's mtime
-true     succeed
-uname    [-a|-s|-r|-m] — name the system, and with -a the host it runs on
-vmstat   [-s] [-m] [<secs> [<count>]] — report what the kernel is doing, as rates
-watch    [-m] [-n <secs>] <command> [<arg>...] — run a command over and over
-wc       [<file>...] — count lines, words and bytes
+braam — the commands
+====================
+
+A command word is a shell function first, then one of the builtins below, then
+a file that PATH names — /bin at boot. Only the last of the three costs a
+process: a program is a wasm binary in a worker of its own, with its own
+address space, its own memory cap and a kill switch behind ^C.
+
+A builtin lives inside /bin/sh, either because it touches the shell's own
+state — its working directory, its variables, its jobs — or because its whole
+cost would have been the spawn. echo, test, [, true and false are of the
+second kind, so each is a builtin *and* a file in /bin: the builtin is what a
+prompt runs, the file is what anything spawning the name by itself gets.
+
+This list is what the boot archive ships, and is a file: /share/help. A
+program installed somewhere else on PATH runs perfectly well and is not named
+here. Each program also answers for itself — a usage error prints `usage: …`
+and exits 2.
+
+Shell builtins
+--------------
+
+  .         <file> — run a file's commands in this shell
+  :         [<arg>...] — do nothing, successfully
+  [         <expr> ] — evaluate a condition, as `test` does
+  break     [<n>] — leave a loop, or n of them
+  cd        [<dir>] — change the working directory, /home by default
+  command   -v <name>... — say what a command word would run
+  continue  [<n>] — start a loop's next turn
+  echo      [-n] [<word>...] — write the arguments
+  eval      [<arg>...] — join the arguments and run them as a command
+  exec      [<command>] — keep its redirections, or run it and leave
+  exit      [<status>] — end the shell
+  export    [<name>[=<value>]...] — put a variable in each child's environment
+  false     fail
+  fg        [%n] — wait for a background job in the foreground
+  jobs      list the jobs started with &
+  kill      %n — cancel a job
+  read      <name>... — one line of input, split across the names
+  readonly  [<name>[=<value>]...] — refuse further assignment to a variable
+  return    [<status>] — leave a function or a sourced file
+  set       [-eux] [--] [<arg>...] — the options, the parameters, or a listing
+  shift     [<n>] — drop the first n positional parameters
+  test      <expr> — evaluate a condition and report it as a status
+  trap      [<action>|-] 0|2 — run an action when the shell ends, or on ^C
+  true      succeed
+  unset     [-f] <name>... — remove a variable, or a function with -f
+  wait      [%n...] — wait for a background job, or for all of them
+
+Programs in /bin
+----------------
+
+  cat       [<file>...] — copy files, or the input, to the output
+  chat      <url> [<nick>] — talk over a WebSocket to whoever else is there
+  clear     blank the screen
+  curl      [-i] [-X <method>] [-H <header>] [-d <data>] <url> — fetch a URL
+  date      [-u] — print the date and time
+  df        [-h] — report filesystem space, and with -h in scaled units
+  echo      [-n] [<word>...] — write the arguments
+  edit      <file> — a full-screen editor; ^S saves, ^Q quits
+  env       [-i] [<name>=<value>...] [<command> [<arg>...]]
+            — print the environment, or run a command with it changed
+  false     fail
+  fexport   <file> [<name>] — download a file out of the browser
+  fimport   [<dir>] — copy files from the browser into /import
+  grep      [-i] [-v] <text> [<file>...] — pass matching lines
+  head      [-n <count>] [<file>...] — the first lines, ten by default
+  help      page this list, which is /share/help
+  hog       take memory until the cap refuses more
+  less      [<file>] — page a file on a terminal, copy it off one; q quits
+  ln        -s [-f] <target> <name> — make a symbolic link
+  ls        [-1CRSdhlrt] [<path>...] — list directories, in columns on a
+            terminal
+  mkdir     <dir>... — create directories
+  mount     list the mounted filesystems
+  mv        [-fi] <src>... <dst> — move or rename files
+  pbcopy    [<file>...] — put the input on the clipboard
+  pbpaste   write the clipboard to the output
+  ps        list the tasks the kernel is running, and which are processes
+  pwd       print the working directory
+  rm        [-r] <path>... — remove files, or directories with -r
+  sh        [-eux] [-s | -c <command> | <file>] [<arg>...] — the shell
+  sleep     [-m] <secs> — wait, in seconds, or milliseconds with -m
+  spin      [<millions>] — loop without yielding, to be killed
+  tail      [-n <count>] [<file>...] — the last lines, ten by default
+  test      <expr> — evaluate a condition and report it as a status
+  timeout   [-m] <secs> <command> [<arg>...]
+            — run a command, killing it after a delay (124)
+  touch     <file>... — create empty files, or move an existing one's mtime
+  true      succeed
+  uname     [-a|-s|-r|-m] — name the system, and with -a the host it runs on
+  vmstat    [-s] [-m] [<secs> [<count>]] — what the kernel is doing, as rates
+  watch     [-m] [-n <secs>] <command> [<arg>...] — run a command repeatedly
+  wc        [<file>...] — count lines, words and bytes
+
+More
+----
+
+  /README           what this system is, in a page
+  /share/motd       what boot prints
+  /proc             the system describing itself as text — try cat /proc/host
+
+  help | grep ls    off a terminal `less` copies, so this list pipes
