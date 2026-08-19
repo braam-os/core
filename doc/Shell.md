@@ -731,7 +731,7 @@ trap -- 'echo bye' 0
 | 0 | success |
 | 1 | the command failed; also a failed expansion, or a redirection that would not open |
 | 2 | a usage error, or a syntax error in a line, in `eval`, or in a sourced file |
-| 126 | the file is there and will not run: not executable, or built for another process ABI |
+| 126 | the file is there and will not run: not executable, built for another process ABI, or too many processes |
 | 127 | not found — a command, a sourced file, or a script named to `sh` |
 | 130 | interrupted |
 

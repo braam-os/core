@@ -831,10 +831,11 @@ word with no `=` is the caller's business, exactly as an argv word is.
 **Statuses are clamped to 0–255 when recorded.** `Sys::Exit` takes whatever the program passed
 it, and a negative status on this wire is an error code.
 
-**The bounds are `SYS_CHILD_MAX` (8 live children) and `SYS_PROC_DEPTH` (8 levels).** Past
+**The bounds are `SYS_CHILD_MAX` (16 live children) and `SYS_PROC_DEPTH` (16 levels).** Past
 either, `Spawn` is `Err(NoMemory)` — deliberately not `Err(Again)`, which `proc_syscall` retries
 for ever. Every child is an instance with a 16 MB cap, so without them the first fork bomb takes
-the page with it.
+the page with it. A shell reports that error as `too many processes` and 126, which is as close
+as it can get: one `Error` value carries both bounds and a genuine allocation failure.
 
 ### Constants
 
@@ -860,7 +861,7 @@ the page with it.
 | `SYS_WAIT_ANY` | 0 | `Wait`'s "whichever finishes first"; zero is never a pid |
 | `SYS_PID_MAX` | 0xffffff | the largest pid `Wait` and `Kill` can name — the op word's arg is 24 bits |
 | `SYS_CHILD_MAX` | 16 | live children per process |
-| `SYS_PROC_DEPTH` | 8 | how deep a chain of spawns may go |
+| `SYS_PROC_DEPTH` | 16 | how deep a chain of spawns may go |
 
 `SYS_PID_MAX` is not decoration: `Spawn` refuses to hand back a pid above it, because a truncated
 pid would name somebody else's process rather than nothing.

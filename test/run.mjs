@@ -3043,6 +3043,7 @@ if (mode === "--kernel") {
     plant("/home/s9/nest.sh", "#!/home/s9/hi.sh\necho never\n");
     plant("/home/s9/gone.sh", "#!/bin/nosuch\necho never\n");
     plant("/home/s9/plain.sh", "echo never\n");
+    plant("/home/s9/deep.sh", "sh /home/s9/deep.sh\n");
     plant("/home/s9/x7.sh", "#!/bin/sh\necho out\nexit 7\n");
     plant("/home/s9/self.sh", "#!/bin/sh\nps\n");
     plant("/bin/greet", "#!/bin/sh\necho greetings\n");
@@ -3092,6 +3093,9 @@ if (mode === "--kernel") {
     sshows("./gone.sh; echo $?", "braam: ./gone.sh: not executable|126");
     sshows("./nest.sh; echo $?", "braam: ./nest.sh: not executable|126"); // one level only
     sshows("./nosuch.sh; echo $?", "braam: ./nosuch.sh: not found|127");
+    // A chain of spawns stops at SYS_PROC_DEPTH; every level above the deepest
+    // one returns its status, so the error is printed once.
+    sshows("sh /home/s9/deep.sh; echo $?", "braam: sh: too many processes|126");
 
     // /proc names the job by the word the caller typed, not by the interpreter
     // the kernel went on to instantiate, so ps, jobs and kill %n still point at

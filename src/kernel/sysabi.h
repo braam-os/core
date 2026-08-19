@@ -265,11 +265,12 @@ constexpr u32 SYS_PID_MAX = 0xffffff;
 
 // How many children a process may have at once, and how deep a chain of them
 // may go. Every one is an instance with a memory cap of its own, so without a
-// bound the first fork bomb takes the page with it. Sixteen rather than eight
-// because a shell is a process now: a pipeline is up to eight stages, and a
-// background job it has not reaped yet still holds an entry.
+// bound the first fork bomb takes the page with it. Sixteen either way because
+// a shell is a process now: a pipeline is up to eight stages and a background
+// job it has not reaped yet still holds an entry, and a nested `sh` spends a
+// level of depth per prompt.
 constexpr usize SYS_CHILD_MAX = 16;
-constexpr u32 SYS_PROC_DEPTH  = 8;
+constexpr u32 SYS_PROC_DEPTH  = 16;
 
 // The most a blit may carry, which is the largest grid there can be. Sys::Stage
 // is capped at the same number: a process asks the host for room before it

@@ -7,6 +7,45 @@ of the two needs amending.
 
 ---
 
+## Sixteen deep, and saying so
+
+`SYS_PROC_DEPTH` is 16, from 8, and a spawn refused by either bound now prints
+`braam: <name>: too many processes` rather than `not executable`.
+
+**Eight was reached by hand.** Typing `sh` at the prompt costs a level, so the eighth one was
+refused: init's shell is depth 0 and the check is on the child's depth, which makes the bound
+"processes in a chain, counting the first" — seven nested shells and then a refusal, on a system
+where a nested shell is the ordinary way to try something in another directory. The bound exists
+for the fork bomb, and a fork bomb does not care whether it is stopped at 8 or at 16: the
+depth cap is the second of two, and `SYS_CHILD_MAX` still holds the width at 16, so the product
+is what bounds the tree either way. Doubling the one that a person walks into and leaving the one
+that a bomb walks into is the whole change.
+
+**What sixteen costs.** Nothing at rest — depth is a `u32` on `Proc`, not a table — and at worst
+sixteen live instances in a chain, each a worker of its own and each about 900 KiB committed of
+its 16 MB cap. The host makes workers on demand (`MAX_IDLE` is the pool's size, not a ceiling on
+live ones), so a deep chain hires rather than waiting; there is no new way to deadlock. A chain
+that deep is a person nesting shells or a script recursing, and the recursion is exactly what the
+bound is for.
+
+**The message named the wrong problem.** Both bounds answer `Err(NoMemory)`, and the shell
+spelled out only `NotFound` and `Unsupported`, so a depth refusal fell through to `not
+executable` — which points at the binary, sends the reader to `test -x` and to rebuilding, and is
+false: `/bin/sh` is a program and had just run seven times. A new `Error` value would say it
+exactly and is still far too expensive for a diagnostic string, for the reason the `#!` notes
+below give: `Error` crosses the wire as a negated `i32` in every reply, so it means a `PROC_ABI`
+bump and `web/` changes. So the shell reads the value that already arrives. The cost is that a
+genuine allocation failure inside `Sys::Spawn` now says `too many processes` too — the wrong half
+of one error rather than the wrong error, and the status stays 126, which is still what "found
+and would not run" means.
+
+The test is a script that runs itself: `deep.sh` recurses until the kernel refuses, and every
+level above the deepest returns its status, so the error is printed once and 126 comes back to
+the prompt. It is also a fork bomb with the bound taken out, which is the point of running it.
+
+System_Calls.md said `SYS_CHILD_MAX` was 8 in prose and 16 in the table beneath; the prose was
+stale and is now the table's number.
+
 ## `#!` after all
 
 A text file beginning `#!/` or `#! /` is now a program. `./script.sh` runs, a bare `script` in

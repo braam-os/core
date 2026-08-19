@@ -935,6 +935,9 @@ Task<i32> exec_pipeline(Ctx &cx, const Tree &tree, u32 node)
                 why = "not found";
             else if (pid.error() == Error::Unsupported)
                 why = "built for another process ABI";
+            else if (pid.error() == Error::NoMemory)
+                // SYS_CHILD_MAX, SYS_PROC_DEPTH, or no memory: one error each.
+                why = "too many processes";
             co_await say2(SYS_STDERR, r->args(i)[0], why);
             bad = pid.error() == Error::NotFound ? 127 : 126;
             break;
