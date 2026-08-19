@@ -128,7 +128,7 @@ Task<void> unpack_if_stale(const u32 &pid)
 // carry. Exists is the ordinary answer on every boot but the first.
 Task<void> make_dirs()
 {
-    // Where `import` puts what the file picker hands over (Concept.md §5.4):
+    // Where `fimport` puts what the file picker hands over (Concept.md §5.4):
     // /import, at the root.
     // A directory like any other: the files arrive as bytes, and nothing about
     // them is a filesystem.

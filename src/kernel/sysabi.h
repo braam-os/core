@@ -154,7 +154,7 @@ enum class Sys : u32 {
     ClipWrite,  // payload = the text
     Pick,       // status = the set's fd;  data = u32 count, then a name each
     PickOpen,   // arg = the set's fd; payload = u32 index; status = the file's fd
-    Save,       // payload = u32 name_len, the name, the bytes
+    Fexport,    // payload = u32 name_len, the name, the bytes
 
     // The terminal. Cells, never a byte stream (§2.3), so a full-screen
     // program paints a grid of its own and blits the part of it that changed.

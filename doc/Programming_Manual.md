@@ -118,11 +118,11 @@ through the ordinary filesystem against the calling process's working directory,
 and accepts anything carrying a well-formed stamp — so a `.wasm` that arrives at
 runtime is a command.
 
-**Through the file picker.** At the prompt, `import`, and choose `hello.wasm`.
+**Through the file picker.** At the prompt, `fimport`, and choose `hello.wasm`.
 It lands in `/import/`:
 
 ```
-$ import
+$ fimport
 /import/hello.wasm
 $ /import/hello.wasm Serge
 Hello, Serge!
@@ -284,7 +284,7 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with
 | Terminal | `tty_of(fd)`, `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
 | System | `storage_of()`, `sleep_for(ms)`, `clock_now()`, `proc_pid()`, `proc_now()` |
 | Environment | `proc_env(name)`, `proc_env_count()`, `proc_env_at(i)` — from `proc/rt.h`, and not syscalls |
-| Host services | `fetch_url(url, spec)`, `ws_connect(url)`, `clip_get`, `clip_put`, `pick`, `pick_open`, `save` |
+| Host services | `fetch_url(url, spec)`, `ws_connect(url)`, `clip_get`, `clip_put`, `pick`, `pick_open`, `fexport` |
 | Helpers | `errln(who, what, why)`, `Input`, `LineReader`, `next_line`, `next_field` |
 
 Everything that is a stream of bytes comes back as a descriptor, so there is

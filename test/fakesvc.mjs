@@ -28,7 +28,7 @@ export class FakeNet {
         this.clipDenied = false; // as a browser that will not read it outside a gesture
         this.pasted = null;      // {r, token} for a pbpaste waiting on the user
         this.picked = [{ name: "notes.txt", bytes: utf8.encode("picked\n") }];
-        this.saved = [];    // {name, bytes}
+        this.exported = [];      // {name, bytes}
         this.sockets = [];
         this.now = 1782000000000;  // a fixed epoch, so `date` prints the same twice
         // Short and fixed: it lands on the boot grid, which the tests read back,
@@ -39,7 +39,7 @@ export class FakeNet {
 
     reset() {
         this.sockets.length = 0;
-        this.saved.length = 0;
+        this.exported.length = 0;
         this.clipDenied = false;
         this.pasted = null;
     }
@@ -228,8 +228,8 @@ export function makeFakeSvc(mem, net, kernel) {
             return;
         }
 
-        case OP.SAVE:
-            net.saved.push({ name: r.arg(), bytes: r.bytes() });
+        case OP.FEXPORT:
+            net.exported.push({ name: r.arg(), bytes: r.bytes() });
             r.ok();
             return;
 

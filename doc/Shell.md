@@ -842,10 +842,11 @@ each program also answers for itself.
 | `edit` | a full-screen editor; `^S` saves, `^Q` quits |
 | `env` | print the environment, or run a command with it changed |
 | `false` | fail — also a builtin |
+| `fexport` | download a file out of the browser |
+| `fimport` | copy files from the browser into `/import` |
 | `grep` | pass matching lines; a substring search, with no regular expressions |
 | `head` | the first lines, ten by default |
 | `hog` | take memory until the cap refuses more |
-| `import` | copy files from the browser into `/import` |
 | `less` | page through a file, or the input; `q` quits |
 | `ls` | list directories, in columns on a terminal |
 | `mkdir` | create directories |
@@ -854,7 +855,6 @@ each program also answers for itself.
 | `ps` | list the tasks the kernel is running |
 | `pwd` | print the working directory |
 | `rm` | remove files, or directories with `-r` |
-| `save` | download a file out of the browser |
 | `sh` | the shell |
 | `sleep` | wait |
 | `spin` | loop without yielding, to be killed |

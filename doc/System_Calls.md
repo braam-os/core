@@ -736,7 +736,7 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 53 | `ClipWrite` | — | the text | 0 | — |
 | 54 | `Pick` | — | — | the set's fd | `u32 count`, then `u32 len` and a name each |
 | 55 | `PickOpen` | the set's fd | `u32 index` | the file's fd | — |
-| 56 | `Save` | — | `u32 name_len`, the name, the bytes | 0 | — |
+| 56 | `Fexport` | — | `u32 name_len`, the name, the bytes | 0 | — |
 | 64 | `KeyClaim` | bit 0 = take, else release | — | 0 | `u32 cols`, `u32 rows` |
 | 65 | `KeyRead` | — | — | 0 | `u32 code`, `u32 mods`, `u32 cols`, `u32 rows` |
 | 66 | `ScreenEnter` | bit 0 = enter, else leave | — | 0 | `u32 cols`, `u32 rows` |

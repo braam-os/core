@@ -20,4 +20,4 @@ Task<Result<String>> pick_name(const Picked &p, usize index);
 Task<Result<String>> pick_read(const Picked &p, usize index, u64 off);
 
 // Hands the bytes to the browser as a download.
-Task<Result<void>> save_file(Str name, Str bytes);
+Task<Result<void>> fexport_file(Str name, Str bytes);

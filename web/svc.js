@@ -23,7 +23,7 @@ export const OP = {
     PICK: 10,
     PICK_NAME: 11,
     PICK_READ: 12,
-    SAVE: 13,
+    FEXPORT: 13,
     CLIP_WAIT: 14,
     HOST_INFO: 15,
     PROC_SPAWN: 16,
@@ -400,8 +400,8 @@ export function makeSvcImport(mem, deposit, relay, reply, proc) {
             return;
         }
 
-        case OP.SAVE:
-            await relay({ svc: "save", name: r.arg(), bytes: r.bytes() });
+        case OP.FEXPORT:
+            await relay({ svc: "fexport", name: r.arg(), bytes: r.bytes() });
             r.ok();
             return;
 

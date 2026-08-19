@@ -8,7 +8,7 @@ Task<i32> proc_main(Args args)
 {
     Str dest = args.size() > 1 ? args[1] : Str("/import");
     if (args.size() > 2) {
-        co_await write_all(SYS_STDERR, "usage: import [<dir>]\n");
+        co_await write_all(SYS_STDERR, "usage: fimport [<dir>]\n");
         co_return 2;
     }
 
@@ -18,7 +18,7 @@ Task<i32> proc_main(Args args)
     if (got.is_err()) {
         if (got.error() == Error::Cancelled)
             co_return 130;
-        if (Task<void> e = errln("import", Str(), got.error()))
+        if (Task<void> e = errln("fimport", Str(), got.error()))
             co_await e;
         co_return 1;
     }
@@ -43,7 +43,7 @@ Task<i32> proc_main(Args args)
             if (out.error() == Error::Cancelled)
                 co_return 130;
             status = 1;
-            if (Task<void> e = errln("import", path.str(), out.error()))
+            if (Task<void> e = errln("fimport", path.str(), out.error()))
                 co_await e;
             if (Task<void> k = close_fd(u32(in.value())))
                 co_await k;

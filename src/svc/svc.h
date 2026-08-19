@@ -21,7 +21,7 @@ enum class SvcOp : u32 {
     Pick,      // -> ref = the chosen files, result = how many
     PickName,  // ref, flags = index -> buf
     PickRead,  // ref, flags = index, result = offset -> buf, as much as fits
-    Save,      // arg = the file name, buf = the bytes
+    Fexport,   // arg = the file name, buf = the bytes
     ClipWait,  // -> buf, once the user pastes
     HostInfo,  // -> buf = what the browser says about itself, `name value` lines,
                //   a blank line splitting what the banner shows from the rest

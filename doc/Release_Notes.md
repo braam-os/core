@@ -7,6 +7,66 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## `import` and `save` became `fimport` and `fexport`
+
+The pair was asymmetric because one half of it was never chosen: the shell
+builtin owns `export`, so the program that is §5.4's Blob download took the name
+that was left ("`/bin/export` became `save`" below). A user who found `import`
+had nothing to guess from.
+
+**The `f` is `fopen`'s.** The prefix marks the variant whose plain name is
+occupied — `fopen`/`open`, `fstat`/`stat` — and that is exactly the situation
+here. It buys guessability in both directions: either half now implies the
+other, which neither `import`/`save` nor a one-sided rename would give. The
+cost, stated plainly: `fimport` has no occupied sibling to be distinguished
+*from*, so its prefix is there for the symmetry rather than for a collision of
+its own.
+
+`upload`/`download` was the other candidate and was rejected on register.
+Upload and download name a *network* boundary, and this system has one of those
+with a program already on it — `curl`. What these two cross is an application
+boundary, which is import/export's register. There is also nothing to upload
+*to*: the browser calls the picker an upload only because a form posts
+somewhere, and here it does not.
+
+**`/import` did not follow.** The directory keeps its name, so `fimport` writes
+somewhere not named after it — the one thing given up. Boot creates `/import`
+on every run and "/mnt/import became /import" below records that such a rename
+migrates nothing; a second orphan directory would leave every existing store's
+files stranded in the old one. Weighed against a lost correspondence in a name,
+the files win.
+
+**The service was renamed to the bottom, enum spellings included.** `Sys::Save`
+is now `Sys::Fexport` (operation 56 — the *number* did not move, so nothing on
+the wire changed), `SvcOp::Save` is `SvcOp::Fexport`, `save_file` is
+`fexport_file`, the SDK's `save()` is `fexport()`, and the page verb `svc:
+"save"` is `svc: "fexport"`. The alternative was renaming the program alone and
+leaving a `save` stack under it, which reads as an unfinished rename to whoever
+finds it next.
+
+The argument against going this deep, recorded because the decision went the
+other way: the `f` prefix exists to dodge a *shell builtin*, and there are no
+builtins below the shell, so these layers now carry a marker that means nothing
+where they live — an ABI operation named after a workaround from above it. What
+carried the day is that a half-renamed stack costs every future reader a
+question, while a uniformly-named one costs only this paragraph.
+
+**It is a shipped SDK break.** `save()` is declared in the installed
+`include/braam/proc/io.h`, so an out-of-tree program calling it stops compiling
+and must say `fexport()`. There is no deprecation shim: the SDK has no
+compatibility surface yet and starting one for a two-command system would
+outlive its usefulness.
+
+Nothing needed a new test. The M6 criterion already drives both programs
+end to end, and it now drives them under their new names; the per-binary ABI
+assertions read a glob rather than a list, so they followed the rename without
+being touched. One thing the rename *did* surface: `build/web/` is assembled by
+`copy_directory`, which never deletes, so the first build after it carried 41
+binaries — the two old ones included. `make clean` is the answer and the
+CMake section of CLAUDE.md already says so.
+
+---
+
 ## `export notes.txt` is refused rather than obeyed
 
 It surfaced out of a naming question — whether `/bin/import` and `/bin/save`

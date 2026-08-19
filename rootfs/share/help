@@ -15,10 +15,11 @@ echo     [-n] [<word>...] — write the arguments
 edit     <file> — a full-screen editor; ^S saves, ^Q quits
 env      [-i] [<name>=<value>...] [<command> [<arg>...]] — print the environment, or change it
 false    fail
+fexport  <file> [<name>] — download a file out of the browser
+fimport  [<dir>] — copy files from the browser into /import
 grep     [-i] [-v] <text> [<file>...] — pass matching lines
 head     [-n <count>] [<file>...] — the first lines, ten by default
 hog      take memory until the cap refuses more
-import   [<dir>] — copy files from the browser into /import
 less     [<file>] — page through a file, or the input; q quits
 ls       [-1CRSdhlr] [<path>...] — list directories, in columns on a terminal
 mkdir    <dir>... — create directories
@@ -28,7 +29,6 @@ pbpaste  write the clipboard to the output
 ps       list the tasks the kernel is running, and which are processes
 pwd      print the working directory
 rm       [-r] <path>... — remove files, or directories with -r
-save     <file> [<name>] — download a file out of the browser
 sh       [-eux] [-s | -c <command> | <file>] [<arg>...] — the shell
 sleep    [-m] <secs> — wait, in seconds, or milliseconds with -m
 spin     [<millions>] — loop without yielding, to be killed

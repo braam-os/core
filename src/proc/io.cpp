@@ -450,7 +450,7 @@ Task<Result<StorageInfo>> storage_of()
 namespace {
 
 // A payload of `u32 length, the first string, the second` — what Fetch and
-// Save both take, since neither can be told where one ends otherwise.
+// Fexport both take, since neither can be told where one ends otherwise.
 bool pack_pair(String &out, Str first, Str second)
 {
     u8 head[4];
@@ -550,13 +550,13 @@ Task<Result<i32>> pick_open(const Chosen &c, usize index)
     co_return r.value().status;
 }
 
-Task<Result<void>> save(Str name, Str bytes)
+Task<Result<void>> fexport(Str name, Str bytes)
 {
     String req;
     if (!pack_pair(req, name, bytes))
         co_return Err(Error::NoMemory);
 
-    Result<SysReply> r = co_await sys_call(Sys::Save, 0, req.str());
+    Result<SysReply> r = co_await sys_call(Sys::Fexport, 0, req.str());
     if (r.is_err())
         co_return Err(r.error());
     co_return {};

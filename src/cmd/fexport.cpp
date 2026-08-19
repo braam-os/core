@@ -6,11 +6,11 @@
 Task<i32> proc_main(Args args)
 {
     if (args.size() < 2 || args.size() > 3) {
-        co_await write_all(SYS_STDERR, "usage: save <file> [<name>]\n");
+        co_await write_all(SYS_STDERR, "usage: fexport <file> [<name>]\n");
         co_return 2;
     }
 
-    Input files(Args{ args.v.subspan(1, 1) }, SYS_STDIN, "save");
+    Input files(Args{ args.v.subspan(1, 1) }, SYS_STDIN, "fexport");
 
     String data;
     for (;;) {
@@ -26,12 +26,12 @@ Task<i32> proc_main(Args args)
 
     Str name          = args.size() == 3 ? args[2] : path_basename(args[1]);
     Result<void> done = Err(Error::NoMemory);
-    if (Task<Result<void>> t = save(name, data.str()))
+    if (Task<Result<void>> t = fexport(name, data.str()))
         done = co_await t;
     if (done.is_err()) {
         if (done.error() == Error::Cancelled)
             co_return 130;
-        if (Task<void> e = errln("save", name, done.error()))
+        if (Task<void> e = errln("fexport", name, done.error()))
             co_await e;
         co_return 1;
     }

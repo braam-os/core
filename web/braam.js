@@ -487,7 +487,7 @@ export function mount(options = {}) {
         });
     }
 
-    function save(name, bytes) {
+    function fexport(name, bytes) {
         const url = URL.createObjectURL(new Blob([bytes]));
         const a = document.createElement("a");
         a.href = url;
@@ -548,8 +548,8 @@ export function mount(options = {}) {
             return null;
         case "pick":
             return await pick();
-        case "save":
-            save(data.name, data.bytes);
+        case "fexport":
+            fexport(data.name, data.bytes);
             return null;
         }
         throw new Error(`unknown service ${data.svc}`);

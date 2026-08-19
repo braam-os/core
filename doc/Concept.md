@@ -957,7 +957,7 @@ unbuilt:
 the one store: `/bin`, `/share`, `/home`, `/tmp` and `/import` are directories
 in it, not filesystems of their own. There is no `/usr`, and no `/mnt` either: a
 directory named for mounting would promise a second filesystem there is no way
-to have. `import` writes the picker's bytes into `/import` like anything else —
+to have. `fimport` writes the picker's bytes into `/import` like anything else —
 bytes are not a filesystem.
 
 `/bin`, `/share` and `/README` are put there at boot by unpacking `rootfs.zip`,
@@ -1132,10 +1132,10 @@ the namespace question §5.1 leaves open.
 
 The universally available escape hatch is the boring one, and it is built:
 `<input type="file">` for import and a Blob download for export, as `/import`
-and the `import`/`save` commands. Both live on the **page** rather than in the
+and the `fimport`/`fexport` commands. Both live on the **page** rather than in
 worker, because a file picker and a download need the DOM. The picker opens
 inside the transient activation of the keystroke that ran the command, which is
-why `import` works without a button of its own.
+why `fimport` works without a button of its own.
 
 ---
 
@@ -1151,7 +1151,7 @@ an enum value on each side.
   it and nothing is duplicated.
 - **WebSocket** — likewise a descriptor, written like a file.
 - **The clipboard** — read and write.
-- **File transfer** — the picker, opening one of its files, and a save.
+- **File transfer** — the picker, opening one of its files, and an export.
 - **The wall clock** — milliseconds since the epoch and the browser's offset
   from UTC. `Sys::Now` is monotonic and cannot name a day, so `date` needs this.
 - **The host's description of itself** — browser, OS, architecture, cores,
@@ -1268,7 +1268,7 @@ record the kernel keeps alive past a cancelled await, never a frame buffer.
 With cross-site tracking prevention on, an origin that sees no user interaction
 for seven days of browser use has all script-created data deleted. Mitigations:
 request persistence, encourage Add to Home Screen (installed web apps are exempt
-from the ITP timer), and make `save` easy.
+from the ITP timer), and make `fexport` easy.
 
 ---
 

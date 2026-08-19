@@ -924,7 +924,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             break;
         }
 
-        case Sys::Save: {
+        case Sys::Fexport: {
             if (payload.size() < 4) {
                 status = -i32(Error::Invalid);
                 break;
@@ -935,7 +935,7 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 break;
             }
             Result<void> r = Err(Error::NoMemory);
-            CO_CALL(r, save_file(payload.substr(4, name_len), payload.substr(4 + name_len)));
+            CO_CALL(r, fexport_file(payload.substr(4, name_len), payload.substr(4 + name_len)));
             status = 0;
             if (r.is_err())
                 status = -i32(r.error());

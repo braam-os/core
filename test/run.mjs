@@ -485,9 +485,10 @@ if (mode === "--kernel") {
     s = submit("help", 1050);
     for (const name of ["break", "cat", "cd", "chat", "clear", "continue", "curl", "date", "df",
                         "echo", "edit",
-                        "export", "false", "fg", "grep", "head", "help", "import", "jobs", "kill",
+                        "export", "false", "fexport", "fg", "fimport", "grep", "head", "help",
+                        "jobs", "kill",
                         "less", "ls", "mkdir", "mount", "pbcopy", "pbpaste", "ps", "pwd",
-                        "readonly", "rm", "save", "set", "shift", "sleep",
+                        "readonly", "rm", "set", "shift", "sleep",
                         "tail", "timeout", "touch", "true", "uname", "unset", "vmstat",
                         "watch", "wc"])
         if (!rows(s).some((line) => line.startsWith(`  ${name} `)))
@@ -1593,23 +1594,23 @@ if (mode === "--kernel") {
         fail(`^D on chat left ${JSON.stringify(rows(s))}, expected a bare prompt`);
 
     // M6, third criterion: /import takes what the picker hands over, and
-    // save sends a file back out through the browser.
+    // fexport sends a file back out through the browser.
     net.reset();
     s = submit("clear", 3040);
-    s = submit("import", 3041);
+    s = submit("fimport", 3041);
     if (!rows(s).includes("/import/notes.txt"))
-        fail(`import named nothing: ${JSON.stringify(rows(s))}`);
+        fail(`fimport named nothing: ${JSON.stringify(rows(s))}`);
 
     s = submit("clear", 3042);
     s = submit("cat /import/notes.txt", 3043);
     if (!rows(s).includes("picked"))
         fail(`the imported file did not read back: ${JSON.stringify(rows(s))}`);
 
-    submit("save /import/notes.txt", 3044);
-    if (net.saved.length !== 1 || net.saved[0].name !== "notes.txt")
-        fail(`save saved ${JSON.stringify(net.saved.map((f) => f.name))}`);
-    if (new TextDecoder().decode(net.saved[0].bytes) !== "picked\n")
-        fail(`save saved the wrong bytes: ${JSON.stringify(net.saved[0].bytes)}`);
+    submit("fexport /import/notes.txt", 3044);
+    if (net.exported.length !== 1 || net.exported[0].name !== "notes.txt")
+        fail(`fexport sent ${JSON.stringify(net.exported.map((f) => f.name))}`);
+    if (new TextDecoder().decode(net.exported[0].bytes) !== "picked\n")
+        fail(`fexport sent the wrong bytes: ${JSON.stringify(net.exported[0].bytes)}`);
 
     // The clipboard, and the wall clock the kernel's monotonic one cannot give.
     submit("echo copied | pbcopy", 3050);

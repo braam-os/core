@@ -43,9 +43,9 @@ Task<Result<String>> pick_read(const Picked &p, usize index, u64 off)
     co_return co_await t;
 }
 
-Task<Result<void>> save_file(Str name, Str bytes)
+Task<Result<void>> fexport_file(Str name, Str bytes)
 {
-    SvcCall c(SvcOp::Save, name, 0);
+    SvcCall c(SvcOp::Fexport, name, 0);
     if (!c.ok() || !c.put(bytes))
         co_return Err(Error::NoMemory);
     CO_TRY_VOID(co_await c);

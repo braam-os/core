@@ -250,7 +250,7 @@ Task<Result<Chosen>> pick();
 Task<Result<i32>> pick_open(const Chosen &c, usize index);
 
 // Hands the bytes to the browser as a download.
-Task<Result<void>> save(Str name, Str bytes);
+Task<Result<void>> fexport(Str name, Str bytes);
 
 // A diagnostic on stderr: "who: what: why".
 Task<void> errln(Str who, Str what, Error why);
