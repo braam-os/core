@@ -826,7 +826,7 @@ if (mode === "--kernel") {
 
     // PATH. Init plants one and the kernel searches it, so the /bin that used
     // to be a constant in exec_resolve is a value that a spawn carries.
-    vshows("echo $PATH", "/bin");
+    vshows("echo $PATH", "/bin:/pkg/bin");
     vrun("mkdir /home/pbin");
     vrun("ln -s /bin/echo /home/pbin/hi");
     if (!rows(vrun("hi one")).some((line) => line.startsWith("hi: not found")))
@@ -888,7 +888,71 @@ if (mode === "--kernel") {
 
     vrun("unset -f f");
     vrun("rm -r /home/pbin");
-    vrun("PATH=/bin");
+    vrun("PATH=/bin:/pkg/bin");
+
+    // Activation. /pkg/bin is the second component of the default search list
+    // and a symlink to the live generation, so an installed program is reached
+    // the way every other program is. The tree here is what pkg's gen_ops
+    // emits: absolute targets, /pkg/bin -> /pkg/active/bin -> /pkg/gen/N/bin.
+    if (rootfs) {
+        const echo = store.entries.find((e) => e.name === "bin/echo");
+        if (!echo)
+            fail("the archive carries no bin/echo");
+
+        // Nothing installed: the component finds nothing, which is 127 and not
+        // a failure of its own.
+        s = vrun("hi one");
+        if (!rows(s).some((line) => line.startsWith("hi: not found")))
+            fail(`a missing /pkg was not an ordinary miss: ${JSON.stringify(rows(s))}`);
+        if (!rows(s).includes(prompt(127)))
+            fail(`a missing /pkg did not report 127: ${JSON.stringify(rows(s))}`);
+
+        vrun("mkdir -p /pkg/store/hello-1.0-r0/bin");
+        vrun("mkdir -p /pkg/gen/1/bin");
+        store.files.set("/pkg/store/hello-1.0-r0/bin/hi", echo.bytes);
+        vrun("ln -s /pkg/store/hello-1.0-r0/bin/hi /pkg/gen/1/bin/hi");
+        vrun("ln -s /pkg/gen/1 /pkg/active");
+        vrun("ln -s /pkg/active/bin /pkg/bin");
+
+        // Reached by name through three links, with no PATH set by hand — and
+        // by a program that spawns and a nested shell, since the search is the
+        // kernel's.
+        vshows("hi one", "one");
+        vshows("timeout -m 5000 hi two", "two");
+        vshows("sh -c 'hi three'", "three");
+        vshows("command -v hi", "/pkg/bin/hi");
+
+        // The kernel's default is what reaches it, not the shell's variable.
+        vrun("unset PATH");
+        vshows("hi four", "four");
+        vrun("PATH=/bin:/pkg/bin");
+
+        // /bin still wins for a name in both. wc rather than echo, which is a
+        // builtin and would shadow the pair of them.
+        vrun("ln -s /pkg/store/hello-1.0-r0/bin/hi /pkg/gen/1/bin/wc");
+        vshows("command -v wc", "/bin/wc");
+        vshows("echo one two | wc", "1 2 8"); // the real one; the copy would echo
+
+        // PATH is a default and not a floor: a spawn that names one searches
+        // that alone, installed programs included.
+        s = vrun("PATH=/home hi five");
+        if (!rows(s).includes(prompt(127)))
+            fail(`a PATH of its own still found /pkg/bin: ${JSON.stringify(rows(s))}`);
+
+        // A farm entry pointing at nothing, a dangling /pkg/active, and no
+        // /pkg at all: one miss each, and no new failure path in the kernel.
+        vrun("ln -s /pkg/store/gone-0/bin/x /pkg/gen/1/bin/ghost");
+        if (!rows(vrun("ghost")).includes(prompt(127)))
+            fail("a farm entry pointing at nothing was not 127");
+
+        vrun("rm -r /pkg/gen/1");
+        if (!rows(vrun("hi one")).includes(prompt(127)))
+            fail("a dangling /pkg/active was not 127");
+
+        vrun("rm -r /pkg");
+        if (!rows(vrun("hi one")).includes(prompt(127)))
+            fail("a /pkg that is gone again was not 127");
+    }
 
     // A command name and a redirection target out of a variable: the argv
     // words split and the target does not.
@@ -1634,6 +1698,10 @@ if (mode === "--kernel") {
     if (rootfs) {
         store.files.set("/version", new TextEncoder().encode("0.0.1-stale"));
         store.files.set("/bin/keepme", new Uint8Array(1));
+        // What pkg installed is under /pkg, which the archive does not carry,
+        // so a release replaces the system and leaves it standing.
+        store.dirs.add("/pkg");
+        store.files.set("/pkg/keepme", new Uint8Array(1));
         store.reopen();
         instantiate();
         instance.exports.init(0);
@@ -1670,6 +1738,8 @@ if (mode === "--kernel") {
             fail("the unpack left a binary the archive does not carry");
         if (!store.files.has("/home/notes"))
             fail("the unpack reached outside the directories the archive names");
+        if (!store.files.has("/pkg/keepme"))
+            fail("a version change took /pkg with it");
         s = descriptor(addr);
         if (row(s, s.cursor_y) !== prompt())
             fail(`accepting left ${row(s, s.cursor_y)}, expected a prompt`);

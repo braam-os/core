@@ -369,7 +369,11 @@ Task<bool> boot_filesystem(const u32 &pid)
 // terminfo entry that could describe it.
 bool base_env(String &out)
 {
-    constexpr Str WORDS[] = { "PATH=/bin", "HOME=/home", "SHELL=/bin/sh" };
+    constexpr Str PATH_WORD = "PATH=/bin:/pkg/bin";
+    static_assert(PATH_WORD.substr(5) == SYS_PATH_DEFAULT,
+                  "init's PATH and the kernel's default must name the same list");
+
+    constexpr Str WORDS[] = { PATH_WORD, "HOME=/home", "SHELL=/bin/sh" };
     constexpr usize N     = sizeof(WORDS) / sizeof(WORDS[0]);
 
     usize n = argv_size(WORDS, N);

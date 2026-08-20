@@ -1046,7 +1046,9 @@ the `PATH` in it, so `PATH=/x prog` steers the very spawn its prefix names and a
 spawn that carries nothing searches what the parent was given. Components are
 `:`-separated, an empty one is skipped, and a relative one resolves against the
 caller's working directory. No `PATH` at all means `SYS_PATH_DEFAULT`, which is
-`/bin`; a `PATH` that is there and empty names no directories and finds nothing.
+`/bin:/pkg/bin` — `/bin` first, so nothing installed shadows the system, and
+`/pkg/bin` a symbolic link the kernel knows nothing else about. A `PATH` that is
+there and empty names no directories and finds nothing.
 A candidate that is not a program is skipped rather than shadowing one further
 along, and a search that found only those is `Err(Invalid)` — 126 — rather than
 `Err(NotFound)`.
@@ -1078,7 +1080,7 @@ failure.
 | `SYS_SPAWN_HEAD` | 3 | the descriptor words before `Spawn`'s argv blob, in `u32`s |
 | `SYS_SPAWN_ENV` | 1 | `Spawn`'s arg bit: an env blob follows argv, else the child inherits the caller's |
 | `SYS_ENV_MAX` | 8192 | the most an environment may be, and therefore what a chain of children carries |
-| `SYS_PATH_DEFAULT` | `/bin` | where a bare command name is looked for when the environment names no `PATH` |
+| `SYS_PATH_DEFAULT` | `/bin:/pkg/bin` | where a bare command name is looked for when the environment names no `PATH` |
 | `SYS_ECHO_HEAD` | 4 | `Echo`'s anchor, cursor offset and run count, in `u32`s |
 | `SYS_ECHO_RUN` | 2 | the style and length of one `Echo` run, in `u32`s |
 | `SYS_ECHO_RUNS_MAX` | 8 | runs per `Echo`; a prompt is four |

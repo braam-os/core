@@ -609,19 +609,20 @@ steers every spawn there is and not only a typed command: `timeout ls`,
 A shell that resolved the word itself would leave the other three looking
 somewhere else, and a `PATH` that did not steer resolution would be a lie a
 script could believe. A word with a `/` in it is a path and is never searched;
-an environment naming no `PATH` searches `/bin`, which is where the archive puts
-the binaries and what the constant used to be.
+an environment naming no `PATH` searches `SYS_PATH_DEFAULT`, which is
+`/bin:/pkg/bin`.
 
 **There is no fourth clause, and installed software does not get one.** A
 package manager reaches its programs the way anything else does: by putting a
 directory on `PATH`. The design is in
 [Package_Management.md](Package_Management.md) — a generation of installed
 packages is materialised as a directory of symbolic links into `/pkg/store/`,
-`/pkg/bin` names the live one, and the default search list becomes
-`/bin:/pkg/bin` with `/bin` first, so nothing installed can shadow the system.
-**Unbuilt**: `/bin/pkg` is a skeleton that knows its own subcommand names and
-nothing else, and the constant is still `/bin`. What is settled is that the
-kernel gains nothing when it does. The alternative was a
+`/pkg/bin` names the live one, and the default search list is `/bin:/pkg/bin`
+with `/bin` first, so nothing installed can shadow the system. That list is
+**built**, and it is the whole of the kernel's part: `exec_resolve` gained no
+clause, and a missing `/pkg`, a dangling `/pkg/active` and a link into nothing
+are each an ordinary component that finds nothing. What remains unbuilt is what
+fills the tree — `/bin/pkg` cannot yet install anything. The alternative was a
 clause in `exec_resolve` after the `PATH` search, reading `/pkg`'s own record of
 which generation is active and which command it names — two file formats the
 kernel would have to learn, two reads on every failed lookup, and four ways of
@@ -1029,7 +1030,9 @@ it — deliberately, since the unpack replaces what the archive does carry (§5.
 and would take an installed program with it. Its layout is
 [Package_Management.md](Package_Management.md)'s and the kernel knows none of
 it: what reaches an installed program is `/pkg/bin` on the default `PATH` (§4),
-which is a symbolic link and not a mount. **Unbuilt**, with `/bin/pkg`.
+which is a symbolic link and not a mount. Boot does not create it — a system
+that installs nothing never grows one. **Unbuilt**: what writes the tree is
+`/bin/pkg`.
 
 `/bin`, `/share` and `/README` are put there at boot by unpacking `rootfs.zip`,
 a deflated zip beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js`

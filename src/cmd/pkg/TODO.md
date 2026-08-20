@@ -15,16 +15,18 @@ are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 **A finished task is deleted from this file, and the numbers do not move** —
 Release_Notes.md and the tasks below cite them. Phases A and B are gone that
 way: the decisions are in Concept.md, Package_Management.md and
-Package_Format.md, and the two host operations are in System_Calls.md. P5 to P11
-went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
+Package_Format.md, and the two host operations are in System_Calls.md. Phase C
+went with them, P5 to P12: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
 `version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp` and `db.cpp` are the digest,
 the two encodings, apk's version grammar, the dependency token, the stanza
 grammar with its records, the zip's directory and `/pkg`'s layout, compiled into
 `tests.wasm` as well. `unzip.cpp` inflates an entry and `store.cpp` performs the
-steps `db.cpp` computes; those two are the pieces that stay out. So this starts
-at P12.
+steps `db.cpp` computes; those two are the pieces that stay out. `/pkg/bin` is
+the second word of `SYS_PATH_DEFAULT`, so an installed program is already
+reachable — what is missing is anything that installs one. So this starts at
+P13.
 
 ## The shape being built
 
@@ -85,7 +87,7 @@ and **no clause is added to any of the three**. An installed program is reached
 the way every other program is: `/pkg/bin` is on the default search list after
 `/bin`, so `/bin` still wins and nothing installed can shadow the system. The
 kernel learns none of `/pkg`'s file formats, and the whole of activation is a
-symlink and one word of `SYS_PATH_DEFAULT` — see P12.
+symlink and one word of `SYS_PATH_DEFAULT`, which is built.
 
 The alternative, which was the plan before symbolic links, `Sys::Rename` and
 `PATH` landed, was a fourth clause in `exec_resolve` reading `/pkg/active` and
@@ -102,36 +104,6 @@ SHA-256 is **not** among them and never will be: it is compiled into `pkg`. A
 whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
-
----
-
-## Phase C — pkg's own primitives, no network
-
-### P12. Activation, by symlink
-
-`exec_resolve` is not touched. The whole of the kernel half is one word:
-`SYS_PATH_DEFAULT` (`src/kernel/sysabi.h`) becomes `/bin:/pkg/bin`, and init
-plants the same thing (`src/user/boot.cpp`). `/bin` first, so nothing installed
-shadows the system; `/pkg/bin` is a symlink to `active/bin` and `active` a
-symlink to the live generation, so a `pkg install` changes what a command word
-finds without anything being told.
-
-It degrades quietly for free, and that is the point of doing it this way. A
-missing `/pkg`, a dangling `/pkg/active`, a farm entry pointing at nothing and a
-name no generation lists are all a `PATH` component that finds nothing — already
-`Err(NotFound)` and 127, already tested, and no new failure path in the kernel
-to get wrong. A component that is not a directory is skipped for the same
-reason (`exec.cpp` continues on `NotFound`, `NotDir` and `IsDir`).
-
-The one thing to check is that `PATH` is a **default** and not a floor: a
-process spawned with `PATH=/x` searches `/x` alone, installed programs included,
-which is what a `PATH` that steers resolution has to mean.
-
-Done when: `test/run.mjs` runs a binary reached through a hand-built
-`/pkg/store`, `/pkg/gen/1/bin` link farm and `/pkg/active` symlink; `/bin` still
-wins for a name in both; and a missing `/pkg`, a dangling `/pkg/active` and a
-farm entry pointing at nothing each give 127. Also that `/pkg` survives a
-version change, which is `web/fs.js`'s unpack naming only `bin` and `share`.
 
 ---
 

@@ -25,6 +25,61 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Activation is one constant
+
+P12 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the end of Phase C.
+`SYS_PATH_DEFAULT` is `/bin:/pkg/bin`, init plants the same list, and a
+`static_assert` holds the two together. That is the whole of it: `exec_resolve`
+is untouched, no clause was added to command resolution, and the kernel still
+knows none of `/pkg`'s file formats.
+
+Concept.md §4 argued this before there was anything to activate, so what is new
+here is that it is done — and the rest of this entry is what the argument turned
+out to be worth once it was.
+
+**The four ways it can be broken all cost nothing.** A missing `/pkg`, a
+dangling `/pkg/active`, a farm entry pointing into a store directory that is not
+there, and a name no generation lists are each a `PATH` component that finds
+nothing. `exec.cpp` already continued on `NotFound`, `NotDir` and `IsDir`,
+already answered `Err(NotFound)` and 127, and already had a test saying so. The
+smoke test now walks all four and gets one 127 each. **Not one of them is a new
+failure path**, and that is the property the fourth clause would have spent: a
+clause reading `/pkg/active` and a generation file on every failed lookup has
+four ways to be half-installed, and each of them has to be turned back into an
+ordinary "command not found" by hand.
+
+**Boot does not create `/pkg`.** `make_dirs` still makes `/home` and `/import`
+and nothing else. A system that never installs anything never grows a `/pkg`,
+and the tree is P11's `pkg_tree_ops` to build on the first write. Creating it at
+boot would have put an empty directory and a dangling `/pkg/bin` on every
+machine to buy a component that already costs nothing when it is absent.
+
+**`init`'s `PATH` and the kernel's default were two literals.** `base_env` in
+`boot.cpp` spelled `PATH=/bin` out rather than deriving it, so the two could
+drift and nothing would have said which was right — a shell entered with one
+list while `env -i` searched another. `Str::substr` and `operator==` are both
+`constexpr`, so one `static_assert` on the word after `PATH=` makes that a
+compile error. It is checked: reverting the constant alone fails the build in
+`boot.cpp` rather than passing the tests.
+
+**The smoke test builds a generation the way `gen_ops` emits one** — absolute
+targets, `/pkg/bin` to `/pkg/active/bin` to `/pkg/gen/1/bin` — and plants a real
+binary in the store rather than a fourth symlink, since a store directory holds
+a program. What it then proves is that the resolution is the kernel's: `hi` runs
+with no `PATH` set by hand, and so do `timeout hi` and `sh -c 'hi'`. It also
+pins the two rules that make the arrangement safe rather than merely working.
+`/bin` wins for a name in both, checked with `wc` rather than `echo`, which is a
+builtin and would have shadowed the pair of them. And **`PATH` is a default and
+not a floor**: `PATH=/home hi` is 127, so a process handed a `PATH` searches
+that list alone, installed programs included — which is what a `PATH` that
+steers resolution has to mean.
+
+**`/pkg` survives a version change**, beside the `/bin/keepme` that proves the
+opposite for `/bin`. The unpack names only the top-level directories the archive
+carries, and Package_Management.md §6 already leans on that from the other end
+to say the trust anchor is re-pinned at every release. Read forwards it says a
+release replaces the system and leaves what `pkg` installed standing.
+
 ## A generation, as a list of steps
 
 P11 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `db.cpp` is

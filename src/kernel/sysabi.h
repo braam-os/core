@@ -484,7 +484,8 @@ inline usize argv_bytes(const u8 *p, usize len)
 }
 
 // Where a bare command name is looked for when the environment names nowhere.
-constexpr Str SYS_PATH_DEFAULT = "/bin";
+// /bin first; /pkg/bin is a symbolic link to the live generation.
+constexpr Str SYS_PATH_DEFAULT = "/bin:/pkg/bin";
 
 // The i'th word, or an empty Str if the blob is short — a truncated blob is a
 // broken host, and reading past it would be worse than losing an argument.
