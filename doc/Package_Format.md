@@ -391,7 +391,31 @@ less 1.6-r1
 ```
 
 `/pkg/world` is one dependency (§6) per line: what the user asked for, as
-distinct from what was pulled in to satisfy it.
+distinct from what was pulled in to satisfy it. `/pkg/repositories` is one URL
+per line.
+
+In all three a blank line is skipped and a last line without a newline is still
+a line; **a file that is not there reads as an empty one**, so a `/pkg` that has
+never been written to needs no seeding. Nothing else is a comment: a `#` line
+would be a URL nobody could name.
+
+### 8.3 Committing a generation
+
+Building generation `N` is, in order: remove `/pkg/gen/<N>` and make it again,
+write its `packages`, make its `bin/` and fill it, write `/pkg/active.new` as a
+symlink to `/pkg/gen/<N>`, and **rename that over `/pkg/active`**. Only the last
+step is visible to anything else, which is what makes it the commit; a tab that
+dies before it leaves a generation directory nothing names.
+
+Every link is written as an absolute path — `/pkg/bin` to `/pkg/active/bin`,
+`/pkg/active` to `/pkg/gen/<N>`, and each farm entry to
+`/pkg/store/<name>-<version>/bin/<cmd>`. `/pkg` is a fixed top-level name
+(Concept.md §5.1) and there is nowhere else for the tree to be. A *reader* of
+`/pkg/active` takes the target as written and accepts either spelling, since a
+link put there by hand is a link.
+
+Two packages shipping one command leaves whichever the farm wrote last. Making
+that impossible is the solver's, not this layer's.
 
 ---
 

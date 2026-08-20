@@ -15,15 +15,16 @@ are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 **A finished task is deleted from this file, and the numbers do not move** —
 Release_Notes.md and the tasks below cite them. Phases A and B are gone that
 way: the decisions are in Concept.md, Package_Management.md and
-Package_Format.md, and the two host operations are in System_Calls.md. P5 to P10
+Package_Format.md, and the two host operations are in System_Calls.md. P5 to P11
 went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
-`version.cpp`, `dep.cpp`, `stanza.cpp` and `zip.cpp` are the digest, the two
-encodings, apk's version grammar, the dependency token, the stanza grammar with
-its records and the zip's directory, compiled into `tests.wasm` as well.
-`unzip.cpp` is the half of the zip reader that inflates, and is the one piece
-that stays out. So this starts at P11.
+`version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp` and `db.cpp` are the digest,
+the two encodings, apk's version grammar, the dependency token, the stanza
+grammar with its records, the zip's directory and `/pkg`'s layout, compiled into
+`tests.wasm` as well. `unzip.cpp` inflates an entry and `store.cpp` performs the
+steps `db.cpp` computes; those two are the pieces that stay out. So this starts
+at P12.
 
 ## The shape being built
 
@@ -105,28 +106,6 @@ large crosses the ABI. That is P6.
 ---
 
 ## Phase C — pkg's own primitives, no network
-
-### P11. The local store
-
-`db.cpp`, over Package_Format.md §8: read and write `/pkg/gen/<N>/packages` and
-its `bin/` link farm, `/pkg/world`, `/pkg/repositories` and the installed-db
-stanzas, and read `/pkg/active` — which is a symlink, so `read_link` and not
-`Read`.
-
-The recursive `mkdir` this needs now exists: `make_dir_all` (`src/proc/io.h`),
-the walk over the components tolerating `Error::Exists`, since `Sys::MkDir` is
-one level and refuses an existing directory (`vfs_mkdir`, `src/fs/vfs.cpp`).
-`/bin/mkdir -p` is its other caller. Build a store directory with it rather than
-a chain of `make_dir` calls.
-
-`rename_path` (`src/proc/io.h`, over `Sys::Rename`) does exist. Its
-`Err(Unsupported)` means "copy instead" — a directory, or a move across mounts —
-and `/bin/mv`'s `move_one` and `copy_tree` (`src/cmd/mv.cpp`) are the worked
-example, including how they recreate a symlink rather than following it.
-`Sys::Remove` has a recursive bit, which is what drops a store directory.
-
-Done when: a generation written and read back is identical, and a `/pkg` tree
-built from nothing has the right shape.
 
 ### P12. Activation, by symlink
 

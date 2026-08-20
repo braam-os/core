@@ -1,10 +1,12 @@
 # The package manager, as a library its binary links. main.cpp stays out of it.
 add_library(braam_pkg STATIC
+    db.cpp
     dep.cpp
     encode.cpp
     pkg.cpp
     sha256.cpp
     stanza.cpp
+    store.cpp
     unzip.cpp
     version.cpp
     zip.cpp)

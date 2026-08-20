@@ -6,6 +6,7 @@ add_executable(tests
     unit/test_cond.cpp
     unit/test_console.cpp
     unit/test_coroutine.cpp
+    unit/test_db.cpp
     unit/test_dep.cpp
     unit/test_encode.cpp
     unit/test_fmt.cpp
@@ -59,9 +60,11 @@ add_executable(tests
     ../src/proc/time.cpp
 
     # pkg's digest, its encodings, the version grammar, the dependency token,
-    # the stanza reader and the zip's directory: syscall-free, so braam_pkg is
-    # not linked here either. stanza.cpp allocates; the constraint is the
-    # import list. unzip.cpp is the half that inflates and stays out.
+    # the stanza reader, the zip's directory and the store's layout:
+    # syscall-free, so braam_pkg is not linked here either. stanza.cpp
+    # allocates; the constraint is the import list. unzip.cpp is the half that
+    # inflates and store.cpp the half that writes; both stay out.
+    ../src/cmd/pkg/db.cpp
     ../src/cmd/pkg/dep.cpp
     ../src/cmd/pkg/encode.cpp
     ../src/cmd/pkg/sha256.cpp

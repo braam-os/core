@@ -28,6 +28,7 @@ void test_console();
 void test_encode();
 void test_sha256();
 void test_version();
+void test_db();
 void test_dep();
 void test_stanza();
 void test_text();
@@ -110,6 +111,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_version();
     test_dep(); // after version: a dependency is a mask over a comparison
     test_stanza();
+    test_db(); // after dep: world is a list of dependency tokens
     test_zip(); // after sha256 and svc: rootfs.zip is compared by digest
     test_procfs();
 

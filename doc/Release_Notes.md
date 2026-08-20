@@ -25,6 +25,70 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A generation, as a list of steps
+
+P11 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `db.cpp` is
+Package_Format.md §8 — the paths under `/pkg`, §8.2's two text files, and what
+committing a generation *is*. `store.cpp` is the half that goes and does it.
+
+**The split is the only way any of it could be tested.** `tests.wasm` cannot
+supply `sys`/`sys_async` and is not allowed to: `braam_proc` is deliberately not
+linked, so a syscall in a source compiled into the suite is a link error. A
+`db.cpp` written as a coroutine that walks and writes would have put the commit
+order — the one part of this that must not be got wrong — where nothing could
+look at it until P18. So the ordering is a value: `gen_ops` returns the eight
+steps, `store_perform` runs them, and the test compares the list against the one
+§8.3 now spells out.
+
+**Two things in the tree already work this way**, which is why it is not an
+invention. `installOps` in `web/fs.js` is "what installing an archive *is*, as
+operations for the caller to perform: OPFS awaits each one and the test fake
+does them synchronously, and neither has its own idea of what the archive
+means". And `test` is cut the same way for the same reason — `cond_probes`
+names every file primary in one walk, `cond_eval` reads the answers back, and
+`condrun.cpp` is the half that has to go and look. `db.cpp`/`store.cpp` is that
+pair with the halves named for what they are rather than for the syscall.
+
+**What is left unproven, and by how much.** `store.cpp` has no test, because no
+subcommand reaches the store yet and the in-wasm suite cannot run a program.
+What makes that tolerable is that it is a switch with nothing in it: each op is
+one `proc/io.h` call the smoke test already covers through a program of its own
+— `make_dir_all` through `mkdir -p`, `remove_path` through `rm -r`, `make_link`
+through `ln -s`, `rename_path` through `mv`, and the open/write/close through
+`edit`. There is no logic left in `store.cpp` to be wrong about, and P18 is what
+gives it a caller and `test/run.mjs` a way in.
+
+**The links are absolute, and the reader takes either.** A relative target would
+buy a `/pkg` that could be moved, and nothing will move it: `/pkg` is a fixed
+top-level name in Concept.md §5.1, and the kernel's default `PATH` names it by
+that name at P12. What absolute buys instead is that `ls -l` shows the same
+string the code wrote, which is worth more in a directory nobody can debug with
+a package manager. `gen_of` is liberal anyway and reads `gen/2` as readily as
+`/pkg/gen/2`, because P12's test builds that link by hand and a link put there
+by a person is still a link.
+
+**`Err(Unsupported)` from the commit rename is a failure, not an instruction.**
+`rename_path`'s contract says the store may refuse to move a directory or a name
+across mounts and that the caller should copy instead — `mv` is built on that.
+It does not apply here: `/pkg/active.new` is a symlink beside its own
+destination, so a refusal is a broken store rather than a hint, and treating it
+as one would turn the single atomic step this whole arrangement exists for into
+a copy that can be interrupted half-way.
+
+**A missing file reads as an empty one.** `world` and `repositories` are absent
+until something writes them, and the alternative — seeding them when the tree is
+made — puts a `/pkg/repositories` with nothing in it on disk to mean what its
+absence already meant. §8.2 gained the sentence. The same paragraph settles
+that a last line without a newline is still a line, which is §9's rule about
+apk's dropped final stanza applied to a second file format.
+
+**The writer sorts.** §8.2 says `packages` is sorted by name, and P9 settled
+that order is the writer's concern so that a round trip is defined; so
+`packages_write` sorts rather than trusting a caller who will be handed the
+solver's output in dependency order. It is an insertion sort over indices, which
+is the right algorithm for a list as long as the number of packages a person has
+installed.
+
 ## A second reader of one format, and the ceiling only it can see
 
 P10 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last Phase C
