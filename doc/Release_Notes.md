@@ -25,6 +25,83 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A second reader of one format, and the ceiling only it can see
+
+P10 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last Phase C
+primitive. `zip.cpp` is Package_Format.md §5.2 — the end record found behind its
+comment, the central directory walked, each entry's data found by re-reading its
+*local* header — and §5.1's dot-entry split. `unzip.cpp` is the twenty lines
+that put an entry through `Sys::Inflate`.
+
+**The module splits in two so that the rules can be tested at all.**
+`test/CMakeLists.txt` compiles pkg's pure sources straight into `tests.wasm` and
+does not link `braam_pkg`; a syscall in one of them is a link error, and that
+link error is the assertion. Everything in §5.2 is arithmetic over a byte
+buffer, so `zip.cpp` joins that list beside `stanza.cpp`, and only the
+`inflate()` loop is exiled to `unzip.cpp`. Had it been one file, every rule the
+task exists to pin down would have lived where the unit suite cannot reach it,
+and the test would have re-implemented them — the same two-readers failure one
+level down.
+
+**The ceiling is on the pure side for the same reason.** `Sys::Inflate` caps its
+input at `SYS_STAGE_MAX` and not its output, and answers with a descriptor
+rather than a buffer, precisely so a bomb can be abandoned part way — but
+nothing below `pkg` knows how big the entry claimed to be. So `ZipSink` holds
+the declared size and refuses the chunk that would pass it, and a clean end of
+stream short of it is `Err(Invalid)` and never a short read. It is thirty lines
+in `zip.cpp`, tested directly, and the two loops that feed it — `unzip.cpp`'s
+over `read_chunk`, the test's over `stream_read` — carry no policy between them.
+The two halves even spell the end of a stream differently, `Err(Closed)` against
+an empty chunk, which is a second reason not to have one loop pretending to
+serve both.
+
+**The declared size is trusted and the stream is not.** That sentence is the
+whole of the rule, and it holds because the size comes out of an archive whose
+digest has already been checked against a signed index (Package_Management.md
+§7) while the inflated bytes come out of a decompressor. §5.2 gained it, along
+with the `SYS_STAGE_MAX` ceiling on an entry's *compressed* size, which is a
+real limit: an entry `pkg` cannot stage is one it cannot read, and refusing is
+the only honest answer.
+
+**`web/fs.js` did not move, and the document says why.** `parseZip` never reads
+the uncompressed size at `+24`, and three lines would have made the two readers
+identical. It stays as it is: `DecompressionStream` hands back a buffer, so the
+check could only run once the bomb had been materialised, defending nothing —
+and the one archive it reads is the release's own, packed by `tools/pack.py`
+three lines away. The package reader reads archives it did not build. §5.2 now
+records the asymmetry as an exception with its reasoning, so the next person to
+diff the two does not "fix" one of them.
+
+**§5.2's bullets became an order rather than a list.** Writing the second reader
+turned up two places where the prose did not say enough to reproduce the first:
+`parseZip` skips a name ending in `/` *before* it checks the name, so `../` is
+skipped and not refused, and it judges the method *after* the local header has
+been found. Both were accidents of the order the JS happens to be written in,
+and both are now normative — a reader that reorders them refuses archives the
+other accepts, which is exactly the class of disagreement §5.2 exists to
+prevent.
+
+**The archive comes along to the unit suite now.** `rootfs.zip` was already
+passed to `smoke` so the packer and the unpacker check each other; it is passed
+to `unit` for the same reason one level up. `test/run.mjs` plants the raw bytes
+and a `<name> <size> <sha256>` manifest built from `parseZip`'s own output into
+the fake store, and `test_zip` mounts `OpfsFs`, parses the same bytes in wasm,
+inflates all 43 entries through the kernel's own service and compares every
+digest. A single wrong byte in one entry fails it by name. The manifest is
+digests rather than bytes so that 812 KiB of archive is never held twice.
+
+The rest is fixtures: a zip builder in C++ with the fields a refusal needs to
+lie about, since `tools/pack.py` always deflates, writes no directory entry and
+no extra field — so **the local-header re-read, the bug §5.2 calls the classic
+one, is invisible in `rootfs.zip`** and provable only against an archive built
+to expose it. An entry whose local header carries seven bytes of extra field
+that the central record does not is the whole case, and a reader that trusted
+the central offset lands seven bytes into the data.
+
+**No new command, so nothing in `/share/help` moved**, and `bin/pkg` did not
+grow: nothing in `pkg.cpp` references `zip_read` yet, so `--gc-sections` drops
+both members and the staging tree is where it was. P18 is what will link them.
+
 ## Size stops being a headline
 
 The budgets stay; the noise around them goes. `tools/size_budget.txt` still

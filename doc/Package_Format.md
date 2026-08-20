@@ -258,6 +258,25 @@ checked against each other.
 - **Step past the CRC-32** (Package_Management.md §7). The digest from the
   signed index is the check, taken over the whole zip before an entry is read.
 
+**The order above is normative**, not a list. The `/` test runs before the name
+test, so `../` is *skipped* and not refused; the method is judged after the
+local header has been found. A reader that reorders them refuses archives the
+other accepts, which is the disagreement this section exists to prevent.
+
+Two rules a reader given a stream needs and one given a buffer does not:
+
+- **Stop at the entry's declared uncompressed size**, and refuse a stream that
+  ends before it or runs past it. The declared size is inside the digested
+  archive and is therefore as trusted as the archive; the inflated bytes are
+  not, because a megabyte of deflate is a gigabyte of output.
+- **An entry compressed larger than `SYS_STAGE_MAX`** cannot be read at all:
+  `Sys::Inflate` stages its input (System_Calls.md §8). Nothing `tools/pack.py`
+  writes comes near it — `rootfs.zip`'s largest entry is 75 KB compressed.
+
+`parseZip` checks neither, and does not need to: `DecompressionStream` hands
+back a buffer, so a size check there would run after the bomb had been
+materialised, and the one archive it reads is the release's own.
+
 ---
 
 ## 6. Dependencies

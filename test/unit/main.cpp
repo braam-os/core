@@ -46,6 +46,7 @@ void test_jsref();
 void test_svc();
 void test_sysabi();
 void test_vfs();
+void test_zip();
 
 // The kernel's init() calls this too, so the cases below start from the same
 // static state kernel.wasm does.
@@ -109,6 +110,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_version();
     test_dep(); // after version: a dependency is a mask over a comparison
     test_stanza();
+    test_zip(); // after sha256 and svc: rootfs.zip is compared by digest
     test_procfs();
 
     u32 failures = test_failures();

@@ -38,6 +38,7 @@ add_executable(tests
     unit/test_vec.cpp
     unit/test_version.cpp
     unit/test_vfs.cpp
+    unit/test_zip.cpp
 
     # The grammar, the word expander, the pattern matcher and `test`'s
     # expression are the shell binary's, and pure: they touch nothing but Str,
@@ -57,14 +58,16 @@ add_executable(tests
     ../src/proc/opt.cpp
     ../src/proc/time.cpp
 
-    # pkg's digest, its encodings, the version grammar, the dependency token
-    # and the stanza reader: syscall-free, so braam_pkg is not linked here
-    # either. stanza.cpp allocates; the constraint is the import list.
+    # pkg's digest, its encodings, the version grammar, the dependency token,
+    # the stanza reader and the zip's directory: syscall-free, so braam_pkg is
+    # not linked here either. stanza.cpp allocates; the constraint is the
+    # import list. unzip.cpp is the half that inflates and stays out.
     ../src/cmd/pkg/dep.cpp
     ../src/cmd/pkg/encode.cpp
     ../src/cmd/pkg/sha256.cpp
     ../src/cmd/pkg/stanza.cpp
-    ../src/cmd/pkg/version.cpp)
+    ../src/cmd/pkg/version.cpp
+    ../src/cmd/pkg/zip.cpp)
 
 target_link_libraries(tests PRIVATE
     braam_user braam_fs braam_svc braam_ui braam_core braam_flags)
@@ -83,7 +86,10 @@ add_test(NAME smoke
     COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --kernel $<TARGET_FILE:kernel>
             ${CMAKE_BINARY_DIR}/web/rootfs.zip ${BRAAM_SMOKE_BINARIES})
 
+# The archive comes along here too: test_zip reads the same bytes web/fs.js
+# does, so the two readers of one format are compared rather than each trusted.
 add_test(NAME unit
-    COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --tests $<TARGET_FILE:tests>)
+    COMMAND ${BRAAM_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/run.mjs --tests $<TARGET_FILE:tests>
+            ${CMAKE_BINARY_DIR}/web/rootfs.zip)
 
 add_test(NAME size COMMAND ${BRAAM_SIZE_BUDGET_CHECK})

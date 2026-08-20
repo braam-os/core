@@ -15,13 +15,15 @@ are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 **A finished task is deleted from this file, and the numbers do not move** —
 Release_Notes.md and the tasks below cite them. Phases A and B are gone that
 way: the decisions are in Concept.md, Package_Management.md and
-Package_Format.md, and the two host operations are in System_Calls.md. P5 to P9
+Package_Format.md, and the two host operations are in System_Calls.md. P5 to P10
 went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
-`version.cpp`, `dep.cpp` and `stanza.cpp` are the digest, the two encodings,
-apk's version grammar, the dependency token and the stanza grammar with its
-records, compiled into `tests.wasm` as well. So this starts at P10.
+`version.cpp`, `dep.cpp`, `stanza.cpp` and `zip.cpp` are the digest, the two
+encodings, apk's version grammar, the dependency token, the stanza grammar with
+its records and the zip's directory, compiled into `tests.wasm` as well.
+`unzip.cpp` is the half of the zip reader that inflates, and is the one piece
+that stays out. So this starts at P11.
 
 ## The shape being built
 
@@ -103,31 +105,6 @@ large crosses the ABI. That is P6.
 ---
 
 ## Phase C — pkg's own primitives, no network
-
-### P10. Zip reader
-
-`zip.cpp`, over `Sys::Inflate`. Package_Format.md §5.2 lists the rules, which
-are `web/fs.js`'s `parseZip`'s written down once so the two can be checked
-against each other — **two readers of one format that disagree is how a package
-installs differently from the way it was signed**. The one most often got wrong
-is re-reading the local header to find where the data begins.
-
-§5.1 is the other half: the dot-entry split, and an unknown dot-entry refusing
-the package.
-
-Two things `Sys::Inflate` leaves to this reader:
-
-- **Stop when the entry's declared size is reached.** The operation caps its
-  input at `SYS_STAGE_MAX` and not its output, and hands back a stream rather
-  than a buffer, precisely so a zip bomb can be abandoned part way. Nothing
-  below this reader knows how big the entry claimed to be.
-- **A truncated stream may fail at either end** — a browser fails the read that
-  reaches the damage, `test/fakesvc.mjs` fails the `Inflate` itself. Both are
-  errors and neither is a short read, so treat any error from either as fatal
-  and never assume which one arrives.
-
-Done when: it reads `rootfs.zip` itself and produces the same entries
-`web/fs.js` does, and a package with an unknown top-level dot-entry is refused.
 
 ### P11. The local store
 

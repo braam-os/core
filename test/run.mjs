@@ -2,6 +2,7 @@
 // browser: instantiating a freestanding module needs nothing browser-specific,
 // and test/fakefs.mjs stands in for OPFS.
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 
@@ -14,7 +15,7 @@ import { Renderer } from "../web/render.js";
 
 function usage() {
     console.error("usage: run.mjs --kernel <wasm> [<rootfs.zip> [<proc.wasm>...]] |" +
-                  " --tests <wasm>");
+                  " --tests <wasm> [<rootfs.zip>]");
     process.exit(2);
 }
 
@@ -59,8 +60,22 @@ const net = new FakeNet();
 //
 // Parsed here rather than inside the import: inflating is asynchronous and the
 // fake answers synchronously, so the phase that can await does it once.
-if (rootfs)
-    store.entries = await parseZip(new Uint8Array(readFileSync(rootfs)));
+if (rootfs) {
+    const archive = new Uint8Array(readFileSync(rootfs));
+    store.entries = await parseZip(archive);
+
+    // The archive itself, and what web/fs.js made of it: src/cmd/pkg/zip.cpp
+    // reads the same bytes in wasm and test_zip compares the two entry for
+    // entry, so neither reader is trusted against its own idea of the format.
+    // A digest rather than the bytes, so nothing large is held twice. Only for
+    // the unit suite: the smoke test reads the root and would find them.
+    if (mode === "--tests") {
+        store.files.set("/rootfs.zip", archive);
+        store.files.set("/rootfs.manifest", new TextEncoder().encode(
+            store.entries.map((e) => `${e.name} ${e.bytes.length} ` +
+                createHash("sha256").update(e.bytes).digest("hex")).join("\n") + "\n"));
+    }
+}
 
 // One stored (uncompressed) entry, by hand: pack.py always deflates, so this
 // is the only exercise method 0 gets, and it is what lets a hostile name be

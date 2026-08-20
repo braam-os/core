@@ -95,8 +95,10 @@ make clean
   `sys_async`, `tick`, `wake`), every binary's surface and `braam` section, that
   the kernel boots to a prompt, and that `rootfs/share/help` matches the builtin
   table and the archive's `bin/`.
-- `unit` — `tests.wasm` under Node. New core code gets a case in
-  [test/unit/](test/unit/) and a line in
+- `unit` — `tests.wasm` under Node, with `rootfs.zip` alongside so that
+  `src/cmd/pkg/zip.cpp` and `web/fs.js` are compared over the same bytes rather
+  than each trusted against its own reading of the format. New core code gets a
+  case in [test/unit/](test/unit/) and a line in
   [test/CMakeLists.txt](test/CMakeLists.txt).
 - `size` — `tools/size_budget.txt`, checked at build time.
 
