@@ -1368,6 +1368,7 @@ doc/System_Calls.md     the kernel↔process mechanism, end to end (§4.3)
 doc/Shell.md            the manual for /bin/sh: grammar, expansions, builtins, jobs (§4.5)
 doc/Programming_Manual.md  the SDK's guide
 doc/Package_Management.md  package signing and key-management policy (§6)
+doc/Package_Format.md   the index, the anchor, a package and /pkg, byte by byte
 Makefile                wrapper: all, run, serve, install, release, clean
 CMakeLists.txt          the build
 cmake/                  the wasm32-unknown-unknown toolchain file, BraamProgram.cmake

@@ -25,6 +25,84 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Five formats, frozen before a parser exists
+
+[Package_Format.md](Package_Format.md) defines one stanza grammar and the five
+files over it. It is a reference and reads like one; this is what it leaves out.
+
+**A document of its own, not a section of the policy.** Package_Management.md's
+§7 to §11 are cited by number all through `src/cmd/pkg/TODO.md`, so a new
+numbered section would have renumbered four of them, and an appendix would have
+put the grammar behind eleven sections of argument about keys. The split is also
+the honest one: the policy says what must be true, the format says what the
+bytes are, and the two change for different reasons.
+
+**apk's field letters are kept unchanged, and that is the whole design
+constraint.** `test/unit/version.data` is 788 comparison cases and
+`test/solver/` is 119 test files over 29 repository files, all in plain APKINDEX
+text. They port as *data* while the letters and the version grammar match and
+become a rewriting job the moment they do not — and a rewritten table is a table
+with new mistakes in it. Every temptation to improve a letter was measured
+against that and lost. What is dropped is only what has nothing to name here:
+`A` because there is one architecture, `so:` because every binary is statically
+linked, `@tag` because there is one repository, `><` because the index already
+names a package by its hash.
+
+**One letter means one thing across all five files.** apk reuses them freely —
+`I` is an installed size in the index and unused in the installed database, `R`
+is a regular file in one and absent from the other — and gets away with it
+because a single switch statement reads both. Assigning them globally costs a
+few less mnemonic choices and buys a table that can be checked by reading down
+one column, which is the kind of checking that actually gets done.
+
+**A signature is inline, and the signed region is one rule.** The block is the
+first stanza of the file and **the signed bytes are everything after the first
+empty line**. A detached `.sig` would have made the region plainer still — it is
+the whole file — but at the cost of a second fetch and a second thing to
+withhold, and "the whole package set, signed as one file" reads more literally
+when it is one file. The risk taken is the parser differential: a signer and a
+checker that compute that offset differently produce a signature over bytes
+nobody agreed on. It is one rule, stated once, and `tools/signindex.py` is
+required to compute it the way `pkg` does — which is why P26 now says so.
+
+**The index's header stanza is an invention, and the document says so.** apk has
+no index version and no expiry at all: staleness there is a client-side check of
+the cached file's mtime against a four-hour default, and `DESCRIPTION` is a
+free-form blob capped at 160 bytes with no keys in it. Package_Management.md §7
+requires both a version that only goes up and an expiry, so there was nothing
+upstream to copy and this is the part with no second opinion available. `N`, the
+repository's own URL inside the signed region, is the piece that is easy to
+forget: without it an index published for one repository is a valid index for
+every other.
+
+**A package's URL is derived, never carried.** §4 of the policy already says a
+redirect is invisible and the URL a package came from proves nothing — a package
+is named by its hash. A field naming a URL could then only be a second place for
+the same fact to be wrong, and it would be the field an attacker edits.
+
+**Metadata is a top-level dot-entry, because a zip has no order to rely on.**
+apk's control section works by being an ordered prefix of a tar; a zip is read
+through its central directory, which promises no order at all, so the split had
+to be a name. Making it a *path* — a name with no slash in it, beginning with a
+dot — also makes it structurally impossible for a package to install a file
+where its own metadata lives. **An unknown dot-entry refuses the package**,
+where apk ignores unknown control files: a package carrying an instruction this
+`pkg` cannot read must not be half-installed, and that is the uppercase rule
+applied to an entry name.
+
+**Two departures are about the absence of things.** The installed database keeps
+`F:`/`R:`/`Z:` and drops `M:` and `a:`, which carry uid, gid, mode and an xattr
+digest — a field that could only ever be written `0:0:644` invites someone to
+believe it means something. And end of file commits a stanza, where apk drops a
+last stanza that has no trailing blank line. That is silent data loss at the one
+place these files are most likely to be edited by hand, and it costs a line to
+avoid.
+
+**One contradiction of P1's is fixed here.** `/pkg/gen/<N>` was described both
+as a text file holding the installed set and as a directory holding the symlink
+farm. It is a directory: `packages` is the text and `bin/` the farm, which is
+what lets one rename of `/pkg/active` commit the two together.
+
 ## The decisions `/bin/pkg` cannot take back
 
 [Package_Management.md](Package_Management.md) was written before the package

@@ -33,7 +33,10 @@ exports, and the three passing CTest cases.
 - **[doc/Shell.md](doc/Shell.md)** is the `/bin/sh` manual,
   **[doc/Programming_Manual.md](doc/Programming_Manual.md)** the SDK guide, and
   **[doc/Package_Management.md](doc/Package_Management.md)** the policy a
-  package manager must satisfy (`/bin/pkg` does not exist yet).
+  package manager must satisfy, with
+  **[doc/Package_Format.md](doc/Package_Format.md)** the grammars written to
+  satisfy it (`/bin/pkg` does not exist yet; its plan is
+  [src/cmd/pkg/TODO.md](src/cmd/pkg/TODO.md)).
 
 ## Build
 

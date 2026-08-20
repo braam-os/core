@@ -33,22 +33,29 @@ The commands, all of them:
 ### The `/pkg` tree
 
 `/pkg` is a new top-level directory, and the archive does **not** carry it —
-which is what §11 asks of `pkg`'s record, since the unpack deletes every
+which is what §11 asks of `pkg`'s record, since the unpack replaces every
 top-level directory the archive *does* carry.
 
+Defined in [doc/Package_Format.md](../../../doc/Package_Format.md) §8; in
+outline:
+
 ```
+/pkg/repositories              one URL per line; today, one line
+/pkg/index                     the last checked index, signature block and all
 /pkg/store/<name>-<version>/   unpacked, checked, immutable once written
-/pkg/gen/<N>                   a generation: the whole installed set, as text
+/pkg/db/<name>-<version>       the installed-db stanza: per-file digests
+/pkg/gen/<N>/packages          a generation: the whole installed set, as text
 /pkg/gen/<N>/bin/<cmd>         a symlink into /pkg/store — the generation's PATH
 /pkg/active                    a symlink to gen/<N> — the commit point
 /pkg/bin                       a symlink to active/bin — what PATH names
 /pkg/world                     the explicitly-installed set (apk's world file)
-/pkg/db/<name>-<version>       the installed-db stanza: per-file digests
-/pkg/index/<repo>              the last checked index, and its signature
 /pkg/cache/                    downloaded archives; `pkg clean` empties this
 ```
 
-An install unpacks and checks into `/pkg/store/`, builds `/pkg/gen/<N+1>` whole
+**A generation is a directory**, holding both the text and the links that make
+it runnable, so one rename commits the two together.
+
+An install unpacks and checks into `/pkg/store/`, builds `/pkg/gen/<N+1>/` whole
 including its `bin/` links, and then swings `/pkg/active` — write
 `/pkg/active.new` and `Sys::Rename` it over `/pkg/active`. **That single rename
 is the commit.** A tab that dies before it leaves rubbish in `/pkg/store` that
@@ -115,28 +122,33 @@ rows**, with a paragraph each and a line saying they are in no enum yet.
 `PROC_ABI` stays 14 in every document until P3 and P4 move it. Release_Notes.md
 holds the *why* for all of it.
 
-### P2. Freeze the formats
+### P2. Freeze the formats — **done**
 
-A section of `doc/Package_Management.md`, still not code. §7 settles what the
-index must *contain* and explicitly leaves the format to `pkg`'s design; this
-is that design, written down before anything parses it.
+[doc/Package_Format.md](../../../doc/Package_Format.md), a document of its own
+rather than a section: §7–§11 of the policy are cited by number all through this
+file, and a new numbered section would have renumbered four of them. It defines
+one stanza grammar (§1) and then the five files — a signature (§2), the index
+(§3), the anchor (§4), a package (§5) and `/pkg` (§8) — with dependencies (§6)
+and versions (§7) between them, and §9 tabulating every departure from apk.
 
-- **The index** — APKINDEX: blank-line-separated stanzas of `K:value`, one
-  letter and a colon. A header stanza carrying the index version, the expiry
-  and the repository; then one stanza per package. Field letters kept:
-  `P` name, `V` version, `C` checksum, `S` size, `I` installed size,
-  `T` description, `D` depends, `p` provides, `i` install-if, `o` origin,
-  `t` build time, `k` provider priority.
-- **The anchor** — `/share/pkg/anchor`: the root public keys, the threshold,
-  the index keys the root currently vouches for, the anchor's own number and
-  expiry, and an algorithm name on every key (§8).
-- **A signature** — signify-shaped: two base64 lines, a comment and the
-  signature, no keyring format and no PKI. A key is named by the SHA-256 of its
-  public key (§8), never by a filename.
-- **A package** — a zip, and what its entries mean: where the files go, and
-  where the scripts and the trigger globs live.
-- **The installed db and the generation** — `/pkg/db/<name>-<version>`'s
-  stanza, including per-file digests, and `/pkg/gen/<N>`'s grammar.
+What was settled, beyond what P2 originally asked:
+
+- **A signature is inline**, the first stanza of a signed file, and **the signed
+  bytes are everything after the first empty line**. One rule, computed the same
+  way by the signer and the checker. Not signify's detached two-line file, which
+  is where P2's wording came from.
+- **A letter means one thing in every file.** apk reuses letters between the
+  index and the installed db; here `Y` is a signature, `K` a key, `H` a
+  threshold, `G` an index version, `E` an expiry, and so on, once each.
+- **A package is apk-shaped** — a top-level entry whose name begins with `.` is
+  metadata — and an **unknown** dot-entry makes the package uninstallable.
+- The **field letters are apk's**, unchanged, because `test/solver/`'s 119
+  fixtures and `test/unit/version.data`'s 788 cases port as *data* only while
+  they are. `A`, `U` and `L` are dropped, and §1's rule says why no
+  informational field will ever be uppercase again.
+- A package's **URL is derived**, `<repo>/<name>-<version>.zip`, never carried.
+- The installed db keeps `F:`/`R:`/`Z:` and **drops `M:` and `a:`** — uid, gid
+  and mode, none of which exist here.
 
 ---
 
@@ -238,72 +250,62 @@ What has to be right, because it is where the subtlety is:
 - Fuzzy (`~`) is: if the right side ran out, the result is equal. That single
   rule is the whole of prefix matching.
 
+The grammar is Package_Format.md §7; the four bullets above are what to get
+right while implementing it.
+
 `apk-tools/test/unit/version.data` is 788 comparison cases. Port it into
 `test/unit/` as data rather than restating it — a rewritten table is a table
-with new mistakes in it.
+with new mistakes in it. Its line format is `ver1 op ver2`, a bare `version` for
+a validity check, and a leading `!` on either to invert; `#` starts a comment.
 
 Done when: all 788 cases pass.
 
 ### P8. Dependency parsing
 
-`[!]name[[op]ver]`, with apk's result-mask model: comparison yields exactly one
-of EQUAL, LESS or GREATER, and the operator is the *mask of acceptable
-results*. Then `=`, `<`, `>`, `<=`, `>=`, `~`, `>~`, `<~` and a leading `!`
-are one `match()` and a bitfield, not nine cases.
-
-Two of apk's namespaces do not come across. **`so:` is dropped** — it exists for
-ELF shared libraries and every binary here is statically linked and
-self-contained. **`cmd:` stays**, as an ordinary name (P23). The `@tag`
-repository-pinning suffix and the `><` checksum operator go too: there is one
-repository, and the index already names a package by its hash.
+Package_Format.md §6. The point of the implementation is that the result-mask
+model collapses nine spellings into one `match()` and a bitfield rather than
+nine cases; `so:`, `@tag` and `><` are gone and `cmd:` is an ordinary name
+(P23).
 
 Done when: a table-driven test covers each operator, the conflict form, an
 unparseable version (which marks the dependency broken rather than failing the
 file), and a dependency list split on both spaces and newlines.
 
-### P9. APKINDEX
+### P9. The stanza reader and writer
 
-The stanza reader and writer. The rules that matter:
+Package_Format.md §1, and §3's tables. **One reader for all five files** — that
+is what §1 was written to make possible, and a second parser for the anchor
+would be the first place the two could disagree.
 
-- A line is one letter, a colon, then the value. A blank line ends the stanza
-  and commits the package.
-- An unknown **uppercase** letter marks the package uninstallable — fail
-  closed.
-- An unknown **lowercase** letter is ignored — forward compatibility.
-
-That asymmetry is apk's and it is worth keeping: it is what lets a future index
-carry a field this `pkg` has never heard of without either lying about a
-package or refusing the whole file.
+The writer emits §3.4's canonical order, which is what makes the round trip
+below a defined thing rather than a hope.
 
 Done when: a round trip through the writer and reader is byte-identical, a
-stanza with an unknown uppercase field yields an uninstallable package, and a
-file with no trailing blank line still commits its last stanza.
+stanza with an unknown uppercase field yields an uninstallable package, an
+unknown lowercase field is ignored, a repeated letter that is not one of the
+accumulating six is malformed, and a file with no trailing blank line still
+commits its last stanza.
 
 ### P10. Zip reader
 
-`zip.cpp`, over `Sys::Inflate`. Mirror `web/fs.js`'s `parseZip` rule for rule,
-because two readers of one format that disagree is how a package installs
-differently from the way it was signed:
+`zip.cpp`, over `Sys::Inflate`. Package_Format.md §5.2 lists the rules, which
+are `web/fs.js`'s `parseZip`'s written down once so the two can be checked
+against each other — **two readers of one format that disagree is how a package
+installs differently from the way it was signed**. The one most often got wrong
+is re-reading the local header to find where the data begins.
 
-- Scan backwards for the end-of-central-directory record.
-- Walk the central directory, and **re-read each local header to find where the
-  data begins**. Taking the central directory's offset for the data is the
-  classic way to get this wrong.
-- Zip64 refused. Encrypted refused. Methods 0 and 8 only.
-- A name check refusing absolute paths, backslashes, drive letters and any `.`
-  or `..` component.
-- The CRC-32 is stepped past. §7 says why: a CRC is not a security check, and
-  whoever chooses the bytes chooses a matching CRC. The hash from the signed
-  index is the check.
+§5.1 is the other half: the dot-entry split, and an unknown dot-entry refusing
+the package.
 
 Done when: it reads `rootfs.zip` itself and produces the same entries
-`web/fs.js` does.
+`web/fs.js` does, and a package with an unknown top-level dot-entry is refused.
 
 ### P11. The local store
 
-`db.cpp`: read and write `/pkg/gen/<N>` and its `bin/` link farm, `/pkg/world`
-and the installed-db stanzas, and read `/pkg/active` — which is a symlink, so
-`read_link` and not `Read`.
+`db.cpp`, over Package_Format.md §8: read and write `/pkg/gen/<N>/packages` and
+its `bin/` link farm, `/pkg/world`, `/pkg/repositories` and the installed-db
+stanzas, and read `/pkg/active` — which is a symlink, so `read_link` and not
+`Read`.
 
 One helper has to be written because the system does not have it. There is **no
 recursive `mkdir`** — `Sys::MkDir` is one level and refuses an existing
@@ -448,9 +450,11 @@ accumulated and reported rather than retried.
 - The changeset comes out in **dependency order**, because the generator
   recurses into a package's depends before recording it.
 
-`apk-tools/test/solver/` is 168 fixtures in plain APKINDEX text with `@ARGS`,
-`@REPO` and `@EXPECT` stanzas. Port the harness; the fixtures are the
-specification of this task.
+`apk-tools/test/solver/` is 168 files — 119 `.test` cases over 29 `.repo` and 20
+`.installed` files, the last two in the stanza grammar and the first a list of
+`@ARGS`, `@REPO`, `@INSTALLED`, `@WORLD` and `@EXPECT` directives, where
+`@EXPECT` is the expected output compared byte for byte. Port the harness; the
+fixtures are the specification of this task.
 
 Done when: the ported fixtures pass, minus the ones that only exercise pinning
 or `so:`, and the ones dropped are listed with a reason.
@@ -463,7 +467,7 @@ or `so:`, and the ones dropped are listed with a reason.
 2. Stream it through SHA-256 while writing it to `/pkg/cache/`.
 3. Compare hash **and** size against the index.
 4. Only now unzip, into `/pkg/store/<name>-<version>/`.
-5. Write `/pkg/gen/<N+1>` whole, and materialise its `bin/` link farm.
+5. Write `/pkg/gen/<N+1>/packages`, and materialise its `bin/` link farm.
 6. Write `/pkg/active.new` and `Sys::Rename` it over `/pkg/active`.
 
 Step 3 to step 4 is the rule's only crossing point, and it should read that way
@@ -549,9 +553,11 @@ glob matches a directory the transaction modified.
 
 - `tools/mkpkg.py` — a package zip, reproducible: reuse `pack.py`'s `stamp()`
   and `MODE` rather than restating them.
-- `tools/mkindex.py` — the APKINDEX, including the `cmd:` auto-provides scanned
+- `tools/mkindex.py` — the index, including the `cmd:` auto-provides scanned
   out of each package.
-- `tools/signindex.py` — Ed25519, signify-shaped.
+- `tools/signindex.py` — Ed25519, and the `Y:` block Package_Format.md §2
+  defines. It must compute the signed region the way `pkg` does, which is the
+  one place a publisher and a client can disagree in silence.
 - `tools/mkanchor.py` — the anchor, signed by a threshold of root keys.
 
 §9 is absolute and this is where it is at risk. **No private key** may be in the

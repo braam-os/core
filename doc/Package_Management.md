@@ -182,8 +182,9 @@ and asking it turns the whole check into a formality.
 
 ## 7. What the index says, and how `pkg` checks it
 
-Formats are settled when `pkg` is designed. What is settled here is what the
-index must contain, because each item stops a named attack.
+The formats are [Package_Format.md](Package_Format.md), written to satisfy this
+section. What is settled here is what the index must contain, because each item
+stops a named attack.
 
 | The index carries | Without it |
 | --- | --- |
