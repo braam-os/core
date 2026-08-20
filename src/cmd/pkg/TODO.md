@@ -39,28 +39,36 @@ top-level directory the archive *does* carry.
 ```
 /pkg/store/<name>-<version>/   unpacked, checked, immutable once written
 /pkg/gen/<N>                   a generation: the whole installed set, as text
-/pkg/active                    one line, "<N>" — the commit point
+/pkg/gen/<N>/bin/<cmd>         a symlink into /pkg/store — the generation's PATH
+/pkg/active                    a symlink to gen/<N> — the commit point
+/pkg/bin                       a symlink to active/bin — what PATH names
 /pkg/world                     the explicitly-installed set (apk's world file)
 /pkg/db/<name>-<version>       the installed-db stanza: per-file digests
 /pkg/index/<repo>              the last checked index, and its signature
 /pkg/cache/                    downloaded archives; `pkg clean` empties this
 ```
 
-An install unpacks and checks into `/pkg/store/`, writes `/pkg/gen/<N+1>`
-whole, and then writes `/pkg/active`. **That single write is the commit.** A
-tab that dies before it leaves rubbish in `/pkg/store` that `pkg clean`
-collects; a tab that dies after it has installed. Rolling back is writing the
-old number back.
+An install unpacks and checks into `/pkg/store/`, builds `/pkg/gen/<N+1>` whole
+including its `bin/` links, and then swings `/pkg/active` — write
+`/pkg/active.new` and `Sys::Rename` it over `/pkg/active`. **That single rename
+is the commit.** A tab that dies before it leaves rubbish in `/pkg/store` that
+`pkg clean` collects; a tab that dies after it has installed. Rolling back is
+swinging the link back.
+
+`/pkg/bin` never moves, so nothing has to be told a generation changed.
 
 ### Command resolution
 
-A command word resolves as function, then builtin, then `PATH` (Concept.md §4).
-A clause is added after `PATH`: read `/pkg/active`, read `/pkg/gen/<N>`, take
-the line naming that command. Two small reads on a miss, and deliberately not
-cached — the reason the prompt's cwd is not cached either. `PATH` still wins, so
-nothing installed can shadow the system. **Weigh this against a generation whose
-commands are symlinked into a directory `PATH` names, which needs no kernel
-change at all** — see P12.
+A command word resolves as function, then builtin, then `PATH` (Concept.md §4),
+and **no clause is added to any of the three**. An installed program is reached
+the way every other program is: `/pkg/bin` is on the default search list after
+`/bin`, so `/bin` still wins and nothing installed can shadow the system. The
+kernel learns none of `/pkg`'s file formats, and the whole of activation is a
+symlink and one word of `SYS_PATH_DEFAULT` — see P12.
+
+The alternative, which was the plan before symbolic links, `Sys::Rename` and
+`PATH` landed, was a fourth clause in `exec_resolve` reading `/pkg/active` and
+`/pkg/gen/<N>` on every miss. Release_Notes.md holds what it would have cost.
 
 ### Two new operations
 
@@ -76,29 +84,36 @@ whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI.
 
+Both are described in `doc/System_Calls.md` §8 already, at 57 and 58, as rows
+that no enum yet carries (P1). P3 and P4 make them true.
+
 ---
 
 ## Phase A — the decisions, on paper first
 
-### P1. Amend the documents
+### P1. Amend the documents — **done**
 
-Nothing is built until these say what is being built.
+Nothing is built until these say what is being built. Three things were settled;
+the rest of this file assumes them.
 
-- **`doc/Package_Management.md` §11** — the paragraph "No install scripts, on
-  purpose" forbids what P24 builds. Rewrite it, and answer the question it
-  poses: what may a script touch? Note that there is no privilege boundary here
-  (§11's first paragraph), so the honest statement is what a script *is*, not
-  what it is prevented from doing.
-- **`doc/Concept.md` §4** — the fourth clause of command resolution. **§5.1** —
-  `/pkg`, and that the archive does not carry it. **§6** — an `inflate` bullet,
-  and the digest bullet corrected: SHA-256 moved into wasm, and why.
-- **`doc/System_Calls.md`** — the two new operation-table rows, and the
-  `PROC_ABI` line at `:262`.
-- **`doc/Release_Notes.md`** — a new appended heading holding the *why* for all
-  of it.
+- **Activation is symlinks on `PATH`, not a fourth resolution clause.**
+  Concept.md §4 says so, §5.1 gains `/pkg` and the fact that the archive does
+  not carry it, and §5.2's unpack sentence names `/pkg` beside `/home`. P12 is
+  rewritten around it.
+- **SHA-256 is compiled into `pkg`; the signature check is a host service.**
+  Concept.md §6's digest bullet is split into three: a `verify` bullet, a
+  paragraph on why there is no digest operation, and an `inflate` bullet.
+- **Install scripts run, and nothing fences them.** Package_Management.md §11 is
+  rewritten: there is no privilege boundary here, so what is written down is
+  what a script *is* — an ordinary `/bin/sh` process with the user's whole
+  authority — and what a signature therefore authorises. Phase F is unblocked.
+  §11 also now says `/pkg` survives a version change, which is what its "a
+  directory the archive does not carry" sentence was pointing at.
 
-While there: `Concept.md:691` says "the table is thirty-eight operations and
-`PROC_ABI` is 10". Both are already wrong.
+`doc/System_Calls.md` carries `Verify` and `Inflate` at 57 and 58 as **reserved
+rows**, with a paragraph each and a line saying they are in no enum yet.
+`PROC_ABI` stays 14 in every document until P3 and P4 move it. Release_Notes.md
+holds the *why* for all of it.
 
 ### P2. Freeze the formats
 
@@ -138,10 +153,15 @@ signature and the signed bytes; the reply is a yes or a no, and an error is not
 a no.
 
 Touches: `src/svc/svc.h`, a new `src/svc/crypto.cpp` and its `CMakeLists.txt`
-line, `src/kernel/sysabi.h` (`Sys::Verify = 57`, and **bump `PROC_ABI` to 13**),
+line, `src/kernel/sysabi.h` (`Sys::Verify = 57`, and **bump `PROC_ABI` to 15**),
 `src/user/syscall.cpp`, `src/proc/io.h` and `io.cpp`, `web/svc.js` (the `OP`
 table and a `perform` arm), `test/fakesvc.mjs` (whose switch fails closed on an
 op it does not know), `test/unit/`.
+
+`doc/System_Calls.md`'s row for it already exists (P1) and says what the payload
+carries; this is where it stops being reserved. Drop it from the reserved note
+under the table, move `PROC_ABI` in the ABI-history paragraph and at `:262`, and
+correct Concept.md's count sentence.
 
 §8 is load-bearing here: where the browser has no Ed25519 the operation answers
 `Err(Unsupported)` and `pkg` **refuses to run**. It must be impossible for that
@@ -154,7 +174,9 @@ tampered one, and rejects a signature by the wrong key.
 
 Payload in, descriptor out. Needs a `Handle::Kind::Inflate` in
 `src/user/proctab.h` with its arms in `shut()`, in `Sys::Read` and in
-`Sys::Close`. `Sys::Inflate = 58`.
+`Sys::Close`, and a row in `doc/System_Calls.md` §9's handle-kind table.
+`Sys::Inflate = 58`, **`PROC_ABI` to 16**, and the reserved note under the
+async table goes with it.
 
 The compressed input is capped at `SYS_STAGE_MAX` (1 MiB) because it is one
 staged payload; the output is not capped. A compressed entry larger than that
@@ -279,39 +301,51 @@ Done when: it reads `rootfs.zip` itself and produces the same entries
 
 ### P11. The local store
 
-`db.cpp`: read and write `/pkg/gen/<N>`, `/pkg/active`, `/pkg/world` and the
-installed-db stanzas.
+`db.cpp`: read and write `/pkg/gen/<N>` and its `bin/` link farm, `/pkg/world`
+and the installed-db stanzas, and read `/pkg/active` — which is a symlink, so
+`read_link` and not `Read`.
 
-Two helpers have to be written because the system does not have them. There is
-**no recursive `mkdir`** — `Sys::MkDir` is one level and refuses an existing
-directory, so this is a walk over the components tolerating `Error::Exists`,
-the way `web/fs.js`'s `installOps` and `boot.cpp`'s `make_dirs` each do it. And
-there is **no `rename`**, so moving a file is a copy and a remove. `Sys::Remove`
-does have a recursive bit, which is what drops a store directory.
+One helper has to be written because the system does not have it. There is **no
+recursive `mkdir`** — `Sys::MkDir` is one level and refuses an existing
+directory (`vfs_mkdir`, `src/fs/vfs.cpp`), so this is a walk over the components
+tolerating `Error::Exists`, the way `web/fs.js`'s `installOps` does it;
+`boot.cpp`'s `make_dirs` is a fixed list and not a helper, and `mkdir` has no
+`-p`.
+
+`rename_path` (`src/proc/io.h`, over `Sys::Rename`) does exist. Its
+`Err(Unsupported)` means "copy instead" — a directory, or a move across mounts —
+and `/bin/mv`'s `move_one` and `copy_tree` (`src/cmd/mv.cpp`) are the worked
+example, including how they recreate a symlink rather than following it.
+`Sys::Remove` has a recursive bit, which is what drops a store directory.
 
 Done when: a generation written and read back is identical, and a `/pkg` tree
 built from nothing has the right shape.
 
-### P12. The `exec_resolve` search path
+### P12. Activation, by symlink
 
-**Reconsider this one first: `exec_resolve` searches `PATH` now.** A generation
-whose commands are symlinked into one directory that `PATH` names is most of
-this step for none of the code, and it keeps the kernel out of `/pkg`'s file
-formats. What is written below is the alternative, and it needs an argument now
-that it did not need when `/bin` was the whole search.
+`exec_resolve` is not touched. The whole of the kernel half is one word:
+`SYS_PATH_DEFAULT` (`src/kernel/sysabi.h`) becomes `/bin:/pkg/bin`, and init
+plants the same thing (`src/user/boot.cpp`). `/bin` first, so nothing installed
+shadows the system; `/pkg/bin` is a symlink to `active/bin` and `active` a
+symlink to the live generation, so a `pkg install` changes what a command word
+finds without anything being told.
 
-`src/user/exec.cpp` — a clause after `PATH`. This is the kernel half
-of activation and it is small: read `/pkg/active`, read `/pkg/gen/<N>`, take the
-line naming the command, resolve the binary under `/pkg/store/`.
+It degrades quietly for free, and that is the point of doing it this way. A
+missing `/pkg`, a dangling `/pkg/active`, a farm entry pointing at nothing and a
+name no generation lists are all a `PATH` component that finds nothing — already
+`Err(NotFound)` and 127, already tested, and no new failure path in the kernel
+to get wrong. A component that is not a directory is skipped for the same
+reason (`exec.cpp` continues on `NotFound`, `NotDir` and `IsDir`).
 
-It must degrade quietly. A missing `/pkg`, a missing `/pkg/active`, a
-generation file that does not parse, or a name the generation does not list are
-all "command not found" — never an error, and never a boot that will not
-finish.
+The one thing to check is that `PATH` is a **default** and not a floor: a
+process spawned with `PATH=/x` searches `/x` alone, installed programs included,
+which is what a `PATH` that steers resolution has to mean.
 
-Done when: `test/run.mjs` runs a binary placed by hand in a fabricated
-`/pkg/store` with a hand-written generation; `/bin` still wins for a name in
-both; and each of the four degraded cases gives 127.
+Done when: `test/run.mjs` runs a binary reached through a hand-built
+`/pkg/store`, `/pkg/gen/1/bin` link farm and `/pkg/active` symlink; `/bin` still
+wins for a name in both; and a missing `/pkg`, a dangling `/pkg/active` and a
+farm entry pointing at nothing each give 127. Also that `/pkg` survives a
+version change, which is `web/fs.js`'s unpack naming only `bin` and `share`.
 
 ---
 
@@ -429,8 +463,8 @@ or `so:`, and the ones dropped are listed with a reason.
 2. Stream it through SHA-256 while writing it to `/pkg/cache/`.
 3. Compare hash **and** size against the index.
 4. Only now unzip, into `/pkg/store/<name>-<version>/`.
-5. Write `/pkg/gen/<N+1>` whole.
-6. Write `/pkg/active`.
+5. Write `/pkg/gen/<N+1>` whole, and materialise its `bin/` link farm.
+6. Write `/pkg/active.new` and `Sys::Rename` it over `/pkg/active`.
 
 Step 3 to step 4 is the rule's only crossing point, and it should read that way
 in the code.
@@ -439,7 +473,8 @@ Record the index version that vouched for each package (§7's last paragraph), s
 a reinstall re-checks rather than believing the disk.
 
 Done when: an install works, a hash mismatch leaves nothing behind, and killing
-the tab between steps 5 and 6 leaves the old generation active.
+the tab between steps 5 and 6 leaves the old generation active — the link never
+having moved.
 
 ### P19. `pkg remove` / `pkg autoremove`
 
@@ -475,10 +510,12 @@ needs, and a clean that removes it removes the property P18 was built for.
 
 ## Phase F — scripts and triggers
 
-**Blocked on P1.** §11 forbids install scripts today, and the argument it makes
-is not weak: a package that runs code at install time is a package whose
-signature authorises arbitrary execution rather than file contents. Do not start
-this phase until that paragraph has been rewritten with an answer.
+**Unblocked by P1.** §11 permits install scripts and says what one is: an
+ordinary `/bin/sh` process with the authority of whoever typed `pkg install`,
+because there is no privilege boundary here to give it less. Build to that
+paragraph — in particular, nothing below is allowed to imply a fence §11 says
+does not exist, and a package that only places files must still run no code at
+all.
 
 ### P23. `cmd:`
 
@@ -536,7 +573,7 @@ cases for the happy path and for every attack §3 names:
 - an index whose version went backwards;
 - a name the index does not list;
 - a body longer than the size the index gave;
-- a tab that dies between the store write and the `/pkg/active` write.
+- a tab that dies between the store write and the `/pkg/active` rename.
 
 Each must be a refusal that says which check failed. A test that only proves the
 happy path proves nothing here.

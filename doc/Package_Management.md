@@ -411,13 +411,19 @@ install. Nothing re-reads the store afterwards, and anything can overwrite
 `/bin/pkg` itself. §7's record makes a *reinstall* meaningful. It does not make
 the store tamper-evident.
 
-**A version change erases installed packages.** The unpack deletes each
+**A version change erases installed packages.** The unpack replaces each
 top-level directory the archive carries, and `bin` and `share` are exactly
 those. Anything `pkg` put in `/bin` is gone at the next release, along with a
 locally trusted key under `/share/pkg/`. For the anchor this is the property §6
 relies on. It is also why `pkg`'s record of what it installed belongs in a
 directory the archive does not carry, so a wipe is fixed by reinstalling, and
 re-checking.
+
+`/pkg` is that directory. The archive names `bin` and `share` and no other, so
+the store, the generations and the symlinks that activate one all survive an
+unpack — and `PATH` reaching them survives too, because its default is the
+kernel's (Concept.md §4) and not a file in the store. What a release replaces is
+the system; what it leaves standing is what `pkg` installed.
 
 **The clock is the user's, and expiry depends on it.** A clock set far enough
 back makes an expired index look current, which reopens the freeze attack for
@@ -435,11 +441,30 @@ cross-origin answer the page cannot read comes back as `Err(Perm)` from
 published the bytes. It says nothing about what they were built from, by whom,
 or whether the same source yields them again.
 
-**No install scripts, on purpose.** A package that could run code at install
-time would be a package whose signature authorises arbitrary execution rather
-than file contents, which puts every gap above within reach of a signed package.
-Adding them is a design change to argue in Concept.md first, and it needs an
-answer to what such a script may touch.
+**Install scripts run, and a signature authorises execution.** A package may
+carry `pre-install`, `post-install` and their four relatives, and `pkg` runs
+each as an ordinary `/bin/sh` process through `Sys::Spawn`. So the honest
+statement of what a script may touch is: **everything the person who typed
+`pkg install` may touch**, which is the whole store — `/home`, `/bin`, `/pkg`
+itself. That is not a concession granted to scripts. It is the first paragraph
+of this section restated: there is no privilege boundary here to put one behind,
+so a fence drawn around a script would be a drawing and not a fence, and writing
+it down would claim exactly the guarantee this section exists to disclaim.
+
+What that costs is the whole of the list above, brought within reach of a signed
+package instead of only a mistaken one. What it does not cost is §7's rule,
+which is unchanged: a script runs only after its package's hash matched a hash
+from a signed index, so the code that runs is the publisher's and never the
+network's. **The check moves nothing; it is what the script's authority is
+traced back to.** A repository that can rewrite a package still cannot make one
+run, and that was the property being bought all along.
+
+Two smaller rules follow. A failing script marks its package broken and is
+recorded rather than aborting the transaction — apk's behaviour, and what gives
+`pkg verify` something to find. And a script is not how a package installs its
+files: `pkg` unpacks those itself, from bytes it hashed, so a package that only
+places files runs no code at all and the common case keeps the stronger
+property.
 
 **Denial of service stays available** to anyone on the path (§3). The guarantee
 is that a client which cannot update knows it, not that it can.

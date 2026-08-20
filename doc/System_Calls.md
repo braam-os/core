@@ -741,6 +741,8 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 | 54 | `Pick` | — | — | the set's fd | `u32 count`, then `u32 len` and a name each |
 | 55 | `PickOpen` | the set's fd | `u32 index` | the file's fd | — |
 | 56 | `Fexport` | — | `u32 name_len`, the name, the bytes | 0 | — |
+| 57 | `Verify` | — | `u32 key_len`, `u32 sig_len`, the key, the signature, then the signed bytes | 0 for a good signature | — |
+| 58 | `Inflate` | — | the compressed bytes | the fd | — |
 | 64 | `KeyClaim` | bit 0 = take, else release | — | 0 | `u32 cols`, `u32 rows` |
 | 65 | `KeyRead` | — | — | 0 | `u32 code`, `u32 mods`, `u32 cols`, `u32 rows` |
 | 66 | `ScreenEnter` | bit 0 = enter, else leave | — | 0 | `u32 cols`, `u32 rows` |
@@ -758,6 +760,14 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 
 Every multi-byte field is little-endian, and a `u64` is a low word then a high
 word.
+
+**57 and 58 are reserved, and are not in `src/kernel/sysabi.h`.** They are what
+`/bin/pkg` needs and `/bin/pkg` does not exist, so §8's opening rule — every
+operation has a caller in `src/cmd/` — is not yet met by either. The shape is
+written here because a signature check and a decompressor are the two places a
+package manager can be got wrong quietly, and settling what crosses the boundary
+before anything crosses it is the whole of that argument. `Sys` gains each one
+with its caller; `PROC_ABI` moves to 15 and then 16 as it does.
 
 `Chdir` sits at 25 rather than with the process family because it is the state
 `Open`, `Stat`, `List`, `MkDir`, `Remove` and `Touch` resolve *against* — it
@@ -841,13 +851,45 @@ widening `Stat` and `List`'s replies and taking op 24 for `Touch`, which pushed
 `Chdir` and `Dup` up one. Symbolic links moved it from 12 to 13, taking ops
 27 and 28 — the sparse numbering meant nothing had to move for once — adding a
 third value to `SYS_KIND_*` and an argument to `Stat`. `Rename` moved it from 13
-to 14, taking op 29 beside them.) That operation used to
+to 14, taking op 29 beside them. `Verify` and `Inflate` will move it to 15 and
+then 16, one commit each, when `/bin/pkg` calls them.) That operation used to
 refuse a handle with
 `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
 *descriptor* raises that count too, so every duplicated fd would have been
 unspawnable. The test is now the `busy_r`/`busy_w` flags, which is what the
 sentence always meant. Two slots may still not name the same number; `2>&1`
 gives them two numbers over one handle instead.
+
+**`Verify` answers yes or no, and an error is neither.** The payload is a public
+key, a signature and the bytes they were made over, all staged together because
+a signature over bytes the kernel fetched separately would be a signature over
+whichever bytes arrived last. A status of 0 means the signature is good;
+`-Error::Perm` means it is bad, which is an answer and not a fault; and
+`-Error::Unsupported` means the browser has no Ed25519, which is a fault and
+must not be read as either of the first two. Concept.md §6 is why the check is
+the host's: WebCrypto is a promise, so it is already this convention, and the
+host is inside the trusted base whatever it does.
+
+**There is no digest operation, and that is the interesting half.**
+`crypto.subtle.digest` takes a whole message, so a SHA-256 here would mean
+staging every byte to be hashed through `SYS_STAGE_MAX` — a megabyte, and
+therefore a cap on how large a package could be, imposed by the shape of a
+syscall rather than by anything about packages. A program hashes its own bytes
+instead, off a descriptor, a chunk at a time, and nothing large crosses the
+boundary. The rule that a stream of bytes comes back as a descriptor cuts both
+ways: what a program can already read a chunk at a time, it can already digest a
+chunk at a time.
+
+**`Inflate` is a descriptor because its output has no size to declare.** The
+compressed bytes go in as one staged payload and are therefore bounded by
+`SYS_STAGE_MAX`; what comes back is an fd, so `Read` walks it and `Close` drops
+it exactly as they do a fetched body, and a decompressed entry a hundred times
+the size of its input costs one reply per chunk instead of one enormous one. The
+asymmetry is deliberate and is the operation's whole value: a bound where the
+caller can honour it, none where the format decides. An entry too large to stage
+is refused rather than worked around, and a truncated stream is an error rather
+than a short read — a decompressor that stops early has not finished, and saying
+so is the difference between a broken package and a quiet one.
 
 **`Cursor` is the scrolling screen's, not the alternate one's.** `Write` moves
 the cursor as a side effect — it goes through the same `screen_write` that wraps
@@ -933,7 +975,7 @@ shape of your own output is not a claim on the screen. The geometry rides on the
 reply for `KeyRead`'s reason, a resize needing no event to subscribe to, and is
 **zero when the answer is no**: a pipe has no width, and one invented here would
 be believed. The reply is a *flags* word rather than a bare status so a second
-fact about a terminal costs no thirty-eighth operation, which is what
+fact about a terminal costs no operation of its own, which is what
 `SYS_STORE_*` bought `Storage`. `/bin/ls` is the caller: with the grid it lays
 out in columns, and into a pipe it prints one name per line, which is what keeps
 `ls | grep` meaning what it did.

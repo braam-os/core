@@ -25,6 +25,109 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## The decisions `/bin/pkg` cannot take back
+
+[Package_Management.md](Package_Management.md) was written before the package
+manager because a key made on a networked machine is never afterwards an offline
+key. The development plan under `src/cmd/pkg/` opens with the same move for a
+different reason: three of its decisions stop being decisions the moment code
+embodies them, and one of them had already changed under it. This is that first
+step — five documents amended, no code — and what follows is why each says what
+it now says.
+
+**Activation is symbolic links on `PATH`, and the kernel gains nothing.** The
+plan was written when `/bin` was the whole of command resolution, and it
+proposed a fourth clause in `exec_resolve`: on a miss, read `/pkg`'s record of
+which generation is live, read that generation, take the line naming the
+command. Three commits since — symbolic links, `Sys::Rename`, and `PATH` read
+out of the environment a spawn carries — have between them made the clause pure
+cost. A generation materialised as a directory of links into the store, named by
+a `/pkg/bin` that the default search list mentions after `/bin`, is the same
+activation with no kernel code at all, and the property that mattered survives
+unchanged: `/bin` is searched first, so nothing installed can shadow the system.
+What the clause would have bought instead is worth naming, because it is what
+was given up: the kernel learning two of `/pkg`'s file formats, two file reads
+on every failed lookup at a prompt, and four distinct ways of being
+half-installed that each had to degrade into an ordinary "command not found"
+rather than a boot that would not finish. **A rename is already the commit point a generation
+wants**, which is the part that makes the trade lopsided rather than merely
+favourable. Writing the new generation whole and then swinging one link over it
+is Nix's arrangement, and a tab that dies before the swing has left rubbish a
+`pkg clean` collects rather than a system half-upgraded.
+
+**`/pkg` is a top-level directory the archive does not carry, which is §6 read
+backwards.** The unpack replaces `bin` and `share` and names no other directory,
+and Package_Management.md §6 leans on exactly that to guarantee the trust anchor
+cannot be poisoned in the store for good: it is re-pinned from the archive at
+every version change. The same sentence, read from the other end, says that
+anything *not* in the archive survives a release — so the store, the
+generations, and the links that activate one all keep. `PATH` reaching them
+keeps too, because the default is a constant in the kernel and not a file
+anybody can lose. A version change therefore replaces the system and leaves what
+`pkg` installed standing, which is the arrangement that makes "a wipe is fixed
+by reinstalling" true of `/bin` without being true of everything.
+
+**SHA-256 moved into wasm; the signature check did not.** The two look like one
+decision and are not. A signature check is a promise on the host side, which is
+Concept.md §2.2's convention already, and the host is inside the trusted base
+unconditionally — a host willing to lie about `crypto.subtle.verify` could
+simply hand over a different `pkg.wasm`, so a verifier there widens nothing. A
+digest is a different shape: `crypto.subtle.digest` wants the whole message, so
+taking a package's hash on the host would mean staging every byte of it through
+`SYS_STAGE_MAX`, and a megabyte cap on how large a package may be would have
+been imposed by the shape of a syscall rather than by anything true about
+packages. Hashing in wasm, off the fetch descriptor, a chunk at a time, costs a
+few hundred bytes of `pkg` and nothing large ever crosses the boundary. **The
+rule that a stream of bytes comes back as a descriptor cuts both ways**: what a
+program can already read a chunk at a time, it can already digest a chunk at a
+time, and the operation that would have been added was fighting that.
+
+**`Inflate` answers with a descriptor because its output has no size to
+declare.** Its input is one staged payload and is bounded by `SYS_STAGE_MAX`;
+its output is bounded by nothing, since a compressed entry decides how much it
+becomes. Capping the input and not the output is the asymmetry that makes the
+operation worth having rather than a flaw in it — a bound is placed where the
+caller can honour it and nowhere the format would get to choose. `Read` and
+`Close` then serve the result exactly as they serve a fetched body, so no
+operation is duplicated and a hundred-to-one entry costs one reply per chunk.
+An entry too large to stage is refused and the bound is documented, which is the
+alternative to a chunked `Inflate` that would have needed a session and a second
+operation to end it.
+
+**Two operation numbers are reserved in the reference before their code, and the
+rule they bend is stated where they sit.** Concept.md §4.3 says every operation
+has a caller in `src/cmd/`, and calls that a rule against growing the table on
+speculation. `Verify` and `Inflate` are in System_Calls.md's table at 57 and 58,
+and in neither `Sys` nor `SvcOp`, precisely so the rule keeps its teeth: nothing
+in the tree can issue them, `PROC_ABI` is still 14, and no stamped binary has
+been invalidated by a document. What the reservation buys is that the shape of
+the two crossings a package manager can get wrong quietly — what a signature is
+taken over, and what a decompressor is allowed to hand back — is settled and
+reviewable before anything is written against it. The numbers themselves are
+free real estate: the host-services group runs 48 to 56 and the terminal group
+starts at 64, and sparse numbering was put there for this.
+
+**§11's ban on install scripts was rewritten rather than kept, because it
+forbade what nothing could enforce.** The old paragraph argued that a package
+running code at install time is a package whose signature authorises arbitrary
+execution rather than file contents. That argument is sound and its conclusion
+still does not follow, for the reason §11's own first paragraph gives: there is
+no privilege boundary here to put a script behind. OPFS stores no per-file mode,
+every mount but `/proc` is the one read-write store, and `rm /bin/sh` already
+works from a prompt. A fence drawn around a script would have been a drawing,
+and the section that exists to disclaim guarantees the system does not have is
+the last place to add one. So the paragraph now says what a script *is* — an
+ordinary `/bin/sh` process with exactly the authority of whoever typed `pkg
+install` — and what that costs, which is the whole of §11 brought within reach
+of a signed package rather than only a mistaken one. **What it does not cost is
+the rule the document was written for.** A script still runs only after its
+package's hash matched a hash from a signed index, so the code that runs is the
+publisher's and never the network's; the check moves nothing, it is what the
+script's authority is traced back to. A repository that can rewrite a package
+still cannot make one run. And a package that only places files runs nothing at
+all, since `pkg` unpacks those itself from bytes it hashed, so the common case
+keeps the stronger property.
+
 ## `help` is a document, and `less` is a `cat` off a terminal
 
 `help` was the twenty-seventh builtin: it printed the table with a usage string

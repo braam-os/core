@@ -612,6 +612,23 @@ script could believe. A word with a `/` in it is a path and is never searched;
 an environment naming no `PATH` searches `/bin`, which is where the archive puts
 the binaries and what the constant used to be.
 
+**There is no fourth clause, and installed software does not get one.** A
+package manager reaches its programs the way anything else does: by putting a
+directory on `PATH`. The design is in
+[Package_Management.md](Package_Management.md) — a generation of installed
+packages is materialised as a directory of symbolic links into `/pkg/store/`,
+`/pkg/bin` names the live one, and the default search list becomes
+`/bin:/pkg/bin` with `/bin` first, so nothing installed can shadow the system.
+**Unbuilt**: `/bin/pkg` does not exist and the constant is still `/bin`. What is
+settled is that the kernel gains nothing when it does. The alternative was a
+clause in `exec_resolve` after the `PATH` search, reading `/pkg`'s own record of
+which generation is active and which command it names — two file formats the
+kernel would have to learn, two reads on every failed lookup, and four ways of
+being half-installed that each had to come back as an ordinary "command not
+found" rather than a boot that would not finish. Symbolic links, `PATH` and a
+rename buy the same activation with no kernel code at all, and a rename is
+already the commit point a generation needs.
+
 Either way a builtin pipes and redirects through descriptors like anything else,
 but runs **in its turn rather than alongside**, since nothing inside a process
 can wait for a sibling task. So **a builtin buffers its output and writes it
@@ -737,7 +754,12 @@ The wire's conventions:
 `exit`, `getpid`, `now`, `stage` — and thirty-eight asynchronous. `Rename` is
 the newest: it is what `/bin/mv` tries before it falls back to copying, and the
 only way a move keeps a modification time the system has no setter for.
-[System_Calls.md](System_Calls.md) lists them all with what each carries.
+[System_Calls.md](System_Calls.md) lists them all with what each carries. Two
+numbers past the end of the host-services group are spoken for and are not in
+the table: 57 and 58, `Verify` and `Inflate`, which `/bin/pkg` needs (§6). The
+reference describes them so the shape cannot be argued twice; `Sys` gains them
+when the program that calls them exists, and `PROC_ABI` moves to 15 and then 16
+as each does.
 
 Four rules bound the table:
 
@@ -1003,11 +1025,18 @@ unbuilt:
 ```
 
 **Two mounts, and one of them is generated.** Everything a user can name is in
-the one store: `/bin`, `/share`, `/home`, `/tmp` and `/import` are directories
-in it, not filesystems of their own. There is no `/usr`, and no `/mnt` either: a
-directory named for mounting would promise a second filesystem there is no way
-to have. `fimport` writes the picker's bytes into `/import` like anything else —
-bytes are not a filesystem.
+the one store: `/bin`, `/share`, `/home`, `/tmp`, `/import` and `/pkg` are
+directories in it, not filesystems of their own. There is no `/usr`, and no
+`/mnt` either: a directory named for mounting would promise a second filesystem
+there is no way to have. `fimport` writes the picker's bytes into `/import` like
+anything else — bytes are not a filesystem.
+
+`/pkg` is what a package manager installs into, and the archive does not carry
+it — deliberately, since the unpack replaces what the archive does carry (§5.2)
+and would take an installed program with it. Its layout is
+[Package_Management.md](Package_Management.md)'s and the kernel knows none of
+it: what reaches an installed program is `/pkg/bin` on the default `PATH` (§4),
+which is a symbolic link and not a mount. **Unbuilt**, with `/bin/pkg`.
 
 `/bin`, `/share` and `/README` are put there at boot by unpacking `rootfs.zip`,
 a deflated zip beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js`
@@ -1107,9 +1136,9 @@ of the kernel that wrote it, and boot compares it against its own. A mismatch is
 the user's decision — the prompt is on the grid before the shell, since a stale
 `/bin` may be exactly what they want kept — and declining boots on what is
 stored. The unpack replaces the top-level directories the archive carries, `bin`
-and `share`, and never names any other, so `/home` cannot be lost to one. The
-stamp is written last, so an interrupted unpack is done again rather than
-believed.
+and `share`, and never names any other, so `/home` and `/pkg` cannot be lost to
+one. The stamp is written last, so an interrupted unpack is done again rather
+than believed.
 
 That is also what a writable `/bin` is held up by. `rm /bin/sh` is reachable
 from the prompt and the stamp would still match, so `no_shell` offers the unpack
@@ -1278,13 +1307,27 @@ an enum value on each side.
   host, which is this convention exactly, so they are operations here rather
   than an interface of their own; `aux` in the request record is the pid they
   name.
-- **A digest and a signature check** — `crypto.subtle`, for the hash of a
-  downloaded package and the signature over the index that names it.
-  **Unbuilt**: nothing needs it until `/bin/pkg` exists, and what it must
-  guarantee is [Package_Management.md](Package_Management.md). It belongs here
-  and not in wasm because WebCrypto is a promise, so it is this convention
-  already — and because the host is inside the trusted base unconditionally, a
-  verifier there widens nothing.
+- **A signature check** — `crypto.subtle.verify`, Ed25519, over the index that
+  names a package's hash. **Unbuilt**: nothing needs it until `/bin/pkg` exists,
+  and what it must guarantee is
+  [Package_Management.md](Package_Management.md). It belongs here and not in
+  wasm because WebCrypto is a promise, so it is this convention already — and
+  because the host is inside the trusted base unconditionally, a verifier there
+  widens nothing. A browser without the algorithm answers `Err(Unsupported)`,
+  which stops `pkg` rather than skipping a check.
+- **A digest is not one of these, and is compiled into `pkg` instead.**
+  `crypto.subtle.digest` is one-shot: it wants the whole message, so a hash
+  taken here would mean staging a whole package through `SYS_STAGE_MAX` and
+  capping a package at a megabyte to keep it. SHA-256 in wasm hashes the body as
+  it comes off the fetch descriptor, and nothing large crosses the boundary at
+  all. The convention bends for a streaming primitive, which is the one thing an
+  operation on a request record cannot express.
+- **Inflate** — `DecompressionStream("deflate-raw")`, so a program can read a
+  zip the way `web/fs.js` reads the archive. The compressed bytes go in and a
+  descriptor comes back, so `read` and `close` serve it exactly as they serve a
+  fetched body. Its input is one staged payload and is therefore capped at
+  `SYS_STAGE_MAX`; its output is not capped, which is the asymmetry that makes
+  the operation worth having. **Unbuilt**, with the check above.
 
 Every one of them is a promise on the host side, so every one takes a wake token
 and §2.2 is untouched. The wall clock is the near miss — `Date.now()` is as
