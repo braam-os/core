@@ -19,7 +19,7 @@ namespace {
 // argv[0] and one space; a longer one is cut to the column. The two pid columns
 // are minimums, widened to fit.
 constexpr usize W_PID = 5, W_PPID = 5, W_NAME = 13, W_STAT = 5;
-constexpr usize W_WAIT = 6, W_CALLS = 6, W_FDS = 4, W_MEM = 6, W_AGE = 8;
+constexpr usize W_WAIT = 6, W_CALLS = 6, W_FDS = 4, W_MEM = 6, W_AGE = 9;
 
 // The two pid columns, over every row: the widest value plus one, since nothing
 // but the padding separates them.

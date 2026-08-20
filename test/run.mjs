@@ -1699,7 +1699,7 @@ if (mode === "--kernel") {
     // /proc, so neither file names one.
     s = submit("ps", 1185.2);
     const ps = rows(s);
-    if (!ps.includes("  PID PPID NAME         STAT WAIT   CALLS FDS   MEM ELAPSED  CWD"))
+    if (!ps.includes("  PID PPID NAME         STAT WAIT   CALLS FDS   MEM  ELAPSED  CWD"))
         fail(`ps did not head the table: ${JSON.stringify(ps)}`);
     if (!ps.some((line) => /^ +1 +- tty +[RS] +\S+ +- +- +- +\d+:\d\d +-$/.test(line)))
         fail(`ps did not show the pump as a kernel task: ${JSON.stringify(ps)}`);
