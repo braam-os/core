@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 15;
+constexpr u32 PROC_ABI       = 16;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -172,6 +172,9 @@ enum class Sys : u32 {
     // Ed25519. Status 0 is a good signature, Err(Perm) a bad one and
     // Err(Unsupported) a browser without the algorithm.
     Verify, // payload = u32 key_len, u32 sig_len, the key, the signature, the bytes
+
+    // Raw deflate. The input is capped at SYS_STAGE_MAX; the output is not.
+    Inflate, // payload = the compressed bytes;  status = the fd
 
     // The terminal. Cells, never a byte stream (§2.3), so a full-screen
     // program paints a grid of its own and blits the part of it that changed.

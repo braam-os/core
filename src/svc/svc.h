@@ -35,8 +35,9 @@ enum class SvcOp : u32 {
     ProcKill,  // req = pid; no record, no reply
 
     // Appended, never inserted: web/svc.js restates these numbers by hand.
-    Verify, // buf = u32 key_len, u32 sig_len, the key, the signature, the bytes
-            //   -> status 0 good, Err(Perm) bad, Err(Unsupported) no Ed25519
+    Verify,  // buf = u32 key_len, u32 sig_len, the key, the signature, the bytes
+             //   -> status 0 good, Err(Perm) bad, Err(Unsupported) no Ed25519
+    Inflate, // buf = the compressed bytes -> ref = the inflated stream
 };
 
 // A service operation. The record's inline string argument is a URL or a name.

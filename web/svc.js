@@ -30,6 +30,7 @@ export const OP = {
     PROC_STEP: 17,
     PROC_KILL: 18,
     VERIFY: 19,
+    INFLATE: 20,
 };
 
 const utf8 = new TextEncoder();
@@ -398,6 +399,16 @@ export function makeSvcImport(mem, deposit, relay, reply, proc) {
                 r.ok();
             else
                 r.fail(E.PERM);
+            return;
+        }
+
+        // A reader like a fetch body's, so OP.READ and OP.DROP serve it
+        // unchanged. A corrupt stream errors on a later read, not here.
+        case OP.INFLATE: {
+            const s = new Blob([r.bytes()]).stream()
+                .pipeThrough(new DecompressionStream("deflate-raw"));
+            deposit(r.get("ref"), { reader: s.getReader(), left: null, done: false });
+            r.ok();
             return;
         }
 

@@ -25,6 +25,59 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A decompressor that hands back a stream, not a buffer
+
+`Sys::Inflate` is op 58 and `SvcOp::Inflate` is 20; `PROC_ABI` moves to 16. Raw
+deflate goes in as one staged payload and a descriptor comes back, so `Read` and
+`Close` serve it as they serve a fetched body. With `Verify` before it, Phase B
+of `src/cmd/pkg/TODO.md` is done and `/bin/pkg` has everything it needs from the
+host.
+
+**The host hands back a reader, and `OP.READ` did not change at all.**
+`web/svc.js` already builds `{reader, left, done}` for a fetch body and
+`readBody` pulls chunks from it; a `DecompressionStream` gives a reader with the
+same contract, so the new arm is three lines and `OP.READ` and `OP.DROP` are
+untouched — `DROP` already cancels a reader that never reached its end. The
+alternative was to inflate eagerly into one JS buffer, which is what
+`web/fs.js` does for the boot archive and would have been fewer lines here too.
+**It is the wrong shape for a package manager.** A megabyte of compressed input
+is allowed to become a gigabyte, and a caller that streams can stop when the
+zip's own header says it has had enough, where a caller handed a finished buffer
+is told about the bomb only after it has gone off. The bound belongs where the
+caller can enforce it.
+
+**`Handle::Kind::Inflate` shares `Kind::Body`'s storage, which is not the
+compromise it looks like.** `Handle` holds every payload as a plain member
+rather than a union, so a `JsHandle` of its own would have grown every
+descriptor in the system to serve one kind; reusing `HttpResponse` costs
+nothing and leaves `status` and `headers` zero. Reusing `Kind::Body` *itself*
+would have cost even less — no new arms anywhere — and was rejected because the
+tag would then be lying about what the descriptor is, which is the sort of thing
+that reads fine until someone prints it. What did get renamed is `http_read`,
+now `stream_read`: it never named anything but `SvcOp::Read` on a slot, and the
+HTTP was in the name alone.
+
+**Two failure modes are asymmetric, and one of them is worth knowing about.**
+`Handle::shut()`'s switch is over a scoped enum with no `default`, so a kind
+without an arm is a compile error. `Sys::Read`'s chain starts at
+`r = Err(Error::Perm)` and falls through, so a kind without a branch is a silent
+runtime refusal — which is why the read path is the one the tests actually walk.
+
+**Where a truncated stream fails is deliberately unspecified.** A browser
+delivers the chunks it already had and fails the read that reaches the damage;
+`test/fakesvc.mjs`, whose `perform` must answer synchronously and so uses
+`node:zlib`'s `inflateRawSync`, fails the `Inflate` itself. Both are errors and
+neither is a clean end of stream, so that is what the guarantee says and what
+the test asserts. Pinning the timing would have written the fake's shape into
+the contract.
+
+**The tests are two vectors and a cut.** One inflates to 65 bytes and fits a
+single `SYS_CHUNK`; one inflates to 1500 and takes three, which is the only
+thing that proves the read loop runs — a single-chunk bug returns 512 and looks
+like success otherwise. Both were checked by sabotage: returning the input
+uninflated fails them with 10 and 19 bytes, and deleting the fake's arm fails
+them with none. `kernel.wasm` grew 1,318 bytes, to 175,061 of 262,144.
+
 ## A signature check, and a refusal that cannot be mistaken for a pass
 
 `Sys::Verify` is op 57 and `SvcOp::Verify` is 19: Ed25519 over

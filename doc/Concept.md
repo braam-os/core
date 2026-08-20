@@ -750,15 +750,12 @@ The wire's conventions:
   and its own scheduler job, so a socket read that never completes cannot starve
   the keystroke behind it.
 
-**The table is forty-three operations and `PROC_ABI` is 15**: four synchronous —
-`exit`, `getpid`, `now`, `stage` — and thirty-nine asynchronous. `Verify` is the
-newest: Ed25519 over `crypto.subtle`, which is what a package manager checks a
-repository's index with before it believes a word of it.
-[System_Calls.md](System_Calls.md) lists them all with what each carries. One
-number past it is spoken for and not in the table: 58, `Inflate`, which
-`/bin/pkg` needs (§6). The reference describes it so the shape cannot be argued
-twice; `Sys` gains it when the program that calls it exists, and `PROC_ABI`
-moves to 16 then.
+**The table is forty-four operations and `PROC_ABI` is 16**: four synchronous —
+`exit`, `getpid`, `now`, `stage` — and forty asynchronous. `Verify` and
+`Inflate` are the newest, and are what `/bin/pkg` needs of the host (§6): a
+signature checked before an index is believed, and a way to read a zip that is
+not the boot archive. [System_Calls.md](System_Calls.md) lists them all with
+what each carries.
 
 Four rules bound the table:
 
@@ -1325,7 +1322,7 @@ an enum value on each side.
   descriptor comes back, so `read` and `close` serve it exactly as they serve a
   fetched body. Its input is one staged payload and is therefore capped at
   `SYS_STAGE_MAX`; its output is not capped, which is the asymmetry that makes
-  the operation worth having. **Unbuilt**, with the check above.
+  the operation worth having.
 
 Every one of them is a promise on the host side, so every one takes a wake token
 and §2.2 is untouched. The wall clock is the near miss — `Date.now()` is as

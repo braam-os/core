@@ -65,7 +65,16 @@ struct PipeEnd {
 // the externref slot and the host object with it, with no code of its own to
 // reach.
 struct Handle {
-    enum class Kind : u8 { File, Body, Socket, PickSet, PickFile, PipeRead, PipeWrite };
+    enum class Kind : u8 {
+        File,
+        Body,
+        Inflate, // Body's storage: a stream with no status and no headers
+        Socket,
+        PickSet,
+        PickFile,
+        PipeRead,
+        PipeWrite,
+    };
 
     explicit Handle(Kind k) : kind(k) {}
 
@@ -82,6 +91,7 @@ struct Handle {
             file.reset();
             break;
         case Kind::Body:
+        case Kind::Inflate:
             res.body.drop();
             break;
         case Kind::Socket:
@@ -106,7 +116,7 @@ struct Handle {
     u32 fds     = 1; // descriptors naming it: Sys::Dup makes a second
 
     FileIo file;      // File
-    HttpResponse res; // Body
+    HttpResponse res; // Body, Inflate
     WebSocket sock;   // Socket
     Picked pick;      // PickSet
     PipeEnd pipe;     // PipeRead, PipeWrite

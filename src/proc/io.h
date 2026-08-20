@@ -281,6 +281,11 @@ Task<Result<void>> fexport(Str name, Str bytes);
 // SYS_STAGE_MAX.
 Task<Result<bool>> verify_sig(Str key, Str sig, Str bytes);
 
+// Raw deflate in, a descriptor out — read with read_chunk until Err(Closed),
+// then close_fd. The input is capped at SYS_STAGE_MAX; the output is not. A
+// truncated stream is an error, not a short read.
+Task<Result<i32>> inflate(Str bytes);
+
 // A diagnostic on stderr: "who: what: why".
 Task<void> errln(Str who, Str what, Error why);
 

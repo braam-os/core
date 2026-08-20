@@ -153,6 +153,53 @@ Task<i32> ask_verify(Str key, Str sig, Str msg)
     co_return 0;
 }
 
+// Raw deflate, from the zlib tools/pack.py deflates with. The short one fits
+// one SYS_CHUNK; the long one takes three, which is what walks the read loop.
+const u8 DEF_SHORT[] = { 0x4b, 0x2a, 0x4a, 0x4c, 0xcc, 0x4d, 0xa2, 0x80, 0x00, 0x00 };
+const u8 DEF_LONG[]  = { 0x4b, 0x2a, 0x4a, 0x4c, 0xcc, 0x4d, 0x1a, 0x25, 0x46,
+                         0x89, 0x51, 0x62, 0x94, 0x18, 0x25, 0x86, 0x13, 0x01, 0x00 };
+
+usize inflated_size;
+bool inflated_ok;
+
+// Reads the stream to its end, checking it is "braam" over and over. Only a
+// clean end of stream sets inflated_ok, so a refusal at either point — the
+// operation or a later read — leaves it false.
+Task<i32> ask_inflate(Str deflated)
+{
+    inflated_ok   = false;
+    inflated_size = 0;
+
+    Result<HttpResponse> open = Err(Error::NoMemory);
+    if (Task<Result<HttpResponse>> t = svc_inflate(deflated))
+        open = co_await t;
+    answered = true;
+    if (open.is_err()) {
+        failure = open.error();
+        co_return 1;
+    }
+
+    bool ok = true;
+    for (;;) {
+        Result<String> chunk = Err(Error::NoMemory);
+        if (Task<Result<String>> t = stream_read(open.value()))
+            chunk = co_await t;
+        if (chunk.is_err()) {
+            failure = chunk.error();
+            co_return 1;
+        }
+        if (chunk.value().empty())
+            break;
+        Str s = chunk.value().str();
+        for (usize i = 0; i < s.size(); i++)
+            if (s[i] != "braam"[(inflated_size + i) % 5])
+                ok = false;
+        inflated_size += s.size();
+    }
+    inflated_ok = ok;
+    co_return 0;
+}
+
 } // namespace
 
 void test_svc()
@@ -280,6 +327,44 @@ void test_svc()
     CHECK(answered);
     CHECK(!verify_good);
     CHECK(failure == Error::Invalid);
+    CHECK_EQ(host_orphans(), 0);
+
+    // Inflate: payload in, descriptor out, read like a fetched body.
+    test_begin("svc: inflate, one chunk");
+    sched_reset();
+    answered = false;
+    CHECK(sched_spawn(ask_inflate(raw(DEF_SHORT, sizeof(DEF_SHORT)))) != 0);
+    CHECK_EQ(sched_tick(0), -1);
+    CHECK(answered);
+    CHECK(inflated_ok);
+    CHECK_EQ(inflated_size, 65);
+    CHECK_EQ(jsref_live(), live);
+    CHECK_EQ(host_orphans(), 0);
+
+    // Past one SYS_CHUNK, so the whole 1500 bytes only arrive if the loop runs.
+    test_begin("svc: inflate, three chunks");
+    sched_reset();
+    answered = false;
+    CHECK(sched_spawn(ask_inflate(raw(DEF_LONG, sizeof(DEF_LONG)))) != 0);
+    CHECK_EQ(sched_tick(0), -1);
+    CHECK(answered);
+    CHECK(inflated_ok);
+    CHECK_EQ(inflated_size, 1500);
+    CHECK_EQ(jsref_live(), live);
+    CHECK_EQ(host_orphans(), 0);
+
+    // Truncated: an error somewhere, never a short read that looks like an end.
+    // Where it lands differs — the fake refuses the operation, a browser fails
+    // a later read — so the case asserts the outcome and not the timing.
+    test_begin("svc: inflate, truncated");
+    sched_reset();
+    answered = false;
+    CHECK(sched_spawn(ask_inflate(raw(DEF_LONG, sizeof(DEF_LONG) - 2))) != 0);
+    CHECK_EQ(sched_tick(0), -1);
+    CHECK(answered);
+    CHECK(!inflated_ok);
+    CHECK(inflated_size < 1500);
+    CHECK_EQ(jsref_live(), live);
     CHECK_EQ(host_orphans(), 0);
 
     test_begin("svc");

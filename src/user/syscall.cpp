@@ -526,8 +526,8 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 HandleRef keep(set);
 
                 Result<String> r = Err(Error::Perm);
-                if (h->kind == Handle::Kind::Body) {
-                    CO_CALL(r, http_read(h->res));
+                if (h->kind == Handle::Kind::Body || h->kind == Handle::Kind::Inflate) {
+                    CO_CALL(r, stream_read(h->res));
                 } else if (h->kind == Handle::Kind::Socket) {
                     CO_CALL(r, ws_recv(h->sock));
                 } else if (h->kind == Handle::Kind::PickFile) {
@@ -914,6 +914,24 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
                 break;
             if (!reply_u32(reply, http) || !reply.append(headers.str()))
                 co_return Err(Error::NoMemory);
+            break;
+        }
+
+        case Sys::Inflate: {
+            Result<HttpResponse> r = Err(Error::NoMemory);
+            CO_CALL(r, svc_inflate(payload));
+            if (r.is_err()) {
+                status = -i32(r.error());
+                break;
+            }
+
+            Handle *h = heap_new<Handle>(Handle::Kind::Inflate);
+            if (!h) {
+                status = -i32(Error::NoMemory);
+                break;
+            }
+            h->res = move(r.value());
+            status = handle_bind(p, h);
             break;
         }
 

@@ -259,7 +259,7 @@ it, and how much memory to give it. It lives in a wasm custom section named
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 15
+    u32 abi;            // PROC_ABI, currently 16
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -761,17 +761,13 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 Every multi-byte field is little-endian, and a `u64` is a low word then a high
 word.
 
-**58 is reserved, and is not in `src/kernel/sysabi.h`.** It is what `/bin/pkg`
-needs and `/bin/pkg` does not exist. `Sys` gains it with its caller, and
-`PROC_ABI` moves to 16 when it does.
-
-**57 has no caller either, and landed anyway.** §8's opening rule bars *growing*
-the table on speculation, and this is not one: the row was specified, reviewed
-and committed before a line of it was written, and it is exercised by
-`test/unit/test_svc.cpp` against RFC 8032's vectors. `Cursor` and `Style` also
-have no caller in the tree — see below — so a table entry nothing in `src/cmd/`
-names is a thing this ABI already contains. The first real call is `pkg`'s
-checked-index pipeline.
+**57 and 58 have no caller in `src/cmd/`, and landed anyway.** §8's opening rule
+bars *growing* the table on speculation, and these are not that: both rows were
+specified, reviewed and committed before a line of either was written, and both
+are exercised by `test/unit/test_svc.cpp` — RFC 8032's vectors for one, a
+deflate round trip for the other. `Cursor` and `Style` also have no caller in
+the tree, so a table entry nothing in `src/cmd/` names is a thing this ABI
+already contains. `/bin/pkg` is what will call them.
 
 `Chdir` sits at 25 rather than with the process family because it is the state
 `Open`, `Stat`, `List`, `MkDir`, `Remove` and `Touch` resolve *against* — it
@@ -856,7 +852,8 @@ widening `Stat` and `List`'s replies and taking op 24 for `Touch`, which pushed
 27 and 28 — the sparse numbering meant nothing had to move for once — adding a
 third value to `SYS_KIND_*` and an argument to `Stat`. `Rename` moved it from 13
 to 14, taking op 29 beside them. `Verify` moved it from 14 to 15, taking op 57
-and adding no reply; `Inflate` will move it to 16.) That operation used to
+and adding no reply, and `Inflate` from 15 to 16, taking 58 and an eighth handle
+kind.) That operation used to
 refuse a handle with
 `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
 *descriptor* raises that count too, so every duplicated fd would have been
@@ -903,6 +900,13 @@ caller can honour it, none where the format decides. An entry too large to stage
 is refused rather than worked around, and a truncated stream is an error rather
 than a short read — a decompressor that stops early has not finished, and saying
 so is the difference between a broken package and a quiet one.
+
+**Where that error lands is not fixed, and callers must not assume it.** The
+host holds a reader over a `DecompressionStream`, so a browser delivers the
+chunks it already had and fails the read that reaches the damage;
+`test/fakesvc.mjs` inflates in one go and fails the `Inflate` itself. Both are
+errors and neither is a clean end of stream, which is the whole of the
+guarantee.
 
 **`Cursor` is the scrolling screen's, not the alternate one's.** `Write` moves
 the cursor as a side effect — it goes through the same `screen_write` that wraps
@@ -1123,12 +1127,13 @@ connected — the screen, a pipe, or a redirection — through the same `Stream`
 console uses. Everything from 3 up indexes a `Vec<Handle *>` on the kernel's
 process record.
 
-A `Handle` is a descriptor whatever is behind it, and there are seven kinds:
+A `Handle` is a descriptor whatever is behind it, and there are eight kinds:
 
 | Kind | Made by | Read | Write | Closed by |
 |---|---|---|---|---|
 | `File` | `Open` | `vfs_read` at its own offset | `vfs_write` | `Close` |
-| `Body` | `Fetch` | `http_read` | — | `Close` |
+| `Body` | `Fetch` | `stream_read` | — | `Close` |
+| `Inflate` | `Inflate` | `stream_read` | — | `Close` |
 | `Socket` | `WsOpen` | `ws_recv` | `ws_send` | `Close` |
 | `PickSet` | `Pick` | — | — | `Close` |
 | `PickFile` | `PickOpen` | `pick_read` | — | `Close` |

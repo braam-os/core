@@ -32,7 +32,19 @@ Task<Result<HttpResponse>> http_fetch(Str url, Str spec)
     co_return Err(Error::Io);
 }
 
-Task<Result<String>> http_read(const HttpResponse &res)
+Task<Result<HttpResponse>> svc_inflate(Str bytes)
+{
+    SvcCall c(SvcOp::Inflate, "", 0);
+    if (!c.ok() || !c.put(bytes) || !c.reserve_ref())
+        co_return Err(Error::NoMemory);
+    CO_TRY_VOID(co_await c);
+
+    HttpResponse res;
+    res.body = JsHandle(c.take_ref());
+    co_return move(res);
+}
+
+Task<Result<String>> stream_read(const HttpResponse &res)
 {
     SvcCall c(SvcOp::Read);
     if (!c.ok())

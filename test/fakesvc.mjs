@@ -9,6 +9,7 @@
 // request and is answered later, by a send or by the socket being dropped.
 
 import { createPublicKey, verify as nodeVerify } from "node:crypto";
+import { inflateRawSync } from "node:zlib";
 
 import { E, Request, statusOf, u32le } from "../web/abi.js";
 import { makeProc } from "../web/proc.js";
@@ -259,6 +260,21 @@ export function makeFakeSvc(mem, net, kernel) {
                 r.ok();
             else
                 r.fail(E.PERM);
+            return;
+        }
+
+        // Eagerly, because perform() is synchronous and DecompressionStream is
+        // not: the browser refuses a truncated stream on a later read, this
+        // refuses it here, and neither is a short read.
+        case OP.INFLATE: {
+            let out;
+            try {
+                out = inflateRawSync(Buffer.from(r.bytes()));
+            } catch {
+                throw { braam: E.INVALID };
+            }
+            kernel().ref(r.get("ref"), { left: new Uint8Array(out) });
+            r.ok();
             return;
         }
 

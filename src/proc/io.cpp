@@ -545,6 +545,14 @@ Task<Result<Fetched>> fetch_url(Str url, Str spec)
     co_return move(out);
 }
 
+Task<Result<i32>> inflate(Str bytes)
+{
+    Result<SysReply> r = co_await sys_call(Sys::Inflate, 0, bytes);
+    if (r.is_err())
+        co_return Err(r.error());
+    co_return r.value().status;
+}
+
 Task<Result<i32>> ws_connect(Str url)
 {
     Result<SysReply> r = co_await sys_call(Sys::WsOpen, 0, url);

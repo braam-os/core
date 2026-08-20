@@ -91,8 +91,7 @@ whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI.
 
-`Verify` is built (P3). `Inflate` is still a reserved row in
-`doc/System_Calls.md` §8 that no enum carries; P4 makes it true.
+Both are built (P3, P4), and Phase B is finished.
 
 ---
 
@@ -181,22 +180,29 @@ rejects a tampered message, a signature by the wrong key, the wrong signature
 and a short key. Removing the fake's arm makes every one of them fail as
 `Unsupported` rather than passing, which is §8's rule demonstrated.
 
-### P4. `Sys::Inflate` / `SvcOp::Inflate`
+### P4. `Sys::Inflate` / `SvcOp::Inflate` — **done**
 
-Payload in, descriptor out. Needs a `Handle::Kind::Inflate` in
-`src/user/proctab.h` with its arms in `shut()`, in `Sys::Read` and in
-`Sys::Close`, and a row in `doc/System_Calls.md` §9's handle-kind table.
-`Sys::Inflate = 58`, **`PROC_ABI` to 16**, and the reserved note under the
-async table goes with it.
+Payload in, descriptor out, at `Sys::Inflate = 58` and `SvcOp::Inflate = 20`;
+`PROC_ABI` is 16. The input is capped at `SYS_STAGE_MAX`; the output is not.
 
-The compressed input is capped at `SYS_STAGE_MAX` (1 MiB) because it is one
-staged payload; the output is not capped. A compressed entry larger than that
-is refused, and the bound is documented rather than worked around.
+Three things worth carrying forward:
 
-Same file set as P3.
+- **The host deposits a reader shaped exactly like a fetch body's**, so
+  `OP.READ` and `OP.DROP` in `web/svc.js` are untouched. That is what "`Read`
+  and `Close` serve it exactly as they serve a fetched body" turned out to
+  mean — and it is what lets P10 stop reading a zip bomb rather than having it
+  expanded in JS first.
+- **`Handle::Kind::Inflate` shares `Kind::Body`'s storage.** `Handle` is not a
+  union, so a member of its own would grow every handle in the system;
+  `HttpResponse`'s `status` and `headers` just stay zero. `http_read` is now
+  `stream_read`, since it named nothing but `SvcOp::Read` on a slot.
+- **Where a truncated stream fails is not fixed**: a browser fails the read that
+  reaches the damage, the fake fails the `Inflate`. Both are errors, neither is
+  a short read, and nothing may assume which.
 
-Done when: a unit test round-trips a deflate stream produced by `tools/pack.py`,
-and a truncated stream is an error rather than a short read.
+Done: `test/unit/test_svc.cpp` round-trips a one-chunk and a three-chunk stream
+— the second only passes if the read loop runs — and refuses a truncated one.
+Removing the fake's arm or leaving the bytes uninflated makes them fail.
 
 ---
 

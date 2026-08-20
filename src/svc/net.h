@@ -6,7 +6,8 @@
 #include "svc.h"
 
 // A response whose headers have arrived. The body is read afterwards, a chunk
-// at a time, so a large one never has to fit in a buffer at once.
+// at a time, so a large one never has to fit in a buffer at once. An inflate
+// stream is the same thing with no status and no headers.
 struct HttpResponse {
     u32 status = 0;
     String headers; // "name: value\n" lines, as the host joined them
@@ -17,8 +18,11 @@ struct HttpResponse {
 // blank line, then the body — the shape web/svc.js parses.
 Task<Result<HttpResponse>> http_fetch(Str url, Str spec);
 
-// A chunk of the body, empty at the end.
-Task<Result<String>> http_read(const HttpResponse &res);
+// Raw deflate in, a stream out. The input is one staged payload.
+Task<Result<HttpResponse>> svc_inflate(Str bytes);
+
+// A chunk of a body or an inflate stream, empty at the end.
+Task<Result<String>> stream_read(const HttpResponse &res);
 
 struct WebSocket {
     JsHandle sock;
