@@ -7,17 +7,6 @@
 
 namespace {
 
-// One stanza of `known` and no second. The probe reads into a vector of its
-// own: next() clears what it is given.
-bool one_stanza(Str text, Str known, Vec<StanzaField> &f)
-{
-    StanzaReader r(text, known);
-    if (r.next(f) != StanzaRead::Ok)
-        return false;
-    Vec<StanzaField> tail;
-    return r.next(tail) == StanzaRead::End;
-}
-
 // H comes once per use.
 bool thresholds_unique(const Anchor &a)
 {
@@ -68,13 +57,13 @@ bool anchor_file_read(String text, AnchorFile &out)
 
     Vec<StanzaField> f;
     if (!out.block.empty()) {
-        if (!one_stanza(out.block, STANZA_SIGNATURE, f))
+        if (!StanzaReader::one(out.block, STANZA_SIGNATURE, f))
             return false;
         if (signature_read(f, out.sigs) != StanzaRead::Ok)
             return false;
     }
 
-    if (!one_stanza(out.body, STANZA_ANCHOR, f))
+    if (!StanzaReader::one(out.body, STANZA_ANCHOR, f))
         return false;
     if (anchor_read(f, out.rec) != StanzaRead::Ok)
         return false;
@@ -94,7 +83,7 @@ u32 trust_threshold(const Anchor &a, Str use)
 }
 
 Task<Result<bool>> trust_meet(const Anchor &keys, Str use, const Vec<Signature> &sigs, Str body,
-                              TrustVerify v)
+                              PkgHost &h)
 {
     u32 need = trust_threshold(keys, use);
     if (need == 0)
@@ -120,8 +109,9 @@ Task<Result<bool>> trust_meet(const Anchor &keys, Str use, const Vec<Signature> 
             Option<usize> n = base64_decode(s.signature, Span<u8>(sig));
             if (!n || n.value() != SYS_ED25519_SIG)
                 continue;
-            Task<Result<bool>> t = v(Str(reinterpret_cast<const char *>(raw), sizeof(raw)),
-                                     Str(reinterpret_cast<const char *>(sig), sizeof(sig)), body);
+            Task<Result<bool>> t =
+                h.verify(Str(reinterpret_cast<const char *>(raw), sizeof(raw)),
+                         Str(reinterpret_cast<const char *>(sig), sizeof(sig)), body);
             if (!t)
                 co_return Err(Error::NoMemory);
             Result<bool> r = co_await t;
@@ -138,40 +128,59 @@ Task<Result<bool>> trust_meet(const Anchor &keys, Str use, const Vec<Signature> 
     co_return false;
 }
 
-Task<Result<bool>> trust_self(const AnchorFile &a, u64 now, TrustVerify v)
+Task<Result<bool>> trust_self(const AnchorFile &a, u64 now, PkgHost &h)
 {
     if (now >= a.rec.expiry)
         co_return false;
-    Task<Result<bool>> t = trust_meet(a.rec, TRUST_ROOT, a.sigs, a.body, v);
+    Task<Result<bool>> t = trust_meet(a.rec, TRUST_ROOT, a.sigs, a.body, h);
     if (!t)
         co_return Err(Error::NoMemory);
     co_return co_await t;
 }
 
-Task<Result<bool>> trust_step(const AnchorFile &cur, const AnchorFile &next, u64 now, TrustVerify v)
+Task<Result<bool>> trust_step(const AnchorFile &cur, const AnchorFile &next, u64 now, PkgHost &h)
 {
     // G orders the chain; a skipped number is not itself a refusal.
     if (next.rec.version <= cur.rec.version)
         co_return false;
 
-    Task<Result<bool>> t = trust_meet(cur.rec, TRUST_ROOT, next.sigs, next.body, v);
+    Task<Result<bool>> t = trust_meet(cur.rec, TRUST_ROOT, next.sigs, next.body, h);
     if (!t)
         co_return Err(Error::NoMemory);
     Result<bool> r = co_await t;
     if (r.is_err() || !r.value())
         co_return r;
 
-    Task<Result<bool>> u = trust_self(next, now, v);
+    Task<Result<bool>> u = trust_self(next, now, h);
     if (!u)
         co_return Err(Error::NoMemory);
     co_return co_await u;
 }
 
-Task<Result<usize>> trust_walk(Span<const AnchorFile> chain, u64 now, TrustVerify v)
+Task<Result<void>> anchor_load(PkgHost &h, u64 now, AnchorFile &out)
+{
+    Result<String> text = Err(Error::NoMemory);
+    if (Task<Result<String>> t = h.load(ANCHOR_PATH))
+        text = co_await t;
+    if (text.is_err())
+        co_return Err(text.error());
+
+    if (!anchor_file_read(move(text.value()), out))
+        co_return Err(Error::Invalid);
+
+    Result<bool> ok = Err(Error::NoMemory);
+    if (Task<Result<bool>> t = trust_self(out, now, h))
+        ok = co_await t;
+    if (ok.is_err())
+        co_return Err(ok.error());
+    co_return ok.value() ? Result<void>() : Err(Error::Perm);
+}
+
+Task<Result<usize>> trust_walk(Span<const AnchorFile> chain, u64 now, PkgHost &h)
 {
     usize at = 0;
     while (at + 1 < chain.size()) {
-        Task<Result<bool>> t = trust_step(chain[at], chain[at + 1], now, v);
+        Task<Result<bool>> t = trust_step(chain[at], chain[at + 1], now, h);
         if (!t)
             co_return Err(Error::NoMemory);
         Result<bool> r = co_await t;

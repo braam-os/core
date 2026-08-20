@@ -1,10 +1,10 @@
 #include "cmd/pkg/trust.h"
+#include "fakehost.h"
 #include "harness.h"
 #include "kernel/fmt.h"
 #include "kernel/hostcall.h"
 #include "kernel/sched.h"
 #include "kernel/traits.h"
-#include "svc/svc.h"
 
 namespace {
 
@@ -35,26 +35,9 @@ bool load(Str name, AnchorFile &a)
     return s.append(fixture(name)) && anchor_file_read(move(s), a);
 }
 
-// svc_verify in verify_sig's shape: Perm is a bad signature, not a fault.
-Task<Result<bool>> verify_here(Str key, Str sig, Str bytes)
-{
-    Task<Result<void>> t = svc_verify(key, sig, bytes);
-    if (!t)
-        co_return Err(Error::NoMemory);
-    Result<void> r = co_await t;
-    if (r.is_err())
-        co_return r.error() == Error::Perm ? Result<bool>(false) : Result<bool>(Err(r.error()));
-    co_return true;
-}
-
-// A browser with no Ed25519.
-Task<Result<bool>> verify_absent(Str, Str, Str)
-{
-    co_return Err(Error::Unsupported);
-}
-
-// A namespace-scope global must be trivially destructible.
-TrustVerify chosen = verify_here;
+// The one host the suite hands trust.cpp, with real Ed25519 behind it. A
+// pointer, because a namespace-scope global must be trivially destructible.
+FakeHost *host;
 bool answered;
 bool outcome;
 Error failure;
@@ -62,7 +45,7 @@ usize reached;
 
 Task<i32> ask_self(const AnchorFile *a, u64 now)
 {
-    Task<Result<bool>> t = trust_self(*a, now, chosen);
+    Task<Result<bool>> t = trust_self(*a, now, *host);
     if (!t)
         co_return 1;
     Result<bool> r = co_await t;
@@ -77,7 +60,7 @@ Task<i32> ask_self(const AnchorFile *a, u64 now)
 
 Task<i32> ask_walk(const AnchorFile *chain, usize n, u64 now)
 {
-    Task<Result<usize>> t = trust_walk(Span<const AnchorFile>(chain, n), now, chosen);
+    Task<Result<usize>> t = trust_walk(Span<const AnchorFile>(chain, n), now, *host);
     if (!t)
         co_return 1;
     Result<usize> r = co_await t;
@@ -122,6 +105,9 @@ usize run_walk(const AnchorFile *chain, usize n)
 void test_trust()
 {
     test_begin("trust");
+
+    FakeHost h;
+    host = &h;
 
     AnchorFile good;
     CHECK(load("good", good));
@@ -225,10 +211,10 @@ void test_trust()
     }
 
     // A missing algorithm is a fault, and must not read as a bad signature.
-    chosen = verify_absent;
+    host->no_ed25519 = true;
     CHECK(!run_self(good));
     CHECK(failure == Error::Unsupported);
-    chosen = verify_here;
+    host->no_ed25519 = false;
 
     CHECK_EQ(host_orphans(), 0);
 }

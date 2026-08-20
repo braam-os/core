@@ -19,15 +19,16 @@ Package_Format.md, and the two host operations are in System_Calls.md. Phase C
 went with them, P5 to P12: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
-`version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp`, `db.cpp` and `trust.cpp` are
-the digest, the two encodings, apk's version grammar, the dependency token, the
-stanza grammar with its records, the zip's directory, `/pkg`'s layout and the
-anchor's checks, compiled into `tests.wasm` as well — `trust.cpp` because its
-verifier is a parameter. `unzip.cpp` inflates an entry, `store.cpp` performs the
-steps `db.cpp` computes and `anchor.cpp` reads `/share/pkg/anchor`; those three
-are the pieces that stay out. Phase D's first half went the same way: the anchor
-is in the archive and `anchor_load` is written, so what is missing is anything
-that fetches. So this starts at P14.
+`version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp`, `db.cpp`, `trust.cpp` and
+`index.cpp` are the digest, the two encodings, apk's version grammar, the
+dependency token, the stanza grammar with its records, the zip's directory,
+`/pkg`'s layout, the anchor's checks and §7's pipeline, compiled into
+`tests.wasm` as well — the last two because they take a `PkgHost` rather than
+calling a syscall. `unzip.cpp` inflates an entry, `store.cpp` performs the steps
+`db.cpp` computes and `host.cpp` is the `PkgHost` `/bin/pkg` uses; those three
+are the pieces that stay out. Phase D is done: the anchor is in the archive and
+`index_check` fetches, checks and reads an index, so what is missing is a word
+to type. So this starts at P15.
 
 ## The shape being built
 
@@ -106,50 +107,15 @@ whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
 
----
-
-## Phase D — trust
-
-Everything above can be got wrong and fixed. This cannot: §7's rule is that
-nothing is unzipped, written or run before its hash matches a hash from a
-signed index, and the rule has exactly one crossing point.
-
-### P14. The checked-index pipeline
-
-§7's steps 1 to 7, in that order and in one function, so that the order is
-reviewable in one screen:
-
-1. **Fix the time once** from `Sys::Clock` and use that one value everywhere. A
-   clock that moves mid-run must not make two checks disagree.
-2. **Load the anchor** — `anchor_load`, with the time from step 1.
-3. **Fetch the index, capped — and well below `SYS_STAGE_MAX`.** `Sys::Verify`
-   takes the signed bytes as one staged payload, so an index over a megabyte
-   cannot be checked at all; the cap has to leave room for that. `web/svc.js`
-   imposes no size limit on a body, so
-   this is `pkg`'s to enforce: count the bytes coming off the descriptor and
-   close it when the cap is passed. Longer than the cap is a failure, not a
-   truncation.
-4. **Check the signatures** to the anchor's threshold — `trust_meet` over the
-   `index` keys, which counts at most one signature per key.
-5. **Check the version** against the highest seen before. Lower is a rollback
-   and a failure; equal means nothing to do and is not an error.
-6. **Check the expiry** against the time from step 1.
-7. **Only now read the index.** A name it does not list does not exist and is
-   not looked for anywhere else.
-
-Every failure abandons the whole operation and reports which step failed. There
-is no `--force`, no `--insecure` and no `--no-verify`, in any form or spelling.
-
-Done when: each of the six failures is a distinct, tested refusal.
-
----
-
 ## Phase E — the commands
 
 ### P15. `pkg update`
 
-Fetch, check, record. The whole of Phase D behind one word, and the first thing
-a user can run.
+`index_check` over each line of `/pkg/repositories`, then the record: write the
+checked file to `/pkg/index` through `store_perform`, which is the only part of
+§7 that was left out because a refusal must leave nothing behind. Report the
+step a refusal stopped at — `index_step_name` is what says which. The first
+thing a user can run.
 
 ### P16. `pkg search` / `pkg info` / `pkg list`
 

@@ -1,0 +1,240 @@
+R"DATA(
+@anchor
+Y:ed25519 Q27pkpl4+He/ruXw0HKzBYKswxmHfNmOoyfK3MIzJwPug= ldI0a6vqkf+ZoL2SZla/niCQOGGZA9JBD3UCXsuQEqnfBoxkzC3tdLX/OyCkpYEG1X5K5E9b5gAIJfx2EI2rCQ==
+Y:ed25519 Q2s7mrXsJ6V81XKjCoeUPS5dsjHYqqpfHXw8hz+fcgDIY= EpLG3Uvc3zlgXj5u6vdjcP2IoE92Q0fBjKb9b4j1K+bT50z1zUm5GO7nMQ/CEPcD9FpyU+kntT8eOHvPc+YHCw==
+
+X:1
+G:1
+E:3000000000000
+H:root 2
+H:index 1
+K:root ed25519 TBscRoI3kIK5AiBU7olVXIrIn1qQc5067pii7RtI6iU=
+K:root ed25519 EsZLYv9EK/wt+10iZBPetU/dx6iChlhXHlRWlhfQMao=
+K:root ed25519 q9ANhx7LIGw47AcN0aEty5r3XQqTBE2xAv1lk3GA6Y0=
+K:index ed25519 aoYRxC7rT9U6Gp/r+k+pZkUbVGfFLpfQ+NdtoybpS6s=
+@good
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= k2vSvtH47Dl3na4kmvbV6xFPR0MdYlUB/9TCRlA0EWunb5ZiVUFR+gTZwFm7/1s+m0Fh4nnVLFW3Jv5YTfsHAg==
+
+X:1
+N:https://packages.example/braam
+G:41
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@stranger
+Y:ed25519 Q2wR0qBrXbdCiYZ3YWOdyITSz4rXIdb/65NlqC2M0UnJM= m6CMgsHfh7mntQxyHNtUakdKnHIwMJAVg3/bVCIsuoZrC5ZZJkRj7jLgXG0GWMNVNHhOeObXpJJPY4GYdpUoCg==
+
+X:1
+N:https://packages.example/braam
+G:41
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@tampered
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= k2vSvtH47Dl3na4kmvbV6xFPR0MdYlUB/9TCRlA0EWunb5ZiVUFR+gTZwFm7/1s+m0Fh4nnVLFW3Jv5YTfsHAg==
+
+X:1
+N:https://packages.example/braam
+G:41
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18245
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@grammar
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= fkM0H4rU8Qalzfmqd5g3bMjC84I7axoMJLWjTMMz4fiUkaldlpT+DR4CMCgyNkzVeAK2H84xAdl2x8wifKwmCQ==
+
+X:2
+N:https://packages.example/braam
+G:41
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@foreign
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= B0A0FfylLfoebVSdTktckfCZMMZVE3ycQmDgrwdvzI66xumutT4UJBPLaQSTndrN95z6klNy/wXzdHcVyRFnCQ==
+
+X:1
+N:https://elsewhere.example/braam
+G:41
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@older
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= Y8ZHo/4XQQyj6VFUXuZl1B1l715IG5yoQ7XTjwnG2kTx8LARl+ltI8fm9wOvlwEhDLy3DFPVo0O2BI5PWjF9Dw==
+
+X:1
+N:https://packages.example/braam
+G:39
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@same
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= P4qHQL09Uyk1pd7zUSvZAZQ3Jvnn95cQmla1zflFvJNu6v6OYQZMG37mPk18xs7HqHuFL0WwCzNfMzf3ZGhJAA==
+
+X:1
+N:https://packages.example/braam
+G:40
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@expired
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= RQi2ArevndgCwGP2y99myMc0VHjx5+tII+BcJ2LKdabWwl6DAH90GorRyYaXV0lFmiPAgZ7j9P4L4tlb/Ns2BQ==
+
+X:1
+N:https://packages.example/braam
+G:41
+E:1000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@malformed
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= ethJx63zXzGFUkT3uBRKYFa28PsF0ISDQUWUv96qD9a5Oq6yA9Sxkvn2jO358qqSKgu5X8cwjkarFKMm3rlzBw==
+
+X:1
+N:https://packages.example/braam
+G:41
+E:2000000000000
+T:Braam packages
+
+P:awk
+not a field
+@oneunusable
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= T5stCFHXxT0rJV7xD9aLejkpEbkdZML0hU2uOBGoVPt6AR2DHnKk8UArKpVJ9Axp+v6TrXVsnIwldo9tEYomBw==
+
+X:1
+N:https://packages.example/braam
+G:41
+E:2000000000000
+T:Braam packages
+
+P:awk
+Q:junk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+@stored
+Y:ed25519 Q2NS4b6GipsmBscLmmuZo6/VdoITuCW6gEOUYpavF6Z3g= P4qHQL09Uyk1pd7zUSvZAZQ3Jvnn95cQmla1zflFvJNu6v6OYQZMG37mPk18xs7HqHuFL0WwCzNfMzf3ZGhJAA==
+
+X:1
+N:https://packages.example/braam
+G:40
+E:2000000000000
+T:Braam packages
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:awk
+V:1.2-r0
+S:18244
+I:41984
+T:pattern-directed scanning and processing language
+D:cmd:sh
+p:cmd:awk
+
+C:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
+P:less
+V:1.6-r1
+S:9000
+)DATA"

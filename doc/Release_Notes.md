@@ -25,6 +25,67 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Seven steps in one screen, over a host it does not have
+
+P14 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the end of Phase D.
+`index_check` is Package_Management.md §7's steps 1 to 7 in one function and in
+order: the time once, the anchor, the index fetched under a cap, the signatures,
+the header, the version, the expiry, the packages. `IndexStep` names the step a
+refusal stopped at, and every one of them has a test.
+
+**One `PkgHost` replaced a function pointer written a commit earlier.** P13
+injected its verifier because the split by purity did not fall where the split
+by testability did. P14 needs five more of the same kind — a clock, a local
+file, a fetch, a read, a close — and six parallel `using` declarations would
+have been six ways of saying one thing. So `TrustVerify` is gone and
+`trust_meet`, `trust_self`, `trust_step`, `trust_walk` and `anchor_load` all
+take `PkgHost &`, which is `src/fs/`'s `Fs` pattern applied one layer up.
+`anchor.cpp` became `host.cpp` and holds the concrete one; `anchor_load` moved
+into `trust.cpp`, where the suite can reach it, and step 2's cases are the first
+tests it has had. Rewriting a one-commit-old interface is cheaper than carrying
+two.
+
+**The fetch is `open`/`read`/`close` and not `fetch(url, cap)`, and the cap is
+the whole reason.** A one-call fetch would have put the counting loop on each
+side of the interface: the real one in `host.cpp`, unreachable from the suite,
+and a fake one in the test that proves only itself. §3's endless-data row is
+stopped by that loop, so it is the loop that has to be tested. Handing back an
+opaque token — an fd for `/bin/pkg`, a table index for the suite — puts the loop
+in `index.cpp` where the test drives it, including the two cases that matter:
+exactly `INDEX_MAX` passes the fetch, one byte more does not, and the body is
+closed either way. `ZipSink` was already this: `take` refuses a chunk that would
+pass the declared size, which is a cap when `complete()` is not asked.
+
+**512 KiB, because `Sys::Verify` stages the signed bytes whole.** The ceiling is
+`SYS_STAGE_MAX` less the key, the signature and two length words — 1,048,472
+bytes — and an index that cannot be staged cannot be checked at all. Half of it
+leaves a margin nobody has to compute, and is some thousands of package stanzas.
+"Well below" was the instruction; a number that needs arithmetic to see is not
+well below anything.
+
+**A `/pkg/index` that is present and does not parse refuses the run.** Absent is
+a floor of zero, which is §8.2's "a file that is not there reads as an empty
+one" and is what lets a `/pkg` that has never been written to need no seeding.
+Unreadable is not the same thing: treating it as zero would mean anyone who can
+write one byte into `/pkg` erases the rollback check, and §11 already concedes
+that anyone can. A refusal there costs a `pkg update` that says why; the
+alternative costs the property step 5 exists for.
+
+**`X` and `N` are checked with the header, between steps 4 and 5.** §3.1 said
+when `G` and `E` are checked and said nothing about the other two, and they
+cannot wait for step 7: the version and the expiry are fields of a header that
+has to be parsed to reach them. Package_Format.md §3.1 now says so.
+
+**The pipeline writes nothing.** §7's steps stop at reading the index; recording
+it is the word "record" in P15's "fetch, check, record". Keeping `index_check`
+read-only is what makes "any failure abandons the whole operation" free —
+there is nothing to undo, at any step, because nothing was done.
+
+**§1's two scopes survive into step 7.** A line that is not a field takes the
+whole index down; a stanza with an unknown uppercase letter takes only itself
+and the rest are read. That is the stanza grammar's rule rather than a decision
+of the pipeline's, and the test asserts both halves so it stays that way.
+
 ## The anchor, and a verifier that arrives as an argument
 
 P13 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the first half of

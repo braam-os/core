@@ -50,6 +50,9 @@ struct StanzaReader {
     // Fills `out` with one stanza's fields, in the order they appeared.
     StanzaRead next(Vec<StanzaField> &out);
 
+    // The whole of `text`, as one stanza of `known` and no second.
+    static bool one(Str text, Str known, Vec<StanzaField> &out);
+
 private:
     Str rest_;
     Str known_;

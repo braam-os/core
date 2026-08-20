@@ -61,7 +61,8 @@ ZipMeta zip_meta(Str name);
 // --------------------------------------------------------------- the ceiling
 
 // An inflate's output side. Sys::Inflate caps its input and not its output, so
-// the declared size is what stops a bomb.
+// the declared size is what stops a bomb. index.cpp bounds a fetched body with
+// it too, and wants only the cap and not `complete`.
 struct ZipSink {
     explicit ZipSink(u64 want) : want_(want) {}
 

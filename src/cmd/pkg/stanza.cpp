@@ -125,6 +125,16 @@ StanzaRead StanzaReader::next(Vec<StanzaField> &out)
     return unusable ? StanzaRead::Unusable : StanzaRead::Ok;
 }
 
+bool StanzaReader::one(Str text, Str known, Vec<StanzaField> &out)
+{
+    StanzaReader r(text, known);
+    if (r.next(out) != StanzaRead::Ok)
+        return false;
+    // The probe reads into a vector of its own: next() clears what it is given.
+    Vec<StanzaField> tail;
+    return r.next(tail) == StanzaRead::End;
+}
+
 Option<u64> stanza_number(Str s)
 {
     if (s.empty() || (s.size() > 1 && s[0] == '0'))

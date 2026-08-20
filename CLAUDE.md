@@ -112,11 +112,12 @@ the format. `tools/wsd.mjs` is a real WebSocket server.
 reaches everything *below* a program; the pure shell sources (`parse.cpp`,
 `tokenize.cpp`, `expand.cpp`, `match.cpp`, `cond.cpp`) and `proc/opt.cpp`,
 `proc/time.cpp` are compiled straight into the suite rather than linked, so a
-syscall in any of them is a link error. `src/cmd/pkg/trust.cpp` is in that list
-by taking its verifier as a `TrustVerify` argument — `Sys::Verify` from
-`/bin/pkg`, `svc_verify` from the suite — which is how a check that must be
-tested keeps out of the half that cannot be. Anything needing a program to run
-belongs in `test/run.mjs`.
+syscall in any of them is a link error. `src/cmd/pkg/trust.cpp` and `index.cpp`
+are in that list by taking a `PkgHost` — syscalls from `/bin/pkg`
+(`src/cmd/pkg/host.cpp`), the kernel's own services from the suite
+(`test/unit/fakehost.h`) — which is how a check that must be tested keeps out of
+the half that cannot be. Anything needing a program to run belongs in
+`test/run.mjs`.
 
 ## Architecture invariants
 

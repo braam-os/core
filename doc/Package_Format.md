@@ -133,6 +133,10 @@ P:less
   refused. It is what binds a signed index to one repository.
 - `G` and `E` are checked at Package_Management.md §7's steps 5 and 6, after the
   signatures and never before.
+- **`X` and `N` are checked when the header is read**, which is between those
+  steps and step 4: the version and the expiry are fields of a header that has
+  to be parsed first, and a header from the wrong repository or an unknown
+  grammar has nothing worth comparing in it.
 
 ### 3.2 A package stanza
 
