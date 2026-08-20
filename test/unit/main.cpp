@@ -28,6 +28,7 @@ void test_console();
 void test_encode();
 void test_sha256();
 void test_version();
+void test_dep();
 void test_text();
 void test_procfs();
 void test_pane();
@@ -105,6 +106,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_encode();
     test_sha256(); // after encode: the vectors are compared as hex
     test_version();
+    test_dep(); // after version: a dependency is a mask over a comparison
     test_procfs();
 
     u32 failures = test_failures();

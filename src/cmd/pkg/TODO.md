@@ -15,12 +15,13 @@ are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 **A finished task is deleted from this file, and the numbers do not move** —
 Release_Notes.md and the tasks below cite them. Phases A and B are gone that
 way: the decisions are in Concept.md, Package_Management.md and
-Package_Format.md, and the two host operations are in System_Calls.md. P5 and
-P6 went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
+Package_Format.md, and the two host operations are in System_Calls.md. P5 to P8
+went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
-table each task below fills a row of, and `sha256.cpp`, `encode.cpp` and
-`version.cpp` are the digest, the two encodings and apk's version grammar,
-compiled into `tests.wasm` as well. So this starts at P8.
+table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
+`version.cpp` and `dep.cpp` are the digest, the two encodings, apk's version
+grammar and the dependency token, compiled into `tests.wasm` as well. So this
+starts at P9.
 
 ## The shape being built
 
@@ -102,17 +103,6 @@ large crosses the ABI. That is P6.
 ---
 
 ## Phase C — pkg's own primitives, no network
-
-### P8. Dependency parsing
-
-Package_Format.md §6. The point of the implementation is that the result-mask
-model collapses nine spellings into one `match()` and a bitfield rather than
-nine cases; `so:`, `@tag` and `><` are gone and `cmd:` is an ordinary name
-(P23).
-
-Done when: a table-driven test covers each operator, the conflict form, an
-unparseable version (which marks the dependency broken rather than failing the
-file), and a dependency list split on both spaces and newlines.
 
 ### P9. The stanza reader and writer
 

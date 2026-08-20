@@ -9,11 +9,12 @@
 #include "kernel/str.h"
 #include "kernel/types.h"
 
-constexpr u32 VER_EQUAL   = 1;
-constexpr u32 VER_LESS    = 2;
-constexpr u32 VER_GREATER = 4;
-constexpr u32 VER_FUZZY   = 8;
-constexpr u32 VER_ANY     = VER_EQUAL | VER_LESS | VER_GREATER;
+constexpr u32 VER_EQUAL    = 1;
+constexpr u32 VER_LESS     = 2;
+constexpr u32 VER_GREATER  = 4;
+constexpr u32 VER_FUZZY    = 8;
+constexpr u32 VER_CONFLICT = 16; // inverts the answer (dep.h's `!`)
+constexpr u32 VER_ANY      = VER_EQUAL | VER_LESS | VER_GREATER;
 
 bool version_valid(Str v);
 

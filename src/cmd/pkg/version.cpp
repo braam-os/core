@@ -298,7 +298,7 @@ u32 version_mask(Str op)
 
 bool version_match(Str a, u32 mask, Str b)
 {
-    if ((mask & VER_ANY) == VER_ANY)
-        return true;
-    return (compare_fuzzy(a, b, (mask & VER_FUZZY) != 0) & mask) != 0;
+    bool ok =
+        (mask & VER_ANY) == VER_ANY || (compare_fuzzy(a, b, (mask & VER_FUZZY) != 0) & mask) != 0;
+    return (mask & VER_CONFLICT) ? !ok : ok;
 }

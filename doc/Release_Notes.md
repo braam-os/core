@@ -25,6 +25,55 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A dependency is a name and a bitfield
+
+P8 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last Phase C
+primitive. `dep.cpp` is Package_Format.md §6: `[!]name[[op]ver]`, and the
+space- or newline-separated list of them that `D:`, `p:`, `i:` and `/pkg/world`
+carry. It is `apk_dep_parse` and `apk_blob_pull_dep` with the database interning
+taken out — a name here is a `Str` into whoever owns the text, the way `Args`
+views argv.
+
+**Nothing in it knows how many operators there are.** `<`, `>`, `=` and `~` each
+contribute bits to a mask, a comparison answers exactly one bit, and a
+dependency is satisfied when that bit is in the mask. So `foo<=1.2` needs no
+case, `foo>~1.2` needs no case, and `!foo` is the same machinery with an
+inversion at the end. The whole parser is: strip a `!`, take the name up to the
+first operator character, take the maximal run of them, and the rest is a
+version. Nine spellings, one code path, and the count nine appears nowhere.
+
+**That is also why `><` needed no decision.** apk reads that spelling as a
+checksum comparison and §9 dropped it. Dropping it took no code: `>` and `<`
+contribute their bits, the mask means LESS or GREATER, and `foo><1.2` reads as
+"any version but this one". A parser with nine cases would have had to grow a
+tenth to say what happens; a bitfield has nowhere for a spelling to be missing
+from.
+
+**Broken and malformed are different answers because they have different
+consequences.** §6 already said an unparseable version marks the dependency
+broken rather than failing the file — the stanza becomes an uninstallable
+package and every other stanza still reads. It said nothing about a token with
+no name at all, or an operator with nothing after it. Those are not broken
+dependencies; they are a field that is not a dependency list, and a reader that
+treated `=1.2` as "a dependency on the empty name that nothing satisfies" would
+turn a corrupt file into a package that merely cannot be installed. So
+`dep_parse` answers `Ok`, `Broken` or `Malformed`, and §6 gained the sentence
+that says which is which. apk makes the same split, as `-APKE_PKGVERSION_FORMAT`
+against `-APKE_DEPENDENCY_FORMAT`.
+
+`Dep::broken` is a field *as well as* a return value, which is apk's shape and
+looks redundant. It is what makes `dep_satisfied` safe: a reader that kept a
+broken dependency to report it later can still ask whether a candidate
+satisfies it and get `false`, without every call site remembering to check the
+parse result first.
+
+`VER_CONFLICT` lands in `version.h` rather than `dep.h`, and the inversion
+happens inside `version_match`, because that is where apk puts it and because
+the alternative — inverting in `dep_satisfied` — would leave a mask that means
+one thing to one caller and another to the next. The one thing it forced was
+rewriting `version_match`'s early `return true` for `VER_ANY` into a value the
+inversion applies to; without that, `!foo` would have matched everything.
+
 ## Versions, ported rather than designed
 
 P7 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `version.cpp` is apk's

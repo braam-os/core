@@ -285,6 +285,11 @@ name whose providers ship an `awk`. apk's `so:` is dropped.
 **An unparseable version marks the dependency broken, not the file** — the
 stanza becomes an uninstallable package and every other stanza still reads.
 
+**A token with no name, or an operator with nothing after it, is malformed** —
+`=1.2`, `foo>=`, a bare `!`. That is not a broken dependency but a field that is
+not a dependency list, and it is the reader's to refuse the record over. A
+broken dependency names something and is simply satisfied by nothing.
+
 ---
 
 ## 7. Versions
