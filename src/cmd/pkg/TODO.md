@@ -12,6 +12,12 @@ Alpine's `apk` is the model for the resolver, the index and the version
 grammar; Debian's `apt` for the command names; Nix for activation. The sources
 are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 
+**A finished task is deleted from this file, and the numbers do not move** —
+Release_Notes.md and the tasks below cite them. Phases A and B are gone that
+way: the decisions are in Concept.md, Package_Management.md and
+Package_Format.md, and the two host operations are in System_Calls.md. So this
+starts at P5.
+
 ## The shape being built
 
 The commands, all of them:
@@ -77,132 +83,17 @@ The alternative, which was the plan before symbolic links, `Sys::Rename` and
 `PATH` landed, was a fourth clause in `exec_resolve` reading `/pkg/active` and
 `/pkg/gen/<N>` on every miss. Release_Notes.md holds what it would have cost.
 
-### Two new operations
+### What the host already provides
 
-- **`Sys::Verify`** — Ed25519 through `crypto.subtle.verify`, the host service
-  Concept.md §6 provides for.
-- **`Sys::Inflate`** — `DecompressionStream("deflate-raw")`. The payload is the
-  compressed entry and the status is a descriptor, so `Read` and `Close` serve
-  it exactly as they serve a fetched body and nothing is duplicated.
+`Sys::Verify` (Ed25519) and `Sys::Inflate` (raw deflate, answering with a
+descriptor) are built; System_Calls.md §8 is what they carry, and §9 lists
+`Inflate`'s handle kind.
 
-SHA-256 is **not** one of them: it is compiled into `pkg`. A
+SHA-256 is **not** among them and never will be: it is compiled into `pkg`. A
 `crypto.subtle.digest` is one-shot, so a host-side digest would mean staging a
 whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
-large crosses the ABI.
-
-Both are built (P3, P4), and Phase B is finished.
-
----
-
-## Phase A — the decisions, on paper first
-
-### P1. Amend the documents — **done**
-
-Nothing is built until these say what is being built. Three things were settled;
-the rest of this file assumes them.
-
-- **Activation is symlinks on `PATH`, not a fourth resolution clause.**
-  Concept.md §4 says so, §5.1 gains `/pkg` and the fact that the archive does
-  not carry it, and §5.2's unpack sentence names `/pkg` beside `/home`. P12 is
-  rewritten around it.
-- **SHA-256 is compiled into `pkg`; the signature check is a host service.**
-  Concept.md §6's digest bullet is split into three: a `verify` bullet, a
-  paragraph on why there is no digest operation, and an `inflate` bullet.
-- **Install scripts run, and nothing fences them.** Package_Management.md §11 is
-  rewritten: there is no privilege boundary here, so what is written down is
-  what a script *is* — an ordinary `/bin/sh` process with the user's whole
-  authority — and what a signature therefore authorises. Phase F is unblocked.
-  §11 also now says `/pkg` survives a version change, which is what its "a
-  directory the archive does not carry" sentence was pointing at.
-
-`doc/System_Calls.md` carries `Verify` and `Inflate` at 57 and 58 as **reserved
-rows**, with a paragraph each and a line saying they are in no enum yet.
-`PROC_ABI` stays 14 in every document until P3 and P4 move it. Release_Notes.md
-holds the *why* for all of it.
-
-### P2. Freeze the formats — **done**
-
-[doc/Package_Format.md](../../../doc/Package_Format.md), a document of its own
-rather than a section: §7–§11 of the policy are cited by number all through this
-file, and a new numbered section would have renumbered four of them. It defines
-one stanza grammar (§1) and then the five files — a signature (§2), the index
-(§3), the anchor (§4), a package (§5) and `/pkg` (§8) — with dependencies (§6)
-and versions (§7) between them, and §9 tabulating every departure from apk.
-
-What was settled, beyond what P2 originally asked:
-
-- **A signature is inline**, the first stanza of a signed file, and **the signed
-  bytes are everything after the first empty line**. One rule, computed the same
-  way by the signer and the checker. Not signify's detached two-line file, which
-  is where P2's wording came from.
-- **A letter means one thing in every file.** apk reuses letters between the
-  index and the installed db; here `Y` is a signature, `K` a key, `H` a
-  threshold, `G` an index version, `E` an expiry, and so on, once each.
-- **A package is apk-shaped** — a top-level entry whose name begins with `.` is
-  metadata — and an **unknown** dot-entry makes the package uninstallable.
-- The **field letters are apk's**, unchanged, because `test/solver/`'s 119
-  fixtures and `test/unit/version.data`'s 788 cases port as *data* only while
-  they are. `A`, `U` and `L` are dropped, and §1's rule says why no
-  informational field will ever be uppercase again.
-- A package's **URL is derived**, `<repo>/<name>-<version>.zip`, never carried.
-- The installed db keeps `F:`/`R:`/`Z:` and **drops `M:` and `a:`** — uid, gid
-  and mode, none of which exist here.
-
----
-
-## Phase B — the ABI
-
-Both of these are enum values on each side (Concept.md §2.2), not new imports.
-`SvcOp`'s values are positional and restated by hand in `web/svc.js`, so
-**append at the end of the enum, never insert**.
-
-### P3. `Sys::Verify` / `SvcOp::Verify` — **done**
-
-Ed25519 over `crypto.subtle.verify`, at `Sys::Verify = 57` and
-`SvcOp::Verify = 19`; `PROC_ABI` is 15.
-
-Two things worth carrying forward:
-
-- **`verify_sig` (`src/proc/io.h`) returns `Result<bool>`**, and is the one
-  place the wire's `Err(Perm)` becomes a value. Below it — `svc_verify`, the
-  syscall arm, `web/svc.js` — a bad signature stays a refusal, so nothing that
-  forgets to look at a boolean can read one as a pass.
-- **The message is one staged payload**, so `SYS_STAGE_MAX` caps what can be
-  checked at 1 MiB. P14's index fetch must cap well below it.
-
-`test/fakesvc.mjs` verifies for real, with `node:crypto` and synchronously: its
-`perform` answers from inside the import, which is what lets a unit test finish
-a `co_await` in one `sched_tick`, and `crypto.subtle` is a promise.
-
-Done: `test/unit/test_svc.cpp` runs RFC 8032 §7.1's TEST 1 and TEST 2, and
-rejects a tampered message, a signature by the wrong key, the wrong signature
-and a short key. Removing the fake's arm makes every one of them fail as
-`Unsupported` rather than passing, which is §8's rule demonstrated.
-
-### P4. `Sys::Inflate` / `SvcOp::Inflate` — **done**
-
-Payload in, descriptor out, at `Sys::Inflate = 58` and `SvcOp::Inflate = 20`;
-`PROC_ABI` is 16. The input is capped at `SYS_STAGE_MAX`; the output is not.
-
-Three things worth carrying forward:
-
-- **The host deposits a reader shaped exactly like a fetch body's**, so
-  `OP.READ` and `OP.DROP` in `web/svc.js` are untouched. That is what "`Read`
-  and `Close` serve it exactly as they serve a fetched body" turned out to
-  mean — and it is what lets P10 stop reading a zip bomb rather than having it
-  expanded in JS first.
-- **`Handle::Kind::Inflate` shares `Kind::Body`'s storage.** `Handle` is not a
-  union, so a member of its own would grow every handle in the system;
-  `HttpResponse`'s `status` and `headers` just stay zero. `http_read` is now
-  `stream_read`, since it named nothing but `SvcOp::Read` on a slot.
-- **Where a truncated stream fails is not fixed**: a browser fails the read that
-  reaches the damage, the fake fails the `Inflate`. Both are errors, neither is
-  a short read, and nothing may assume which.
-
-Done: `test/unit/test_svc.cpp` round-trips a one-chunk and a three-chunk stream
-— the second only passes if the read loop runs — and refuses a truncated one.
-Removing the fake's arm or leaving the bytes uninflated makes them fail.
+large crosses the ABI. That is P6.
 
 ---
 
@@ -302,6 +193,17 @@ is re-reading the local header to find where the data begins.
 §5.1 is the other half: the dot-entry split, and an unknown dot-entry refusing
 the package.
 
+Two things `Sys::Inflate` leaves to this reader:
+
+- **Stop when the entry's declared size is reached.** The operation caps its
+  input at `SYS_STAGE_MAX` and not its output, and hands back a stream rather
+  than a buffer, precisely so a zip bomb can be abandoned part way. Nothing
+  below this reader knows how big the entry claimed to be.
+- **A truncated stream may fail at either end** — a browser fails the read that
+  reaches the damage, `test/fakesvc.mjs` fails the `Inflate` itself. Both are
+  errors and neither is a short read, so treat any error from either as fatal
+  and never assume which one arrives.
+
 Done when: it reads `rootfs.zip` itself and produces the same entries
 `web/fs.js` does, and a package with an unknown top-level dot-entry is refused.
 
@@ -395,7 +297,10 @@ reviewable in one screen:
 1. **Fix the time once** from `Sys::Clock` and use that one value everywhere. A
    clock that moves mid-run must not make two checks disagree.
 2. **Load the anchor.**
-3. **Fetch the index, capped.** `web/svc.js` imposes no size limit on a body, so
+3. **Fetch the index, capped — and well below `SYS_STAGE_MAX`.** `Sys::Verify`
+   takes the signed bytes as one staged payload, so an index over a megabyte
+   cannot be checked at all; the cap has to leave room for that. `web/svc.js`
+   imposes no size limit on a body, so
    this is `pkg`'s to enforce: count the bytes coming off the descriptor and
    close it when the cap is passed. Longer than the cap is a failure, not a
    truncation.
@@ -519,7 +424,7 @@ needs, and a clean that removes it removes the property P18 was built for.
 
 ## Phase F — scripts and triggers
 
-**Unblocked by P1.** §11 permits install scripts and says what one is: an
+§11 permits install scripts and says what one is: an
 ordinary `/bin/sh` process with the authority of whoever typed `pkg install`,
 because there is no privilege boundary here to give it less. Build to that
 paragraph — in particular, nothing below is allowed to imply a fence §11 says
