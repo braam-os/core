@@ -1,0 +1,1454 @@
+R"DATA(
+# apk-tools/test/solver/, ported by tools/mkfixtures.py. A .repo or
+# .installed is verbatim but for two re-spellings: C: is restamped from
+# apk's Q1 to the Q2 §1.1 defines, hashing the old value so that equal
+# stays equal and distinct stays distinct; and a repeated D:, p: or i:,
+# which apk
+# accumulates and Package_Format.md §1 calls malformed: the lines are
+# folded into the one space-separated list §6 defines, which is the same
+# thing said the way this grammar says it. A .test has @EXPECT reduced to
+# the actions apk chose and the order it chose them in, the `(N/M)`
+# counter and the `OK:` line being its printer's rather than its
+# solver's.
+#
+# 72 of 119 cases. The 47 dropped, each needing something the solver
+# is not:
+#
+#   15  repository pinning
+#       pinning1 pinning2 pinning3 pinning4 pinning5 pinning6 pinning7 pinning8 pinning9 pinning10 pinning11 pinning12 pinning13 pinning14 pinning15
+#    8  apk upgrading itself
+#       selfupgrade1 selfupgrade2 selfupgrade3 selfupgrade4 selfupgrade5 selfupgrade6 selfupgrade7 selfupgrade8
+#    6  the `fix` applet
+#       fix1 fix2 fix3 fix4 fix5 fix6
+#    4  -t .virtual, a package built on the command line
+#       basic8 basic9 error6 error7
+#    3  --no-network or a cache index: availability masking
+#       basic7 basic12 basic16
+#    3  -v: the verbose summary and the no-longer-available note
+#       basic20 installif11 installif12
+#    3  world dependency spelling, rejected before the solver
+#       error8 error9 error10
+#    2  --force-broken-world
+#       basic10 basic11
+#    1  arch
+#       basic19
+#    1  an index dependency carrying @tag
+#       error11
+#    1  `apk del`'s not-removed report
+#       provides-prio3
+
+@FILE basic.installed
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:1
+S:1
+I:1
+D:b
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+@FILE basic.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:1
+S:1
+I:1
+D:b
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:a
+V:2
+S:1
+I:1
+D:b
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:b
+V:2
+S:1
+I:1
+
+C:Q2CB4blH3p1iJtPFjlg2tvQw1kYV0yQPt7gAlcVQ2QlqE=
+P:broken
+V:1
+S:1
+I:1
+D:missing-dependency
+
+C:Q2RVCSVOYTLqww1B9Zi/lp0bHsxoAe4gznzo0024I5Idk=
+P:badarch
+A:badarch
+V:1
+S:1
+I:1
+@FILE basic17.installed
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:1
+S:1
+I:1
+D:b=1
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+@FILE basic17.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:1
+S:1
+I:1
+D:b=1
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:a
+V:2
+S:1
+I:1
+D:b=2
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:b
+V:2
+S:1
+I:1
+@FILE basic21.repo
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+@FILE basic5.installed
+C:Q22MCOCBFGJH1BH0qgK9DvKtUDqrvbvPS7ewxM2BgKz6Q=
+P:a
+V:2
+S:1
+I:1
+D:b
+
+C:Q2R9wcGhgSzXyiMEIUM5ilgS2Y632WGV+A6RXgFTiUAy4=
+P:b
+V:2
+S:1
+I:1
+@FILE complicated1.installed
+C:Q23wbu85C2vTFnoze1trCuHcZZzG2gzPmCFPxO+m3r5iY=
+P:d
+V:1.0
+S:1
+I:1
+@FILE complicated1.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:2
+S:1
+I:1
+D:b c
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:a
+V:3
+S:1
+I:1
+D:b c d>1.5
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+D:c d<2.0
+
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:c
+V:1
+S:1
+I:1
+D:d>1.0
+
+C:Q23wbu85C2vTFnoze1trCuHcZZzG2gzPmCFPxO+m3r5iY=
+P:d
+V:1.0
+S:1
+I:1
+
+C:Q22mdBYH+o8C4TsYthJ4wxRZFrXfSFrXD+J/T+1wkfCrU=
+P:d
+V:1.5
+S:1
+I:1
+
+C:Q2/IUuQMvasPQ+Tr6ALkgJ9KrBacAm5HoB3J/Lp9YKJA8=
+P:d
+V:2.0
+S:1
+I:1
+@FILE conflict.installed
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:foo
+V:1
+S:1
+I:1
+D:cmd:b
+
+C:Q244HWHwCnFk356XBdyfxmBAnxglbE2RB8KZrVKMd/Now=
+P:bar
+V:1
+S:1
+I:1
+p:cmd:b=2
+@FILE conflict.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:1
+S:1
+I:1
+D:!b>1
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:b
+V:2
+S:1
+I:1
+@FILE conflict2.repo
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:foo
+V:1
+S:1
+I:1
+D:cmd:b
+
+C:Q244HWHwCnFk356XBdyfxmBAnxglbE2RB8KZrVKMd/Now=
+P:bar
+V:1
+S:1
+I:1
+p:cmd:b=2
+
+C:Q22m3XFZiqbVX90fyIevm++n1vCB5Ay2IxBIf+wjr1MGs=
+P:baz
+V:1
+S:1
+I:1
+p:cmd:b=1
+@FILE fuzzy.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:2.2
+S:1
+I:1
+
+C:Q2kYcFAd5KBACw7a7dpiHkZdf6cZpXV/DrbDB+oqrFtu8=
+P:a
+V:2.10
+S:1
+I:1
+@FILE installif1.installed
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:app
+V:1
+S:1
+I:1
+D:lib
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:lib
+V:1
+S:1
+I:1
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:foo
+V:1
+S:1
+I:1
+
+C:Q23wbu85C2vTFnoze1trCuHcZZzG2gzPmCFPxO+m3r5iY=
+P:appiif1
+V:1
+S:1
+I:1
+D:app
+i:app foo
+@FILE installif1.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:app
+V:1
+S:1
+I:1
+D:lib
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:lib
+V:1
+S:1
+I:1
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:foo
+V:1
+S:1
+I:1
+
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:bar
+V:1
+S:1
+I:1
+
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:libiif
+V:1
+S:1
+I:1
+i:lib foo
+
+C:Q23wbu85C2vTFnoze1trCuHcZZzG2gzPmCFPxO+m3r5iY=
+P:appiif1
+V:1
+S:1
+I:1
+D:app
+i:app foo
+
+C:Q22mdBYH+o8C4TsYthJ4wxRZFrXfSFrXD+J/T+1wkfCrU=
+P:appiif2
+V:1
+S:1
+I:1
+D:app
+i:app bar
+
+C:Q2fC2xFS0O1bOYfyXNXh/6UWJZXbyHC8qGx50CdC0jChM=
+P:dam
+V:1
+S:1
+I:1
+
+C:Q2xT3iRPLyNosjvX1S+9JY4ArPTIcZkez4sh+HO5ssrZw=
+P:dam-babel
+V:1
+S:1
+I:1
+p:cmd:babel
+
+C:Q27hK6EKupomAc6n0ru0RdXvoCdZ5qlld2V9DilJ4v+a8=
+P:dam1-babel
+V:1
+S:1
+I:1
+i:dam dam-babel
+p:cmd:babel
+@FILE installif10.repo
+C:Q2DqsbOB++6OpsmY+SjFWSIBFRHT5xAzXRi/SRmBZNe9Q=
+P:postmarketos-base-ui-gnome
+V:1
+S:1
+I:1
+D:polkit
+
+C:Q2Ay8uznJmYklsPGOaCN0ZpomaBnYKIYPnponzLVxIAxs=
+P:openrc
+V:1
+S:1
+I:1
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:postmarketos-base-ui-gnome-openrc
+V:1
+S:1
+I:1
+i:postmarketos-base-ui-gnome=1 openrc
+D:polkit-elogind
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:polkit
+V:1
+S:1
+I:1
+
+C:Q2+qGP45ipsBFBIyluHwCK7u9DFT50L34xt0nZdboehC0=
+P:polkit-elogind
+V:1
+S:1
+I:1
+p:polkit=1
+@FILE installif13.installed
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:app
+V:1
+S:1
+I:1
+D:lib
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:lib
+V:1
+S:1
+I:1
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:foo
+V:1
+S:1
+I:1
+@FILE installif2.repo
+C:Q2RU5GVFv8YjvWnkwcqeM/Eofoea5PJfLu2CWOgmjVTqg=
+P:appiif1
+V:2
+S:1
+I:1
+D:app broken-deps
+i:app foo
+@FILE installif6.repo
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:qt5-qtbase
+V:1
+S:1
+I:1
+p:so:libQt5Core.so.5=1
+
+C:Q2stMCIabmesu8Wobs+5yjS8TxxA4E3SRw7h4Zd9KkYkk=
+P:wayland-libs-client
+V:1
+S:1
+I:1
+p:so:libwayland-client.so.0=1
+
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:peruse
+V:1
+S:1
+I:1
+D:so:libQt5Core.so.5
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:sway
+V:1
+S:1
+I:1
+D:so:libwayland-client.so.0
+
+C:Q22mdBYH+o8C4TsYthJ4wxRZFrXfSFrXD+J/T+1wkfCrU=
+P:qt5-qtwayland
+V:1
+S:1
+I:1
+i:wayland-libs-client qt5-qtbase
+@FILE installif8.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:foo
+V:1
+S:1
+I:1
+i:bar=1 !baz !nonexistent
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:bar
+V:1
+S:1
+I:1
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:baz
+V:1
+S:1
+I:1
+@FILE provides-del.installed
+C:Q2UWndhk6SWY8XkTwlb1SWMLA7CphevKX9vRRiXFad+7M=
+P:wine-staging
+V:10
+S:2
+I:2
+p:wine=1
+@FILE provides-del.repo
+C:Q2nkZalnoOKOMIvi9Mke2ZUevQXOeTJ7fuM0UNQhym/AM=
+P:wine
+V:2
+S:2
+I:2
+
+C:Q2UWndhk6SWY8XkTwlb1SWMLA7CphevKX9vRRiXFad+7M=
+P:wine-staging
+V:10
+S:2
+I:2
+p:wine=1
+@FILE provides-prio.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:busybox-binsh
+V:1.37.0-r23
+S:1
+I:1
+p:/bin/sh cmd:sh=1.37.0-r23
+k:100
+
+C:Q2nfEbSpFVy+3OvyHSSL1Gx9ajzdW7eSkha7/sL3kXwWA=
+P:dash-binsh
+V:0.5.12-r3
+S:1
+I:1
+p:/bin/sh cmd:sh=0.5.12-r3
+k:60
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:yash-binsh
+V:2.59-r0
+S:1
+I:1
+D:/bin/sh cmd:sh=2.59-r0
+k:50
+@FILE provides-prio4.installed
+C:Q2nfEbSpFVy+3OvyHSSL1Gx9ajzdW7eSkha7/sL3kXwWA=
+P:dash-binsh
+V:0.5.12-r3
+S:1
+I:1
+p:/bin/sh cmd:sh=0.5.12-r3
+k:60
+@FILE provides-prio5.repo
+C:Q2wcBnPVVeaveUVd/bmgL/7YvH2h+NOUtS/RFjPc4rfgs=
+P:l-all
+V:1.0
+S:1
+I:1
+D:l-one l-two l-three
+p:l-any
+k:2
+
+C:Q2t0E+NWhDiHpQRn0RhszV51t/UXGNfR1gsPuzpswZVv8=
+P:l-one
+V:1.0
+S:1
+I:1
+p:l-any
+k:1
+
+C:Q2LZ9ajCKX8Rry0ciJiFdoAKxI6ImVnehr8sU2x7tayYU=
+P:l-two
+V:1.0
+S:1
+I:1
+p:l-any
+
+C:Q25Tmip8StQjpArj6LpB99ecGV8CM6f8Nn0KOBAVAoqZA=
+P:l-three
+V:1.0
+S:1
+I:1
+p:l-any
+@FILE provides-swap.installed
+C:Q2nVgbHmz8guS3RqVf7gOK2sl59dZDCHHMkVWuxF1oVRY=
+P:mailreadplus
+V:1
+S:1
+I:1
+p:mail-reader
+k:2
+@FILE provides-swap3.installed
+C:Q2nVgbHmz8guS3RqVf7gOK2sl59dZDCHHMkVWuxF1oVRY=
+P:md
+V:1
+S:1
+I:1
+D:q1
+
+C:Q2qxQs1hBeVHOXy6bRFdr0FveJmmMPs4ES38whBN2+N14=
+P:mui
+V:1
+S:1
+I:1
+D:md q1
+
+C:Q25RQbHwT7SVUiPy5maiaEx5YjLwY4cJBVCUu1MBWAeEg=
+P:meta
+V:1
+S:1
+I:1
+D:md mui
+
+C:Q2eMK6nPPcZuQpM0DWa576tBVMWdqmt/q1LvzE5MBX9Mk=
+P:q1
+V:1
+S:1
+I:1
+@FILE provides-swap3.repo
+C:Q2nJIxL7qJj5SShcnBAW4f3WInHRzur2FPvLNzKZQPhck=
+P:nd
+V:2
+S:1
+I:1
+D:q2
+p:md=2
+
+C:Q2ZVM/8qUzVVJMcnb+/3hhPRNlFRKMTggt6x55fQxuQCE=
+P:nui
+V:2
+S:1
+I:1
+D:md q2
+p:mui=2
+
+C:Q25RQbHwT7SVUiPy5maiaEx5YjLwY4cJBVCUu1MBWAeEg=
+P:meta
+V:1
+S:1
+I:1
+D:md mui
+
+C:Q25q29Y8Ghf1/mzB18APujx48cVlAJKN/3HgwKlsKVirk=
+P:q2
+V:1
+S:1
+I:1
+@FILE provides-upgrade.installed
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:a
+V:1
+S:1
+I:1
+@FILE provides-upgrade.repo
+C:Q2nkZalnoOKOMIvi9Mke2ZUevQXOeTJ7fuM0UNQhym/AM=
+P:b
+V:2
+S:2
+I:2
+p:a=2
+@FILE provides.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:libfoo
+V:1
+S:1
+I:1
+p:so:foo.so.1=1.0
+
+C:Q2nfEbSpFVy+3OvyHSSL1Gx9ajzdW7eSkha7/sL3kXwWA=
+P:libfoo
+V:2
+S:1
+I:1
+p:so:foo.so.2=1.0
+
+C:Q29nH+yjE0iFRkvlG+hZ+BowQTKRQwbVAFVHWUiKxFP2A=
+P:app
+V:2
+S:1
+I:1
+D:so:foo.so.1
+
+C:Q2d0RStEmzV9PbVTWYDnisXcEO0A75zZKaoZJrdJ+Nokc=
+P:app2
+V:2
+S:1
+I:1
+D:so:foo.so.2
+
+C:Q2KLacJ2EJOamCLo0y9WY80XdXbD1534HtMHOc5mFPJSI=
+P:mymailreader
+V:0.1
+S:1
+I:1
+
+C:Q23GJzdvyPD52sF/s3mg5LXiXfunZLQx8cJsGUQXar8sI=
+P:mymailreader
+V:1
+S:1
+I:1
+p:mail-reader
+k:1
+
+C:Q2nVgbHmz8guS3RqVf7gOK2sl59dZDCHHMkVWuxF1oVRY=
+P:mailreadplus
+V:1
+S:1
+I:1
+p:mail-reader
+k:2
+
+C:Q2b7sQ7Jy6AMvnLPmadOL+h+8y/1a7tDqkeGz9h/nrpCY=
+P:mailreadsolo
+V:1
+S:1
+I:1
+D:!mail-reader
+p:mail-reader
+
+C:Q2obPq6OdIh0/x/cAQ6lURZCLdX2Se4Bq16YZBHSNDE4M=
+P:server-a
+V:1
+S:1
+I:1
+p:theservice=1
+
+C:Q2rPAc/2/r1OQU1o952ix11dvrE/HRZTPzuEfWEglKdH4=
+P:server-b
+V:1
+S:1
+I:1
+p:theservice=2
+
+C:Q2s55Hstklz776SMYHiREFnoM9oUMkDfx12vwoyvxXBB4=
+P:selfconflicting
+V:1
+S:1
+I:1
+p:selfprovided=2 selfprovided=3
+
+C:Q2o8Umslo6RXVE8vuXn6MKtjfIhaEDgX2YBci8A+dfjew=
+P:conflicted-provider-a
+V:0.1
+S:1
+I:1
+p:conflicted-provider
+
+C:Q29ArMUqZTOlPgDSkn+gT/R9tP9tzQC1AKz9Qz6ihXhek=
+P:conflicted-provider-b
+V:0.1
+S:1
+I:1
+p:conflicted-provider conflicted-provider-2
+
+C:Q2ueUFb8bJIC5nj2BNotTgjuhU0iGI6bnJZwmevoAHQTY=
+P:conflicted-dep
+V:0.1
+S:1
+I:1
+D:conflicted-provider
+
+C:Q2cPmRniEN22bO+DDUin9bT8j8AE6b0Q+4483oWS8M5Z0=
+P:conflicted-parent
+V:0.1
+S:1
+I:1
+D:conflicted-dep
+
+C:Q24Q43c6lnyLXugZKg1JcntfOfA5FeHE57djPBRiAQnbU=
+P:self-provide
+V:0.1
+S:1
+I:1
+p:self-provide
+
+C:Q2cfh5CGrqQt9czQm8zRAH/sGXGP2UQ4tNsTy/wNknkpw=
+P:conflicted-dep-2
+V:0.1
+S:1
+I:1
+D:conflicted-provider-2
+
+C:Q2STVxs6cxbx+jZsBCXRZnnI2LMdvnjpVm6C/3KzcKbS8=
+P:pulseaudio-alsa
+V:1
+S:1
+I:1
+k:10
+
+C:Q2+oJ0Xpy2S3gdU8sTRi5ih+Gmn4DHE73wrGJuijlpiS0=
+c:a79b3f751d72fd4bdb6729139660d0b4f5b87a33
+P:pulseaudio
+V:1
+S:1
+I:1
+k:10
+
+C:Q2UKFj4Rn/MOldAh6ZqLz5E2480ZVtbVSLXyZep+LHwJw=
+P:pipewire-pulse
+V:1
+S:1
+I:1
+k:1
+p:pulseaudio=1 pulseaudio-alsa=1
+
+C:Q25Df5TsX/BdJ7RLm3CuDki7sg2g3wvYV7YbWW+cn7bdo=
+P:sane-backends
+V:1
+S:1
+I:1
+
+C:Q2NI6k2hPW517a11B/zU/XGy4YCKIU53zKjHEcOQAHa3w=
+P:sane-backend-hpaio
+V:1
+S:1
+I:1
+i:sane-backends
+p:hplip-sane
+
+C:Q2Ff9StINKFEz7BQdmOHVGq1gwZ8RBf3P+vAFX/fCokvM=
+P:testp
+V:0.1-r0
+S:1
+I:1
+p:foopkg
+
+C:Q2a/DqJIVA0JKQgfoS+/0Ndf9yO675bMfzbaWQYvH1t+M=
+P:testq
+V:0.1-r0
+S:1
+I:1
+p:foopkg
+
+C:Q2wcBnPVVeaveUVd/bmgL/7YvH2h+NOUtS/RFjPc4rfgs=
+P:testr
+V:0.1-r0
+S:1
+I:1
+D:foopkg
+@FILE provides21.repo
+C:Q29GN5JAU88SU5KunqhoOp5VCalfpSlCxgzR+peH/ZuW4=
+P:postmarketos-base-systemd
+V:1
+S:1
+I:1
+D:polkit>9999
+
+C:Q23d8Sx9hTHs6OyZmXvTOlgr3Ju0oSxm4918ECF1PPI6g=
+P:polkit-dev
+V:999124
+S:1
+I:1
+D:polkit=999124
+p:pc:polkit-gobject-1=124
+
+C:Q2No6uLPQLm/oYa+Aq4h7kp4zLavaR8TWrBLOlgQFmk+s=
+P:polkit-dev
+V:125
+S:1
+I:1
+D:polkit=125
+p:pc:polkit-gobject-1=125
+
+C:Q2wOs8f/cu7nGuh6Xzq1ILz73EU9q23NVYlGquQhNtDSM=
+P:polkit
+V:999124
+S:1
+I:1
+
+C:Q2Mptpq4ZHUNSukoRelaVgJLtw0ZI4x4ldD+gDAH8C6fE=
+P:polkit
+V:125
+S:1
+I:1
+@FILE provides22.repo
+C:Q2wcBnPVVeaveUVd/bmgL/7YvH2h+NOUtS/RFjPc4rfgs=
+P:openjdk8-jdk
+V:1.0
+S:1
+I:1
+D:so:openjdk8:libawt.so=0
+
+C:Q2a/DqJIVA0JKQgfoS+/0Ndf9yO675bMfzbaWQYvH1t+M=
+P:openjdk8-jre-base
+V:1.0
+S:1
+I:1
+p:java-jre-headless so:openjdk8:libawt.so=0
+@FILE upgrade.installed
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:libold
+V:1
+S:1
+I:1
+
+C:Q2nVgbHmz8guS3RqVf7gOK2sl59dZDCHHMkVWuxF1oVRY=
+P:app
+V:1
+S:1
+I:1
+D:libold
+@FILE upgrade.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:libold
+V:1
+S:1
+I:1
+
+C:Q2nfEbSpFVy+3OvyHSSL1Gx9ajzdW7eSkha7/sL3kXwWA=
+P:libnew
+V:1
+S:1
+I:1
+D:!libold
+
+C:Q2nVgbHmz8guS3RqVf7gOK2sl59dZDCHHMkVWuxF1oVRY=
+P:app
+V:1
+S:1
+I:1
+D:libold
+
+C:Q2obPq6OdIh0/x/cAQ6lURZCLdX2Se4Bq16YZBHSNDE4M=
+P:app
+V:2
+S:1
+I:1
+D:libnew
+
+C:Q2SvluS27tsFb5xO91TStOUiEe4d57/zLVASLG1Yw42Qc=
+P:b
+V:2
+S:1
+I:1
+@FILE upgrade3.installed
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:libold
+V:1
+S:1
+I:1
+
+C:Q2nVgbHmz8guS3RqVf7gOK2sl59dZDCHHMkVWuxF1oVRY=
+P:app
+V:1
+S:1
+I:1
+D:libold
+
+C:Q2zB2yUeJywxxybaRZ0Ar1o4hFK2wzvFR6XtB0okYEKZo=
+P:b
+V:1
+S:1
+I:1
+@FILE upgrade4.repo
+C:Q2rlpuAFEp3MNJuXbRw3YnAGJPcJQePide7drUxa+63pE=
+P:libold
+V:1
+S:1
+I:1
+
+C:Q2nfEbSpFVy+3OvyHSSL1Gx9ajzdW7eSkha7/sL3kXwWA=
+P:libnew
+V:1
+S:1
+I:1
+D:!libold
+
+C:Q2nVgbHmz8guS3RqVf7gOK2sl59dZDCHHMkVWuxF1oVRY=
+P:app
+V:1
+S:1
+I:1
+D:libold
+
+C:Q2obPq6OdIh0/x/cAQ6lURZCLdX2Se4Bq16YZBHSNDE4M=
+P:app
+V:2
+S:1
+I:1
+D:libnew
+@FILE basic1.test
+@ARGS add a
+@REPO basic.repo
+@EXPECT
+Installing b (2)
+Installing a (2)
+@FILE basic13.test
+@ARGS upgrade --latest
+@REPO basic.repo
+@INSTALLED basic.installed
+@WORLD a<2
+@EXPECT
+ERROR:
+  a-2:
+@FILE basic14.test
+@ARGS del a
+@REPO basic.repo
+@INSTALLED basic5.installed
+@WORLD a
+@EXPECT
+Purging a (2)
+Purging b (2)
+@FILE basic15.test
+@ARGS del c
+@REPO basic.repo
+@INSTALLED basic.installed
+@WORLD a b c
+@EXPECT
+@FILE basic17.test
+@ARGS add --upgrade a
+@REPO basic17.repo
+@INSTALLED basic17.installed
+@WORLD b
+@EXPECT
+Upgrading b (1 -> 2)
+Upgrading a (1 -> 2)
+@FILE basic18.test
+@ARGS add --latest b
+@REPO basic17.repo
+@INSTALLED basic17.installed
+@WORLD a
+@EXPECT
+Upgrading b (1 -> 2)
+Upgrading a (1 -> 2)
+@FILE basic2.test
+@ARGS add
+@REPO basic.repo
+@INSTALLED basic.installed
+@WORLD a
+@EXPECT
+@FILE basic21.test
+@ARGS upgrade --prune
+@WORLD a b
+@INSTALLED basic.installed
+@REPO basic21.repo
+@EXPECT
+Purging a (1)
+@FILE basic3.test
+@ARGS upgrade
+@REPO basic.repo
+@INSTALLED basic.installed
+@WORLD a
+@EXPECT
+Upgrading b (1 -> 2)
+Upgrading a (1 -> 2)
+@FILE basic4.test
+@ARGS del a
+@REPO basic.repo
+@INSTALLED basic.installed
+@WORLD a b
+@EXPECT
+Purging a (1)
+@FILE basic5.test
+@ARGS upgrade -a
+@REPO basic.repo
+@INSTALLED basic5.installed
+@WORLD a
+@EXPECT
+Replacing b (2 -> 2)
+Replacing a (2 -> 2)
+@FILE basic6.test
+@ARGS upgrade
+@REPO basic.repo
+@INSTALLED basic5.installed
+@WORLD a
+@EXPECT
+@FILE complicated1.test
+@ARGS add a
+@REPO complicated1.repo
+@EXPECT
+Installing d (1.5)
+Installing c (1)
+Installing b (1)
+Installing a (2)
+@FILE complicated2.test
+@ARGS add b
+@REPO complicated1.repo
+@EXPECT
+Installing d (1.5)
+Installing c (1)
+Installing b (1)
+@FILE complicated3.test
+@ARGS add c
+@REPO complicated1.repo
+@EXPECT
+Installing d (2.0)
+Installing c (1)
+@FILE complicated4.test
+@ARGS add a
+@REPO complicated1.repo
+@INSTALLED complicated1.installed
+@WORLD d
+@EXPECT
+Upgrading d (1.0 -> 1.5)
+Installing c (1)
+Installing b (1)
+Installing a (2)
+@FILE conflict1.test
+@ARGS add a b
+@REPO conflict.repo
+@EXPECT
+Installing b (1)
+Installing a (1)
+@FILE conflict2.test
+@ARGS add a b>1
+@REPO conflict.repo
+@EXPECT
+ERROR:
+  b-2:
+@FILE conflict3.test
+@ARGS add baz
+@REPO conflict2.repo
+@INSTALLED conflict.installed
+@WORLD foo
+@EXPECT
+Purging bar (1)
+Installing baz (1)
+@FILE error1.test
+@ARGS add a d>1.5
+@REPO complicated1.repo
+@EXPECT
+ERROR:
+  d-2.0:
+@FILE error2.test
+@ARGS add a d<1.5
+@REPO complicated1.repo
+@EXPECT
+ERROR:
+  d-1.0:
+@FILE error3.test
+@ARGS add a !b
+@REPO complicated1.repo
+@EXPECT
+ERROR:
+  d-2.0:
+  b-1:
+@FILE error4.test
+@ARGS add a nonexistant
+@REPO complicated1.repo
+@EXPECT
+ERROR:
+  nonexistant (no such package):
+@FILE error5.test
+@ARGS add a>2
+@REPO complicated1.repo
+@EXPECT
+ERROR:
+  d-2.0:
+@FILE fuzzy1.test
+@ARGS add a~2.2
+@REPO fuzzy.repo
+@EXPECT
+Installing a (2.2)
+@FILE fuzzy2.test
+@ARGS add a~2.4
+@REPO fuzzy.repo
+@EXPECT
+ERROR:
+  a-2.10:
+@FILE fuzzy3.test
+@ARGS add a>~2.5
+@REPO fuzzy.repo
+@EXPECT
+Installing a (2.10)
+@FILE installif1.test
+@ARGS add foo app
+@REPO installif1.repo
+@EXPECT
+Installing lib (1)
+Installing app (1)
+Installing foo (1)
+Installing appiif1 (1)
+@FILE installif10.test
+@ARGS add postmarketos-base-ui-gnome openrc
+@REPO installif10.repo
+@EXPECT
+Installing openrc (1)
+Installing polkit-elogind (1)
+Installing postmarketos-base-ui-gnome (1)
+Installing postmarketos-base-ui-gnome-openrc (1)
+@FILE installif13.test
+@ARGS del appiif1
+@REPO installif1.repo
+@INSTALLED installif13.installed
+@WORLD app foo !appiif1
+@EXPECT
+Installing appiif1 (1)
+@FILE installif2.test
+@ARGS add foo app bar
+@REPO installif1.repo
+@EXPECT
+Installing lib (1)
+Installing app (1)
+Installing bar (1)
+Installing appiif2 (1)
+Installing foo (1)
+Installing appiif1 (1)
+@FILE installif3.test
+@ARGS add foo app
+@REPO installif1.repo
+@REPO installif2.repo
+@EXPECT
+Installing lib (1)
+Installing app (1)
+Installing foo (1)
+Installing appiif1 (1)
+@FILE installif4.test
+@ARGS del app
+@REPO installif1.repo
+@INSTALLED installif1.installed
+@WORLD app
+@EXPECT
+Purging appiif1 (1)
+Purging app (1)
+Purging lib (1)
+Purging foo (1)
+@FILE installif5.test
+@ARGS add dam dam-babel cmd:babel
+@REPO installif1.repo
+@EXPECT
+Installing dam-babel (1)
+Installing dam (1)
+Installing dam1-babel (1)
+@FILE installif6.test
+@ARGS add sway peruse
+@REPO installif6.repo
+@EXPECT
+Installing qt5-qtbase (1)
+Installing peruse (1)
+Installing wayland-libs-client (1)
+Installing qt5-qtwayland (1)
+Installing sway (1)
+@FILE installif8.test
+@ARGS add bar
+@REPO installif8.repo
+@EXPECT
+Installing bar (1)
+Installing foo (1)
+@FILE installif9.test
+@ARGS add bar baz
+@REPO installif8.repo
+@EXPECT
+Installing bar (1)
+Installing baz (1)
+@FILE provides-prio1.test
+@ARGS add /bin/sh
+@REPO provides-prio.repo
+@EXPECT
+Installing busybox-binsh (1.37.0-r23)
+@FILE provides-prio2.test
+@ARGS add /bin/sh dash-binsh
+@REPO provides-prio.repo
+@EXPECT
+Installing dash-binsh (0.5.12-r3)
+@FILE provides-prio4.test
+@ARGS upgrade
+@INSTALLED provides-prio4.installed
+@REPO provides-prio.repo
+@WORLD /bin/sh
+@EXPECT
+Purging dash-binsh (0.5.12-r3)
+Installing busybox-binsh (1.37.0-r23)
+@FILE provides-prio5.test
+@ARGS add l-any
+@REPO provides-prio5.repo
+@EXPECT
+Installing l-one (1.0)
+Installing l-two (1.0)
+Installing l-three (1.0)
+Installing l-all (1.0)
+@FILE provides-prio6.test
+@ARGS add l-one l-any
+@REPO provides-prio5.repo
+@EXPECT
+Installing l-one (1.0)
+@FILE provides-swap.test
+@ARGS add mymailreader
+@REPO provides.repo
+@INSTALLED provides-swap.installed
+@WORLD mail-reader
+@EXPECT
+Purging mailreadplus (1)
+Installing mymailreader (1)
+@FILE provides-swap2.test
+@ARGS add mailreadplus
+@REPO provides.repo
+@INSTALLED provides-swap.installed
+@WORLD mail-reader
+@EXPECT
+@FILE provides-swap3.test
+@ARGS upgrade
+@REPO provides-swap3.repo
+@INSTALLED provides-swap3.installed
+@WORLD meta
+@EXPECT
+Purging mui (1)
+Purging md (1)
+Purging q1 (1)
+Installing q2 (1)
+Installing nd (2)
+Installing nui (2)
+@FILE provides-upgrade.test
+@ARGS upgrade
+@REPO provides-upgrade.repo
+@INSTALLED provides-upgrade.installed
+@WORLD a
+@EXPECT
+Purging a (1)
+Installing b (2)
+@FILE provides1.test
+@ARGS add app
+@REPO provides.repo
+@EXPECT
+Installing libfoo (1)
+Installing app (2)
+@FILE provides10.test
+@ARGS add conflicted-dep
+@REPO provides.repo
+@EXPECT
+ERROR:
+  conflicted-provider (virtual):
+@FILE provides11.test
+@ARGS add conflicted-parent
+@REPO provides.repo
+@EXPECT
+ERROR:
+  conflicted-provider (virtual):
+@FILE provides12.test
+@ARGS add self-provide
+@REPO provides.repo
+@EXPECT
+ERROR:
+  self-provide-0.1:
+@FILE provides13.test
+@ARGS add pulseaudio pulseaudio-alsa
+@REPO provides.repo
+@EXPECT
+Installing pulseaudio (1)
+Installing pulseaudio-alsa (1)
+@FILE provides14.test
+@ARGS add hplip-sane sane-backends
+@REPO provides.repo
+@EXPECT
+ERROR:
+  hplip-sane (virtual):
+@FILE provides15.test
+@ARGS add hplip-sane sane-backend-hpaio sane-backends nonexistent
+@REPO provides.repo
+@EXPECT
+ERROR:
+  nonexistent (no such package):
+@FILE provides16.test
+@ARGS add testr
+@REPO provides.repo
+@EXPECT
+ERROR:
+  foopkg (virtual):
+@FILE provides17.test
+@ARGS add testp testr
+@REPO provides.repo
+@EXPECT
+Installing testp (0.1-r0)
+Installing testr (0.1-r0)
+@FILE provides18.test
+@ARGS del wine-staging
+@REPO provides-del.repo
+@INSTALLED provides-del.installed
+@WORLD wine wine-staging
+@EXPECT
+Purging wine-staging (10)
+Installing wine (2)
+@FILE provides19.test
+@ARGS add mailreadsolo
+@REPO provides.repo
+@EXPECT
+Installing mailreadsolo (1)
+@FILE provides2.test
+@ARGS add mail-reader
+@REPO provides.repo
+@EXPECT
+Installing mailreadplus (1)
+@FILE provides20.test
+@ARGS add mailreadsolo mailreadplus
+@REPO provides.repo
+@EXPECT
+ERROR:
+  mailreadplus-1:
+@FILE provides21.test
+@ARGS add postmarketos-base-systemd pc:polkit-gobject-1
+@REPO provides21.repo
+@EXPECT
+Installing polkit (999124)
+Installing polkit-dev (999124)
+Installing postmarketos-base-systemd (1)
+@FILE provides22.test
+@ARGS add openjdk8-jdk java-jre-headless
+@REPO provides22.repo
+@EXPECT
+Installing openjdk8-jre-base (1.0)
+Installing openjdk8-jdk (1.0)
+@FILE provides3.test
+@ARGS add mail-reader mymailreader
+@REPO provides.repo
+@EXPECT
+Installing mymailreader (1)
+@FILE provides4.test
+@ARGS add mymailreader mailreadplus
+@REPO provides.repo
+@EXPECT
+Installing mailreadplus (1)
+Installing mymailreader (1)
+@FILE provides5.test
+@ARGS add server-a server-b
+@REPO provides.repo
+@EXPECT
+ERROR:
+  server-a-1:
+  server-b-1:
+@FILE provides6.test
+@ARGS add app app2
+@REPO provides.repo
+@EXPECT
+ERROR:
+  libfoo-1:
+  libfoo-2:
+@FILE provides7.test
+@ARGS add selfconflicting
+@REPO provides.repo
+@EXPECT
+ERROR:
+  selfconflicting-1:
+@FILE provides8.test
+@ARGS add mail-reader mailreadplus
+@REPO provides.repo
+@EXPECT
+Installing mailreadplus (1)
+@FILE provides9.test
+@ARGS add conflicted-provider
+@REPO provides.repo
+@EXPECT
+ERROR:
+  conflicted-provider (virtual):
+@FILE upgrade1.test
+@ARGS upgrade
+@REPO upgrade.repo
+@INSTALLED upgrade.installed
+@WORLD app
+@EXPECT
+Purging libold (1)
+Installing libnew (1)
+Upgrading app (1 -> 2)
+@FILE upgrade2.test
+@ARGS upgrade --ignore app
+@REPO upgrade.repo
+@INSTALLED upgrade.installed
+@WORLD app
+@EXPECT
+@FILE upgrade3.test
+@ARGS upgrade b
+@REPO upgrade.repo
+@INSTALLED upgrade3.installed
+@WORLD app b
+@EXPECT
+Upgrading b (1 -> 2)
+@FILE upgrade4.test
+@ARGS upgrade --prune
+@REPO upgrade4.repo
+@INSTALLED upgrade3.installed
+@WORLD app b
+@EXPECT
+Purging b (1)
+Purging libold (1)
+Installing libnew (1)
+Upgrading app (1 -> 2)
+)DATA"

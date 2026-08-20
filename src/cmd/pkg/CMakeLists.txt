@@ -8,6 +8,7 @@ add_library(braam_pkg STATIC
     pkg.cpp
     query.cpp
     sha256.cpp
+    solve.cpp
     stanza.cpp
     store.cpp
     trust.cpp

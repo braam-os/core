@@ -25,6 +25,82 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A solver with no way back, and 72 fixtures that say so
+
+P17 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `solve.cpp` is apk's
+solver ported: discovery, unit propagation, one greedy decision at a time, and
+a changeset in dependency order. It is pure — the index and the installed set
+arrive as stanzas the caller holds — so it compiles into `tests.wasm` beside
+`index.cpp` and a syscall in it is a link error. Nothing calls it yet; P18 is
+its first caller, and `/bin/pkg` is byte-for-byte the size it was, because
+`--gc-sections` never extracts an archive member nobody references.
+
+**There is no backtracking, and `conflicts` is what replaces it.** Every
+constraint that a package fails bumps a counter that only ever increases, so a
+package disqualified once is disqualified for good and no decision ever has to
+be unwound. What that buys is a solver with no search stack and no exponential
+corner; what it costs is that a contradiction is *reported* rather than
+retried. The fixtures are full of contradictions, which is the point: apk's
+`error*.test` cases exist to pin down what a refusal says.
+
+**The fixtures are the specification, so they came in as a file rather than as
+prose.** `tools/mkfixtures.py` derives `test/unit/solve.data` from
+`apk-tools/test/solver/` — 72 cases over 36 index and installed-db fixtures,
+23 KB — the way `version.data` already carries apk's version suite.
+Keeping the converter in the tree rather than hand-editing the output is what
+makes the derivation auditable: every re-spelling below is one function in it,
+and re-running it against a newer apk is a command rather than a merge.
+
+**`@EXPECT` keeps apk's verbs and loses its printer.** The `(N/M)` counter is a
+progress meter and `OK: 2 B in 2 packages` is a `du`; neither is a decision the
+solver makes. What is left — `Installing b (2)`, `Upgrading app (1 -> 2)`,
+`Purging libold (1)`, in apk's order — is exactly the changeset, and the order
+is most of what is being asserted. An error block keeps its `ERROR:` header and
+its package labels and drops the `breaks:`/`satisfies:` prose beneath them,
+which would have meant porting apk's reporter, its second reachability pass and
+its greedy wrap at column fifty for no gain in what is being proved.
+
+**A label is a package that breaks a constraint, not one that failed.** The
+first attempt marked every package the solver could not keep, and `error1`
+answered with three labels where apk prints one. The reason is that apk's
+reporter re-derives what breaks from the graph: the solver stops applying a
+constraint once the name behind it has no options left, so `d-2.0`'s counter
+never records the `d<2.0` that condemns it. `breaks_something` walks world and
+the chosen set at report time instead, which is what makes `error1` one label
+and `error3` two.
+
+**Two re-spellings, and one of them was the whole of the last four failures.**
+apk accumulates a repeated `D:`, `p:` or `i:`; Package_Format.md §1 calls that
+malformed and §6 makes the list space-separated, so the converter folds the
+lines into the one spelling this grammar defines. And `C:` is apk's Q1, which
+is SHA-1, where §1.1 takes SHA-256 alone — so it is restamped by hashing the
+old digest, which keeps equal equal and distinct distinct. It has to hash the
+**decoded bytes**, not the text. `installif1.repo` spells one digest two ways —
+`…yysF=` and `…yysE=` differ only in the padding bits base64 discards — so
+`libiif` collides with `bar` in apk's package table and never becomes a package
+at all. Hashing the text separated them, and a package Alpine has never had
+appeared in four expected outputs. That is also why `solve()` keys its own
+table on the digest across the whole index and not merely across the index and
+the installed set.
+
+**`so:` turns out not to exist.** P17 said to drop the cases that only exercise
+pinning or `so:`. Pinning is real and fifteen cases go with it. `so:` is not:
+apk's sources contain no occurrence of the string, and `so:libfoo.so.1`,
+`cmd:sh`, `pc:zlib` and `/bin/sh` are ordinary names whose colons and slashes
+Braam's `dep_parse` already accepts, its name scan stopping only at `< > = ~`.
+So nothing was dropped for it and all twenty-two `provides*` cases stand.
+
+**The 47 dropped, each needing something a solver is not:** fifteen for
+repository pinning; eight for apk upgrading itself; six for the `fix` applet;
+four for `-t .virtual`, a package built on the command line; three for
+`--no-network` or a cache index, which is availability masking; three for
+`-v`'s verbose summary and its no-longer-available note; three for world
+dependency spellings rejected before the solver is reached; two for
+`--force-broken-world`; one for arch; one for an index dependency carrying
+`@tag`; and one for `apk del`'s not-removed report. The generated file's header
+lists them by name, so the drop list cannot drift from the code that applies
+it.
+
 ## Three rows that only read
 
 P16 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `pkg search`, `pkg info`

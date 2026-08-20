@@ -25,6 +25,7 @@ add_executable(tests
     unit/test_sched.cpp
     unit/test_screen.cpp
     unit/test_sha256.cpp
+    unit/test_solve.cpp
     unit/test_stanza.cpp
     unit/test_expand.cpp
     unit/test_str.cpp
@@ -75,6 +76,7 @@ add_executable(tests
     ../src/cmd/pkg/encode.cpp
     ../src/cmd/pkg/index.cpp
     ../src/cmd/pkg/sha256.cpp
+    ../src/cmd/pkg/solve.cpp
     ../src/cmd/pkg/stanza.cpp
     ../src/cmd/pkg/trust.cpp
     ../src/cmd/pkg/version.cpp

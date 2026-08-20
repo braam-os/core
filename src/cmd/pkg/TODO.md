@@ -27,9 +27,10 @@ dependency token, the stanza grammar with its records, the zip's directory,
 calling a syscall. `unzip.cpp` inflates an entry, `store.cpp` performs the steps
 `db.cpp` computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`
 and `query.cpp` are the subcommands there are; those five are the pieces that
-stay out. Phase D is done, and of Phase E `pkg update` writes `/pkg/index` while
-`pkg search`, `pkg info` and `pkg list` read it and the generation beside it. So
-this starts at P17.
+stay out, and `solve.cpp` is in with the first list, being pure. Phase D is
+done, and of Phase E `pkg update` writes `/pkg/index`, `pkg search`, `pkg info`
+and `pkg list` read it and the generation beside it, and the solver computes a
+changeset nothing yet performs. So this starts at P18.
 
 ## The shape being built
 
@@ -109,42 +110,6 @@ wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
 
 ## Phase E — the commands
-
-### P17. The solver
-
-`solve.cpp` — apk's algorithm, which is greedy, deductive and has **no
-backtracking**. Once a name is locked it is not revisited; a contradiction is
-accumulated and reported rather than retried.
-
-- The model: a **name** is any dependency token, real or virtual, holding its
-  providers and its reverse dependencies; a **package**; a **provider** is a
-  (package, version) pair registered under a name, where the version is the one
-  it provides *under that name*.
-- Three work queues, each sorted by a discovery order: resolve-now (a name with
-  no options left — unit propagation), selectable, unresolved.
-- `apply_constraint` counts requirers and disqualifies every provider that
-  cannot satisfy; `disqualify_package` re-dirties the reverse dependents, which
-  is the up-propagation.
-- `reconsider_name` is the propagation core: re-check each candidate's depends,
-  re-evaluate `install_if`, merge the dependencies common to *all* candidates so
-  a constraint can be applied before the choice is made, and exclude
-  non-providers where every candidate also provides some other name.
-- `compare_providers` is a strict tiebreak chain. Several of apk's rungs go with
-  repository pinning and `so:`; what is left is roughly: fewer conflicts, then
-  installed, then higher version, then higher provider priority.
-- An unversioned virtual provider is never chosen spontaneously unless it has a
-  provider priority or its own package name is required.
-- The changeset comes out in **dependency order**, because the generator
-  recurses into a package's depends before recording it.
-
-`apk-tools/test/solver/` is 168 files — 119 `.test` cases over 29 `.repo` and 20
-`.installed` files, the last two in the stanza grammar and the first a list of
-`@ARGS`, `@REPO`, `@INSTALLED`, `@WORLD` and `@EXPECT` directives, where
-`@EXPECT` is the expected output compared byte for byte. Port the harness; the
-fixtures are the specification of this task.
-
-Done when: the ported fixtures pass, minus the ones that only exercise pinning
-or `so:`, and the ones dropped are listed with a reason.
 
 ### P18. `pkg install <package>...`
 
