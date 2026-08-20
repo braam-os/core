@@ -1531,6 +1531,14 @@ if (mode === "--kernel") {
         store.dirs.add("/pkg");
         plant("/pkg/repositories", REPO + "\n");
 
+        // P16's three read what an update left, and there has been none.
+        submit("clear", (ut += 0.005));
+        s = submit("pkg search awk", (ut += 0.005));
+        if (!rows(s).includes("pkg: no index; run pkg update"))
+            fail(`pkg search with no index printed ${JSON.stringify(output(s))}`);
+        if (!rows(s).includes(prompt(1)))
+            fail(`pkg search with no index left ${row(s, s.cursor_y)}`);
+
         // Each of §7's steps, named by the one that refused. Nothing is stored
         // by any of them.
         net.routes.delete(IDX);
@@ -1563,6 +1571,71 @@ if (mode === "--kernel") {
             fail(`a second update printed ${JSON.stringify(output(s))}`);
         if (!rows(s).includes(prompt()))
             fail(`a second update left ${row(s, s.cursor_y)}, expected ${prompt()}`);
+
+        // P16: the index read back, and the generation beside it. A listing is
+        // wider than this grid, so it goes wide the way help and ps do.
+        addr = instance.exports.resize(100, 24);
+        if (addr === 0)
+            fail("the resize before pkg search failed");
+
+        const query = (line) => {
+            submit("clear", (ut += 0.005));
+            return submit(line, (ut += 0.005));
+        };
+        const prints = (line, want, status = 0) => {
+            const got = query(line);
+            if (output(got).join("|") !== want)
+                fail(`${line} printed ${JSON.stringify(output(got))}, expected ${want}`);
+            if (!rows(got).includes(prompt(status)))
+                fail(`${line} left ${row(got, got.cursor_y)}, expected ${prompt(status)}`);
+        };
+
+        // The columns are measured over the matches, and a package with no
+        // description leaves the version column unpadded.
+        prints("pkg search '*'",
+               "awk   1.2-r0  pattern-directed scanning and processing language|less  1.6-r1");
+        // A pattern with no metacharacter is a substring, over both fields and
+        // ignoring case; one with a metacharacter globs the whole field.
+        prints("pkg search awk", "awk  1.2-r0  pattern-directed scanning and processing language");
+        prints("pkg search LESS", "less  1.6-r1");
+        prints("pkg search '*scan*'",
+               "awk  1.2-r0  pattern-directed scanning and processing language");
+        prints("pkg search 'aw?'", "awk  1.2-r0  pattern-directed scanning and processing language");
+        // Nothing matched is nothing printed, and still a success.
+        prints("pkg search nonesuch", "");
+
+        // §3.3's order with C last, and no row for a field the stanza has not
+        // got: the fixture's `less` carries no description.
+        prints("pkg info less",
+               ["name          less", "version       1.6-r1", "size          9000",
+                "digest        Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI="].join("|"));
+        // §7 step 7: a name the index does not list does not exist.
+        prints("pkg info nonesuch", "pkg: nonesuch: not in the index", 1);
+
+        // No generation is nothing installed, and not an error.
+        prints("pkg list", "");
+
+        // One planted by hand, since installing is P18. `pkg list` reads the
+        // link and the text behind it, and `info` gains a row.
+        submit("mkdir -p /pkg/gen/1", (ut += 0.005));
+        submit("echo awk 1.2-r0 > /pkg/gen/1/packages", (ut += 0.005));
+        submit("echo less 1.6-r1 >> /pkg/gen/1/packages", (ut += 0.005));
+        submit("ln -s /pkg/gen/1 /pkg/active", (ut += 0.005));
+        prints("pkg list", "awk   1.2-r0|less  1.6-r1");
+        prints("pkg info awk",
+               ["name          awk", "version       1.2-r0", "installed     1.2-r0",
+                "size          18244", "unpacked      41984",
+                "description   pattern-directed scanning and processing language",
+                "depends       cmd:sh", "provides      cmd:awk",
+                "digest        Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI="].join("|"));
+
+        // A usage error is 2, the same as any other program's.
+        prints("pkg list please", "usage: pkg list", 2);
+        prints("pkg info", "usage: pkg info <package>", 2);
+
+        addr = instance.exports.resize(60, 16);
+        if (addr === 0)
+            fail("the resize after pkg info failed");
 
         // And now that 41 is the floor, an older index is a rollback.
         route(fixture("older"));

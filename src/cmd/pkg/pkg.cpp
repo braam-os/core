@@ -8,9 +8,10 @@ namespace {
 // Sorted, and explicit: --gc-sections never extracts an unreferenced archive
 // member. What each command is for is /share/help's, not a string here.
 constexpr PkgCommand TABLE[] = {
-    { "autoremove", nullptr }, { "clean", nullptr },   { "files", nullptr },  { "info", nullptr },
-    { "install", nullptr },    { "list", nullptr },    { "remove", nullptr }, { "search", nullptr },
-    { "update", pkg_update },  { "upgrade", nullptr }, { "verify", nullptr },
+    { "autoremove", nullptr }, { "clean", nullptr },     { "files", nullptr },
+    { "info", pkg_info },      { "install", nullptr },   { "list", pkg_list },
+    { "remove", nullptr },     { "search", pkg_search }, { "update", pkg_update },
+    { "upgrade", nullptr },    { "verify", nullptr },
 };
 
 constexpr Str USAGE  = "usage: pkg <command> [<arg>...]\n";

@@ -25,10 +25,11 @@ dependency token, the stanza grammar with its records, the zip's directory,
 `/pkg`'s layout, the anchor's checks and §7's pipeline, compiled into
 `tests.wasm` as well — the last two because they take a `PkgHost` rather than
 calling a syscall. `unzip.cpp` inflates an entry, `store.cpp` performs the steps
-`db.cpp` computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses and `update.cpp`
-is the first subcommand; those four are the pieces that stay out. Phase D is
-done and `pkg update` is built, so there is a checked index in `/pkg/index` and
-nothing yet that reads it. So this starts at P16.
+`db.cpp` computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`
+and `query.cpp` are the subcommands there are; those five are the pieces that
+stay out. Phase D is done, and of Phase E `pkg update` writes `/pkg/index` while
+`pkg search`, `pkg info` and `pkg list` read it and the generation beside it. So
+this starts at P17.
 
 ## The shape being built
 
@@ -108,17 +109,6 @@ wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
 
 ## Phase E — the commands
-
-### P16. `pkg search` / `pkg info` / `pkg list`
-
-Read-only, over `/pkg/index` as `pkg update` left it and the local db. Cheap,
-and they are what makes an update's result inspectable — which is worth having
-before the solver lands.
-
-`search` matches the name and the description; `info` prints one package's
-stanza in a readable shape; `list` reads the generation, not the index. The
-stored file is read the way it was written, `signed_split` and `header_read`
-over the whole of it, since a stanza is a view into the text.
 
 ### P17. The solver
 

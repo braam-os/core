@@ -76,6 +76,15 @@ bool ready(FakeHost &h, Str index)
            h.route(URL, index);
 }
 
+// index_read takes the text, since every record views it.
+Result<void> read_stored(Str text, CheckedIndex &out)
+{
+    String owned;
+    if (!owned.assign(text))
+        return Err(Error::NoMemory);
+    return index_read(move(owned), out);
+}
+
 } // namespace
 
 void test_index()
@@ -302,6 +311,71 @@ void test_index()
         CHECK(!run_check(c));
         CHECK(step == IndexStep::Anchor);
         CHECK(failure == Error::Unsupported);
+    }
+
+    // index_read: the stored file, without the checks that put it there. No
+    // host, no clock and no fetch — a Result rather than a Task.
+    {
+        CheckedIndex c;
+        CHECK(read_stored(fixture("stored"), c).is_ok());
+        CHECK_EQ(u32(c.head.version), 40);
+        CHECK(c.head.url == REPO);
+        CHECK_EQ(c.sigs.size(), 1);
+        CHECK(c.sigs[0].algorithm == "ed25519");
+        CHECK_EQ(c.packages.size(), 2);
+        CHECK(index_find(c, "awk") != nullptr);
+        CHECK(index_find(c, "less") != nullptr);
+        // Nothing was checked, so nothing pretends it was.
+        CHECK_EQ(u32(c.now), 0);
+        CHECK(!c.unchanged);
+    }
+    // An expired index reads: §7's steps are update's, and §11 is what a file
+    // in the store is worth.
+    {
+        CheckedIndex c;
+        CHECK(read_stored(fixture("expired"), c).is_ok());
+        CHECK_EQ(c.packages.size(), 2);
+    }
+    // §1's two scopes, here too.
+    {
+        CheckedIndex c;
+        Result<void> r = read_stored(fixture("malformed"), c);
+        CHECK(r.is_err() && r.error() == Error::Invalid);
+    }
+    {
+        CheckedIndex c;
+        CHECK(read_stored(fixture("oneunusable"), c).is_ok());
+        CHECK_EQ(c.packages.size(), 1);
+        CHECK(index_find(c, "less") != nullptr);
+    }
+    // §3.1: a higher X refuses the whole file, read or fetched.
+    {
+        CheckedIndex c;
+        Result<void> r = read_stored(fixture("grammar"), c);
+        CHECK(r.is_err() && r.error() == Error::Unsupported);
+    }
+    // No empty line is no split, and no header is no index.
+    {
+        CheckedIndex c;
+        Result<void> r = read_stored("", c);
+        CHECK(r.is_err() && r.error() == Error::Invalid);
+    }
+    {
+        CheckedIndex c;
+        Result<void> r = read_stored("X:1\nN:x\nG:1\nE:1\n", c);
+        CHECK(r.is_err() && r.error() == Error::Invalid);
+    }
+    // signed_split's other spelling: a leading newline is an empty block.
+    {
+        CheckedIndex c;
+        CHECK(read_stored("\nX:1\nN:x\nG:7\nE:1\n\nC:Q2IgfM18bBUW8blv5C1wE491Z5bfWNc"
+                          "+VRhcgcX1hLHUI=\nP:awk\nV:1-r0\nS:1\n",
+                          c)
+                  .is_ok());
+        CHECK(c.block.empty());
+        CHECK_EQ(c.sigs.size(), 0);
+        CHECK_EQ(u32(c.head.version), 7);
+        CHECK_EQ(c.packages.size(), 1);
     }
 
     // Every step names itself.

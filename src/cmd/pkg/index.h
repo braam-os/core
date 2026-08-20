@@ -49,6 +49,11 @@ struct CheckedIndex {
 // names the step that refused.
 Task<Result<void>> index_check(PkgHost &h, Str repo, CheckedIndex &out, IndexStep &step);
 
+// The stored /pkg/index: §2's split, the signature block, §3.1's header and
+// the packages. §7's checks are not repeated. Takes the text every record
+// views.
+Result<void> index_read(String text, CheckedIndex &out);
+
 // A name the index does not list does not exist, and is not looked for
 // anywhere else (§7 step 7).
 const PackageStanza *index_find(const CheckedIndex &c, Str name);

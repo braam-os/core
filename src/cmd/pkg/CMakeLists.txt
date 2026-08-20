@@ -6,6 +6,7 @@ add_library(braam_pkg STATIC
     host.cpp
     index.cpp
     pkg.cpp
+    query.cpp
     sha256.cpp
     stanza.cpp
     store.cpp
@@ -13,6 +14,11 @@ add_library(braam_pkg STATIC
     unzip.cpp
     update.cpp
     version.cpp
-    zip.cpp)
+    zip.cpp
+
+    # `pkg search` globs, and the matcher is Str and Span and nothing else.
+    # Compiled rather than linked: braam_sh would bring the whole shell in for
+    # one pure file, which is what src/cmd/CMakeLists.txt does for /bin/test.
+    ../sh/match.cpp)
 
 target_link_libraries(braam_pkg PUBLIC braam_proc braam_flags)

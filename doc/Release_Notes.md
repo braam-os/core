@@ -25,6 +25,61 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Three rows that only read
+
+P16 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `pkg search`, `pkg info`
+and `pkg list` are what makes an update's result inspectable: two of them read
+`/pkg/index` as P15 left it, the third reads the active generation. Nothing in
+`query.cpp` fetches, checks or writes, and the solver lands next against a tree
+where "what does the index actually say" is one word rather than `cat` and a
+grammar.
+
+**The stored index is read, not re-checked.** `index_read` is `signed_split`,
+the signature block, §3.1's header and the packages — and none of §7's steps 4
+to 6. That looks like a gap and is the opposite: the signature was checked when
+the file arrived, and checking it again would say only that the file still says
+what it said. §11 is explicit that an installed file carries no lasting
+guarantee, and a `pkg info` that verified a signature would be claiming a
+property the store does not have. The one check that survives is §3.1's `X`,
+because a grammar this is not is a file that cannot be read at all rather than a
+file that might be wrong.
+
+**The pattern's shape picks the matcher.** A live `*`, `?` or `[…]` globs the
+name and the description whole; anything else is a substring that ignores case.
+Two behaviours behind one argument is usually a smell, but the alternative is
+worse in both directions: glob-only means `pkg search awk` finds nothing until
+you type `'*awk*'`, and substring-only means the metacharacters a user has typed
+are matched literally, which nobody intends. apk resolves it the same way, and
+the shell's `glob_meta` is exactly the question being asked, so the rule is one
+call rather than a heuristic. Case folding applies only to the substring half —
+a glob is the shell's matcher and the shell's matcher is case-sensitive, and
+making it otherwise here would be a second dialect of one pattern language.
+
+**A search that found nothing is 0, and an `info` that found nothing is 1.**
+They look like the same event and are not. `pkg search nonesuch` asked a
+question the index answered: no packages match, which is a result. `pkg info
+nonesuch` named a package, and §7 step 7 is that a name the index does not list
+does not exist and is not looked for anywhere else — so the answer is a refusal,
+with the sentence spelled out rather than left to `errln`, which would have said
+"no such file" about something that is not a file.
+
+**`list` reads the generation, and only the generation.** Not the index, which
+describes a repository rather than this machine, and not `/pkg/world`, which is
+what was *asked for* rather than what is *there*. `store_active` follows
+`/pkg/active` and `packages_read` parses what it points at, so the command
+inherits §8.3's property for free: whatever the link names is a generation that
+was committed whole. `info`'s `installed` row comes from the same two calls, and
+is absent rather than "no" when nothing matches — an absent field is how every
+other row in that listing behaves.
+
+**The matcher is compiled into `braam_pkg` rather than linked from
+`braam_sh`.** `match.cpp` is `Str` and `Span` and nothing else, which is what
+already lets `tests.wasm` compile it; linking the shell for it would drag a
+parser, an expander and a job table into `/bin/pkg`. `src/cmd/CMakeLists.txt`
+had set the precedent for `/bin/test` and `cond.cpp`, and the exact-import
+assertion is what keeps the shortcut honest — a pure file compiled twice cannot
+move a binary's import list, and `smoke` fails if it does.
+
 ## One word, and the first row of the table filled
 
 P15 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the first of Phase E.

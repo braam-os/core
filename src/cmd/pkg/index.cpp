@@ -17,6 +17,43 @@ bool header_of(Str body, IndexHeader &out)
     return header_read(f, out) == StanzaRead::Ok;
 }
 
+// §2's block, when there is one. An absent block is an empty list.
+Result<void> sigs_of(Str block, Vec<Signature> &out)
+{
+    if (block.empty())
+        return {};
+    Vec<StanzaField> f;
+    if (!StanzaReader::one(block, STANZA_SIGNATURE, f))
+        return Err(Error::Invalid);
+    if (signature_read(f, out) != StanzaRead::Ok)
+        return Err(Error::Invalid);
+    return {};
+}
+
+// The stanzas after the header. §1: an unusable record is dropped, a malformed
+// one takes the file down.
+Result<void> packages_of(Str body, Vec<PackageStanza> &out)
+{
+    usize after = body.find("\n\n");
+    if (after == Str::npos)
+        return {};
+
+    StanzaReader r(body.substr(after + 2), STANZA_PACKAGE);
+    Vec<StanzaField> f;
+    for (;;) {
+        StanzaRead got = r.next(f);
+        if (got == StanzaRead::End)
+            return {};
+        if (got == StanzaRead::Malformed)
+            return Err(Error::Invalid);
+        PackageStanza p;
+        if (got == StanzaRead::Unusable || package_read(f, p) != StanzaRead::Ok)
+            continue;
+        if (!out.push(move(p)))
+            return Err(Error::NoMemory);
+    }
+}
+
 // The G of the last checked index. No stored index is no floor (§8.2); one
 // that does not read is a refusal, since zero would erase the rollback check.
 Task<Result<u64>> floor_of(PkgHost &h)
@@ -140,13 +177,7 @@ Task<Result<void>> index_check(PkgHost &h, Str repo, CheckedIndex &out, IndexSte
 
     // 4. The signatures, to the anchor's index threshold.
     step = IndexStep::Signature;
-    if (!out.block.empty()) {
-        Vec<StanzaField> f;
-        if (!StanzaReader::one(out.block, STANZA_SIGNATURE, f))
-            co_return Err(Error::Invalid);
-        if (signature_read(f, out.sigs) != StanzaRead::Ok)
-            co_return Err(Error::Invalid);
-    }
+    CO_TRY_VOID(sigs_of(out.block, out.sigs));
     Result<bool> met = Err(Error::NoMemory);
     if (Task<Result<bool>> t = trust_meet(anchor.rec, TRUST_INDEX, out.sigs, out.body, h))
         met = co_await t;
@@ -180,27 +211,29 @@ Task<Result<void>> index_check(PkgHost &h, Str repo, CheckedIndex &out, IndexSte
     if (out.now >= out.head.expiry)
         co_return Err(Error::Perm);
 
-    // 7. Only now, the packages. §1: an unusable record is dropped, a
-    // malformed one takes the file down.
-    step        = IndexStep::Read;
-    usize after = out.body.find("\n\n");
-    if (after != Str::npos) {
-        StanzaReader r(out.body.substr(after + 2), STANZA_PACKAGE);
-        Vec<StanzaField> f;
-        for (;;) {
-            StanzaRead got_one = r.next(f);
-            if (got_one == StanzaRead::End)
-                break;
-            if (got_one == StanzaRead::Malformed)
-                co_return Err(Error::Invalid);
-            PackageStanza p;
-            if (got_one == StanzaRead::Unusable || package_read(f, p) != StanzaRead::Ok)
-                continue;
-            if (!out.packages.push(move(p)))
-                co_return Err(Error::NoMemory);
-        }
-    }
+    // 7. Only now, the packages.
+    step = IndexStep::Read;
+    CO_TRY_VOID(packages_of(out.body, out.packages));
     co_return Result<void>();
+}
+
+Result<void> index_read(String text, CheckedIndex &out)
+{
+    out.sigs.clear();
+    out.packages.clear();
+    out.head      = IndexHeader();
+    out.now       = 0;
+    out.unchanged = false;
+
+    out.text = move(text);
+    if (!signed_split(out.text.str(), out.block, out.body))
+        return Err(Error::Invalid);
+    TRY_VOID(sigs_of(out.block, out.sigs));
+    if (!header_of(out.body, out.head))
+        return Err(Error::Invalid);
+    if (out.head.grammar != INDEX_GRAMMAR)
+        return Err(Error::Unsupported);
+    return packages_of(out.body, out.packages);
 }
 
 const PackageStanza *index_find(const CheckedIndex &c, Str name)
