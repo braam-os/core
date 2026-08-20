@@ -23,6 +23,7 @@ add_executable(tests
     unit/test_sched.cpp
     unit/test_screen.cpp
     unit/test_sha256.cpp
+    unit/test_stanza.cpp
     unit/test_expand.cpp
     unit/test_str.cpp
     unit/test_tokenize.cpp
@@ -56,11 +57,13 @@ add_executable(tests
     ../src/proc/opt.cpp
     ../src/proc/time.cpp
 
-    # pkg's digest, its encodings, the version grammar and the dependency
-    # token, pure and allocation-free, so braam_pkg is not linked here either.
+    # pkg's digest, its encodings, the version grammar, the dependency token
+    # and the stanza reader: syscall-free, so braam_pkg is not linked here
+    # either. stanza.cpp allocates; the constraint is the import list.
     ../src/cmd/pkg/dep.cpp
     ../src/cmd/pkg/encode.cpp
     ../src/cmd/pkg/sha256.cpp
+    ../src/cmd/pkg/stanza.cpp
     ../src/cmd/pkg/version.cpp)
 
 target_link_libraries(tests PRIVATE

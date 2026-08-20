@@ -156,6 +156,11 @@ Further constraints, easy to violate by habit:
 - **Never `new` anything** — `operator new` returns null on failure and
   `-fno-exceptions` then constructs at address zero. Use
   `heap_new`/`heap_delete`.
+- **A type name at namespace scope must be unique across the whole tree.**
+  There are no namespaces, and `Vec<T>`/`Task<T>` mangle their argument's name
+  into a weak symbol that comdat resolves silently — two `struct Field`s of
+  different layouts give one `Vec<Field>::reserve` that corrupts memory. Grep
+  before naming one.
 - **A namespace-scope global must be trivially destructible**; a non-trivial
   destructor pulls in `__cxa_atexit`. Make it a POD or hide it behind a pointer
   built on first use (`Sched`). Constructors *do* run: `init()` calls

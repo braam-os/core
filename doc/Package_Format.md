@@ -39,6 +39,9 @@ stanzas.
   which accumulate. Nothing silently overwrites.
 - **A letter means one thing in every file.** `G` is the version of a signed
   document, `E` an expiry, `T` a description, wherever they appear.
+- **A known letter whose value does not parse, or a required field that is
+  absent, makes the record unusable** — the same scope as an unknown uppercase
+  letter, because the consequence is the same and the file still reads.
 
 ### 1.1 Numbers, digests and keys
 
@@ -48,7 +51,7 @@ epoch** — what `Sys::Clock` reports and `Sys::Stat` returns.
 A digest is apk's `<encoding><algorithm><payload>`:
 
 ```
-Q2GDlvIbdxNaCVYtLPXHhAF7rmPXRRWNPRWmyfDsQb1s=
+Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
 ││└──────────────── base64 of 32 bytes, standard alphabet, padded
 │└───────────────── algorithm: 2 = SHA-256
 └────────────────── encoding: Q = base64
@@ -68,7 +71,7 @@ derivable name cannot disagree with what it names.
 The first stanza of a signed file, one line per signature:
 
 ```
-Y:ed25519 Q2GDlvIbdxNaCVYtLPXHhAF7rmPXRRWNPRWmyfDsQb1s= <base64 signature>
+Y:ed25519 Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI= <base64 signature>
 ```
 
 Algorithm, the signing key's name, the signature.
@@ -159,8 +162,9 @@ informational fields stated as a fact.
 ### 3.3 Canonical order, and the package's URL
 
 A writer emits `C P V S I T o t k g D p i`, omitting what it has not got, so
-that a round trip is byte-identical. **A reader requires only that `P` come
-first.**
+that a round trip is byte-identical. **A reader requires no particular order** —
+the canonical one is what makes the round trip defined, not what makes a stanza
+readable.
 
 The index is at `<N>/index` and a package at `<N>/<name>-<version>.zip`.
 **Derived, never carried**: Package_Management.md §4 says a URL proves nothing,
@@ -345,6 +349,9 @@ Under `/pkg`, which the archive does not carry (Concept.md §5.1).
 | `F` | a directory, relative to the store directory, repeats | |
 | `R` | a filename under the last `F`, repeats | |
 | `Z` | the digest of the file the last `R` named | |
+
+A writer emits §3.3's order, then `G`, then each `F` followed by its `R` and `Z`
+pairs, so the round trip is defined here too.
 
 `G` is what makes a reinstall re-check rather than believe the disk
 (Package_Management.md §7). apk's `M:` and `a:` are dropped: they carry uid, gid

@@ -15,13 +15,13 @@ are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 **A finished task is deleted from this file, and the numbers do not move** —
 Release_Notes.md and the tasks below cite them. Phases A and B are gone that
 way: the decisions are in Concept.md, Package_Management.md and
-Package_Format.md, and the two host operations are in System_Calls.md. P5 to P8
+Package_Format.md, and the two host operations are in System_Calls.md. P5 to P9
 went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
-`version.cpp` and `dep.cpp` are the digest, the two encodings, apk's version
-grammar and the dependency token, compiled into `tests.wasm` as well. So this
-starts at P9.
+`version.cpp`, `dep.cpp` and `stanza.cpp` are the digest, the two encodings,
+apk's version grammar, the dependency token and the stanza grammar with its
+records, compiled into `tests.wasm` as well. So this starts at P10.
 
 ## The shape being built
 
@@ -103,21 +103,6 @@ large crosses the ABI. That is P6.
 ---
 
 ## Phase C — pkg's own primitives, no network
-
-### P9. The stanza reader and writer
-
-Package_Format.md §1, and §3's tables. **One reader for all five files** — that
-is what §1 was written to make possible, and a second parser for the anchor
-would be the first place the two could disagree.
-
-The writer emits §3.4's canonical order, which is what makes the round trip
-below a defined thing rather than a hope.
-
-Done when: a round trip through the writer and reader is byte-identical, a
-stanza with an unknown uppercase field yields an uninstallable package, an
-unknown lowercase field is ignored, a repeated letter that is not one of the
-accumulating six is malformed, and a file with no trailing blank line still
-commits its last stanza.
 
 ### P10. Zip reader
 

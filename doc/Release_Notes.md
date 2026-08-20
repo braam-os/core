@@ -25,6 +25,69 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## One reader, five files — and a `Field` that was already taken
+
+P9 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the end of Phase C.
+`stanza.cpp` is Package_Format.md §1: a line is a letter, a colon and a value;
+an empty line or end of file ends a stanza. Over it sit the typed records §2,
+§3, §4 and §8.1 define, and the writer that puts a `/pkg/db` record back
+byte-identically.
+
+**The typed records land together rather than with their consumers.** P13 wants
+the anchor, P14 the index header, P18 a package stanza, P11 the installed-db
+record — four tasks, and writing four readers is exactly what §1 was written to
+prevent. What makes one reader possible is that a letter means one thing in
+every file, so the only per-file thing is *which* letters are allowed. That is
+one `Str` of known letters passed to the reader, and the five of them sit
+together in `stanza.h` where they can be read down a column.
+
+**`Unusable` and `Malformed` are different because their scopes are.** §1 says
+an unknown uppercase letter makes the *record* unusable — that record, not the
+file — and scopes nothing else. The reader takes the silence seriously: a
+repeated letter outside the accumulating six, and a line that is not a field at
+all, take the file down, because a file whose framing cannot be trusted has no
+records to salvage. §1 gained the case the code could not avoid answering: a
+*known* letter whose value does not parse, or a required field that is absent,
+is the record's problem and not the file's, on the same reasoning.
+
+**§3.3 said two things that could not both be true**, and one of them is now
+gone: the writer emits `C P V S I T o t k g D p i`, `C` first, and the document
+also said a reader requires only that `P` come first. Order is the writer's
+concern, so that a round trip is defined; a reader requires none. §8.1 gained
+the same sentence, since it had no order written down at all and its round trip
+is the criterion.
+
+**The example digest in §1.1 was not a digest.** It was 43 base64 characters
+where a padded 32-byte value needs 44, so §1.1's own rule refused the example
+under it. It is now the `Q2` digest of the word `braam`, which decodes. Nothing
+had noticed because nothing had ever parsed one.
+
+### The bug that cost the most: two `Field`s
+
+`StanzaField` is called that because `src/cmd/sh/expand.h` already has a
+`struct Field` — an expanded shell word, 28 bytes, with a `String` and a `Vec`
+in it. A stanza field is 12 bytes, a `char` and a `Str`, trivially copyable.
+Both were at global scope, so **`Vec<Field>` was one mangled symbol over two
+layouts**, `Vec<Field>::reserve` a weak definition the linker picked one of, and
+the shell's — element size 28, non-trivial move, non-trivial destroy — is what
+ran over `pkg`'s 12-byte elements. One element per growth came out with a
+mangled pointer.
+
+It presented as anything but an ODR violation. It vanished at `-O2` and
+appeared at `-Os`, because the two levels inline `reserve` differently and
+whether the shared symbol is called at all depends on that. It vanished when
+the vector was reserved up front, because then nothing grows. The allocator
+was provably not handing out overlapping blocks. The assembly for
+`StanzaReader::next`, for the same loop written by hand, and for
+`Vec<Field>::reserve` in `stanza.cpp` all read as correct — because they were:
+the wrong one was in another object file.
+
+**The rule this leaves: a type name at namespace scope must be unique across
+the whole tree.** There are no namespaces here, `Vec<T>` and `Task<T>` mangle
+their argument's name into a weak symbol, and `--gc-sections` with comdat
+resolves the collision silently. `grep -rn "^struct <Name>" src/` before adding
+one costs nothing; not doing it cost a session.
+
 ## A dependency is a name and a bitfield
 
 P8 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last Phase C
