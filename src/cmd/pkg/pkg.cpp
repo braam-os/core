@@ -10,7 +10,7 @@ namespace {
 constexpr PkgCommand TABLE[] = {
     { "autoremove", nullptr }, { "clean", nullptr },   { "files", nullptr },  { "info", nullptr },
     { "install", nullptr },    { "list", nullptr },    { "remove", nullptr }, { "search", nullptr },
-    { "update", nullptr },     { "upgrade", nullptr }, { "verify", nullptr },
+    { "update", pkg_update },  { "upgrade", nullptr }, { "verify", nullptr },
 };
 
 constexpr Str USAGE  = "usage: pkg <command> [<arg>...]\n";

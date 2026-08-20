@@ -411,7 +411,10 @@ less 1.6-r1
 
 `/pkg/world` is one dependency (§6) per line: what the user asked for, as
 distinct from what was pulled in to satisfy it. `/pkg/repositories` is one URL
-per line.
+per line — and **`pkg` refuses a second line rather than ignoring it**, since
+`/pkg/index` is one file and Package_Management.md §7 step 5's floor is one
+number, so a second repository would be checked against the first's `G`. A
+trailing slash is stripped, `<N>/index` being `//index` otherwise.
 
 In all three a blank line is skipped and a last line without a newline is still
 a line; **a file that is not there reads as an empty one**, so a `/pkg` that has

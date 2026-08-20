@@ -25,6 +25,64 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## One word, and the first row of the table filled
+
+P15 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the first of Phase E.
+`pkg update` reads `/pkg/repositories`, runs `index_check` over the one line it
+finds, and writes the checked file to `/pkg/index`. Two commits' worth of
+machinery had no caller; now it has one, and typing the word is the whole of
+what a user has to do.
+
+**The record is P15's because a refusal must leave nothing behind.**
+`index_check` writes nothing at any of its seven steps, which is what makes "any
+failure abandons the whole operation" free rather than a thing to unwind. So the
+`Vec<StoreOp>` is built *after* it returns Ok, and `store_perform` is reached on
+no other path. `StoreOpKind::Write` truncates in place, so a half-written
+`/pkg/index` would be a floor nobody could read — and §7 step 5 now refuses one
+of those, which closes the loop the two tasks make between them.
+
+**A second repository is refused rather than ignored.** The format has always
+said "one URL per line; today, one line", and the code says why the second half
+of that is load-bearing: `/pkg/index` is one file and the rollback floor is one
+number, so a second repository's index would be checked against the first's `G`
+and whichever wrote last would become the floor for both. Taking only the first
+line would hide that; refusing states it. The day there is somewhere to put a
+second index, the refusal is the thing to delete, and Package_Format.md §8 now
+carries the reason so nobody has to rediscover it.
+
+**A trailing slash is stripped, which is the one place normalising wins.** `pkg`
+refuses rather than normalises everywhere else — base64 spellings, key names,
+`X` versions — because two spellings of one *name* are two ways to be trusted.
+A repositories line is not a name: `https://…/braam/` and `https://…/braam` are
+one repository however they are typed, and the unstripped form fetches
+`//index`, which answers 404 with nothing to explain it. Stripping turns a typo
+into the obvious intent and cannot conflate two repositories into one.
+
+**The step is the diagnostic.** `Err(Perm)` is a bad signature, an index for
+another repository, a rollback and an expired index — four refusals, one error
+value, because `Error` has fourteen members and §7 has seven steps. So the line
+is `errln("pkg", index_step_name(step), err)`: `pkg: signature: permission
+denied` and `pkg: expiry: permission denied` are the same error and different
+answers, and the word between the colons is the whole difference. `Cancelled` is
+130 and silent, the convention every blocking program in `src/cmd` follows.
+
+**The smoke test plants an anchor over the shipped one, and that is the honest
+way round.** The release anchor's private keys were destroyed the moment it was
+signed (P13), so nothing can ever be signed *for* it — which is the correct
+state for a system with no repository yet, and a wall for a test that wants a
+happy path. `test/run.mjs` writes the unit suite's throwaway-key anchor into the
+store after boot, routes the indexes already signed under it through `FakeNet`,
+and puts the release's bytes back afterwards. What that proves is the pipeline,
+the record and the refusals; what it does not prove is anything about the keys
+in the archive, and the two should not be confused. The fixtures are
+`test/unit/index.data` read straight from `run.mjs` — one set of bytes checked
+by both suites, rather than a second set that could drift.
+
+**`pkg update` is what makes the `/pkg` tree.** `pkg_tree_ops` was written for
+P18 and is idempotent, so the first command a user runs is where the directories
+come into being. `/pkg/bin` dangles until something is installed, which the
+activation work already proved harmless: a miss through it is an ordinary 127.
+
 ## Seven steps in one screen, over a host it does not have
 
 P14 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the end of Phase D.

@@ -11,6 +11,7 @@ add_library(braam_pkg STATIC
     store.cpp
     trust.cpp
     unzip.cpp
+    update.cpp
     version.cpp
     zip.cpp)
 

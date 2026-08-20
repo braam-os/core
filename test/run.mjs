@@ -1477,6 +1477,115 @@ if (mode === "--kernel") {
     if (!rows(s).includes(prompt(1)))
         fail(`pkg install left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
 
+    // `pkg update` is Package_Management.md §7's pipeline behind one word. The
+    // fixtures are the unit suite's — an anchor over throwaway keys and the
+    // indexes signed under it — so both suites check one set of bytes. The
+    // shipped anchor's keys were destroyed when it was signed, so a happy path
+    // means planting this one over it; what that proves is the machinery, not
+    // the release's keys.
+    if (rootfs) {
+        const data = readFileSync(new URL("unit/index.data", import.meta.url), "utf8")
+            .replace(/^R"DATA\(/, "").replace(/\)DATA"\n$/, "");
+        const fixture = (name) => {
+            const key = `\n@${name}\n`;
+            const at = data.indexOf(key);
+            if (at < 0)
+                fail(`test/unit/index.data carries no @${name}`);
+            const rest = data.slice(at + key.length);
+            const end = rest.indexOf("\n@");
+            return end < 0 ? rest : rest.slice(0, end + 1);
+        };
+
+        const REPO = "https://packages.example/braam";
+        const IDX = REPO + "/index";
+        const plant = (path, text) => store.files.set(path, new TextEncoder().encode(text));
+        const route = (body) =>
+            net.routes.set(IDX, { status: 200, headers: "content-type: text/plain\n", body });
+        const shipped = store.files.get("/share/pkg/anchor");
+
+        let ut = 1184.8;
+        // The two lines an update prints, or the rows it left behind.
+        const update = () => {
+            submit("clear", (ut += 0.005));
+            return submit("pkg update", (ut += 0.005));
+        };
+        const refuses = (what, want) => {
+            const got = update();
+            if (!rows(got).includes(REPO))
+                fail(`${what} did not name the repository: ${JSON.stringify(output(got))}`);
+            if (!rows(got).some((line) => line.startsWith(want)))
+                fail(`${what} printed ${JSON.stringify(output(got))}, expected ${want}`);
+            if (!rows(got).includes(prompt(1)))
+                fail(`${what} left ${row(got, got.cursor_y)}, expected ${prompt(1)}`);
+        };
+
+        // Nothing to update from: /pkg does not exist, and a file that is not
+        // there reads as an empty one (Package_Format.md §8.2).
+        s = update();
+        if (!rows(s).some((line) => line.startsWith("pkg: no repositories")))
+            fail(`pkg update with no repositories printed ${JSON.stringify(output(s))}`);
+        if (!rows(s).includes(prompt(1)))
+            fail(`pkg update with no repositories left ${row(s, s.cursor_y)}`);
+
+        plant("/share/pkg/anchor", fixture("anchor"));
+        store.dirs.add("/pkg");
+        plant("/pkg/repositories", REPO + "\n");
+
+        // Each of §7's steps, named by the one that refused. Nothing is stored
+        // by any of them.
+        net.routes.delete(IDX);
+        refuses("a repository nothing answers for", "pkg: fetch:");
+        route(fixture("tampered"));
+        refuses("an index changed after signing", "pkg: signature:");
+        route(fixture("grammar"));
+        refuses("an index in a grammar this is not", "pkg: header:");
+        route(fixture("foreign"));
+        refuses("an index for another repository", "pkg: header:");
+        route(fixture("expired"));
+        refuses("an expired index", "pkg: expiry:");
+        if (store.files.has("/pkg/index"))
+            fail("a refused update recorded an index anyway");
+
+        // The record, which is the whole of what P15 adds to §7.
+        route(fixture("good"));
+        s = update();
+        if (output(s).join("|") !== `${REPO}|index 41, 2 packages`)
+            fail(`pkg update printed ${JSON.stringify(output(s))}`);
+        if (!rows(s).includes(prompt()))
+            fail(`pkg update left ${row(s, s.cursor_y)}, expected ${prompt()}`);
+        const stored = new TextDecoder().decode(store.files.get("/pkg/index") || new Uint8Array(0));
+        if (stored !== fixture("good"))
+            fail("/pkg/index is not the file that was checked, signature block and all");
+
+        // The same version again is nothing to do, and not an error.
+        s = update();
+        if (output(s).join("|") !== `${REPO}|index 41, unchanged`)
+            fail(`a second update printed ${JSON.stringify(output(s))}`);
+        if (!rows(s).includes(prompt()))
+            fail(`a second update left ${row(s, s.cursor_y)}, expected ${prompt()}`);
+
+        // And now that 41 is the floor, an older index is a rollback.
+        route(fixture("older"));
+        refuses("an index whose version went backwards", "pkg: version:");
+        if (new TextDecoder().decode(store.files.get("/pkg/index")) !== fixture("good"))
+            fail("a rollback overwrote the stored index");
+
+        // One repository, for now: /pkg/index is one file and the floor is one
+        // number, so a second line is refused rather than ignored.
+        plant("/pkg/repositories", REPO + "\n" + REPO + "\n");
+        s = update();
+        if (!rows(s).some((line) => line.startsWith("pkg: /pkg/repositories:")))
+            fail(`a second repository printed ${JSON.stringify(output(s))}`);
+        if (!rows(s).includes(prompt(1)))
+            fail(`a second repository left ${row(s, s.cursor_y)}`);
+
+        // Put the release's anchor back and leave no /pkg, so what follows
+        // starts where it did.
+        store.files.set("/share/pkg/anchor", shipped);
+        net.routes.delete(IDX);
+        submit("rm -r /pkg", (ut += 0.005));
+    }
+
     // /proc/tasks is every task in one open, so no two rows describe different
     // moments, and `ps` reformats it the way `df` reformats /proc/mounts. Both
     // are wider than this grid, so it goes wide the way it does for help.

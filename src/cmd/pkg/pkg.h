@@ -14,3 +14,6 @@ struct PkgCommand {
 
 // argv as the process was entered with it: argv[0] is `pkg`.
 Task<i32> pkg_run(Args args);
+
+// The subcommands, one file each. argv[0] is the subcommand's own name.
+Task<i32> pkg_update(Args args);
