@@ -25,6 +25,94 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## The anchor, and a verifier that arrives as an argument
+
+P13 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the first half of
+Phase D. `rootfs/share/pkg/anchor` ships in the archive, `trust.cpp` is what
+checks one and `anchor.cpp` what reads the shipped one. Nothing fetches yet, so
+this lands with no subcommand behind it — the way `Sys::Verify` did, and for the
+same reason: the check is worth reviewing before anything depends on it.
+
+**The verifier is a parameter, because the split by purity does not fall where
+the split by testability does.** Every other pure piece of `pkg` is pure
+outright, so `test/CMakeLists.txt` compiles it in and a syscall in it is a link
+error. Threshold counting is not: it is arithmetic with one `co_await` in the
+middle, and that `co_await` is `verify_sig` in a process and `svc_verify` in the
+kernel — different names, different result types, the same question. Splitting
+the module at that call would have put the loop in `braam_pkg`, where the unit
+suite cannot reach it, and the "Done when" list is entirely about the loop. So
+`TrustVerify` is a function pointer, `/bin/pkg` passes one adapter and
+`test_trust.cpp` the other, and `fakesvc.mjs` answers Ed25519 for real. The cost
+is one indirect call per signature. The alternative was a second copy of the
+counting, which is the thing §7 step 4 says is easiest to get wrong.
+
+**The loop is keys-outer, and the `break` is the rule.** For each key the anchor
+names under a use, the signatures are scanned for one that verifies, and the
+first that does ends that key's turn. Written the other way round — signatures
+outer, keys inner — "at most one signature per key" becomes a set of names seen
+so far, which is a second structure to keep correct and a place for a bug to
+live. This way the property is the control flow: a key contributes once because
+there is no path on which it contributes twice, and a signature repeated is a
+key already counted. §2's "a `Y:` naming a key the anchor does not carry counts
+for nothing" falls out of the same shape, since a signature nothing matches is
+never reached.
+
+**A key's name is recomputed, never read.** The `Y:` line's keyid is a hint for
+a human; what the count uses is the SHA-256 of `<algorithm> <base64 key>` taken
+from the anchor's own `K:`. That is what makes P6's strict base64 load-bearing
+rather than fastidious — a decoder that accepted two spellings would give one
+key two names and the threshold two ways to be met by one holder.
+
+**Three things §4 did not say, and now does.** A higher `X` refuses the whole
+anchor, which §3.1 had said only of an index. `E` is checked, against the time
+§7 step 1 fixes, since an expiry nothing enforces is a comment. And every
+anchor — the archive-pinned one included — must meet its own root threshold.
+That last one proves nothing cryptographically: whoever edits the file edits the
+keys with it. It was taken anyway because it is *one* code path with the chain
+step rather than two, and because it refuses an anchor amended by hand after
+signing, which is the accident a release process actually has. §6's "trust stops
+at the anchor" is about *which keys*, and that is still believed without proof.
+
+**`G` orders the chain and does not have to be contiguous.** §10's walk reads as
+1 → 2 → 3, and the obvious implementation demands each step be exactly one. But
+the step that matters is the signature: anchor 3 is adopted only when a
+threshold of anchor 2's root keys signed it. Withholding 2 is refused by the
+signature that is missing, not by the number that is — and requiring +1 would
+additionally forbid a publisher who numbered 1 and 3, which nothing asks for.
+So the rule is that `G` increases, and the test that anchor 3 is not reachable
+from anchor 1 passes without it.
+
+**A `K` of another algorithm is ignored; an `ed25519` one that is not 32 bytes
+is fatal.** §8 keeps an algorithm name on every key precisely so a second one
+can be added, so a `K:root ecdsa-p256 …` must be skipped rather than refused.
+A key that claims the algorithm this reader implements and then is not that
+algorithm's size is a different thing: it is malformed, and fail-closed is the
+only reading. A malformed *signature* stays in the first camp, counting for
+nothing, since a signature block is attacker-supplied on a chain step and
+refusing the file would hand an attacker a way to stop a rotation.
+
+**The shipped anchor's private keys were destroyed the moment it was signed.**
+There is no repository yet, so its four keys are throwaway: three root, one
+index, generated once outside the tree, the anchor signed two-of-three, and the
+private halves gone. §9's "no private key in the git tree, in anything built
+from it, or inside `rootfs.zip`" is then not a rule anyone has to keep. What
+ships is a well-formed anchor naming keys nobody holds, so the first `pkg
+update` to meet a repository will refuse it — which is the correct answer until
+`tools/mkanchor.py` (P26) signs a real one. The file cannot be edited by hand
+either, since the self-check is a real check; amending it means regenerating it.
+
+**Its expiry is watched by `run.mjs` and by nothing else.** The anchor stops
+working a year out, and no test with a fixed clock would ever say so — the unit
+fixtures carry their own `E` and their own `now` on purpose, so that they do not
+rot. The smoke test runs under Node against a real clock, so that is where the
+archive's anchor is read and its `E:` compared against `Date.now()`. It is a
+build-time alarm for a run-time expiry, which is the only place the two meet.
+
+**`/share` gained a directory, and two counted things moved.** `ls /share` is
+three names now, `pkg/` marked as a directory, and `rootfs.zip` is 44 entries
+rather than 43. Both were assertions rather than incidental — which is what they
+are for.
+
 ## Activation is one constant
 
 P12 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the end of Phase C.

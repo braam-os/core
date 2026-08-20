@@ -364,6 +364,20 @@ if (mode === "--kernel") {
         }
     }
 
+    // The trust anchor ships in the archive and stops working when it expires
+    // (Package_Format.md §4). This is the only place a real clock sees it, so
+    // it is what says so before a release goes out with a stale one.
+    if (rootfs) {
+        const a = store.entries.find((e) => e.name === "share/pkg/anchor");
+        if (!a)
+            fail("the archive carries no share/pkg/anchor");
+        const m = new TextDecoder().decode(a.bytes).match(/\nE:(\d+)\n/);
+        if (!m)
+            fail("/share/pkg/anchor carries no expiry");
+        else if (Number(m[1]) <= Date.now())
+            fail(`/share/pkg/anchor expired at ${new Date(Number(m[1])).toISOString()}`);
+    }
+
     instance.exports.init(0);
 
     if (logged.length !== 1)
@@ -1229,9 +1243,10 @@ if (mode === "--kernel") {
         if (!rows(s).some((line) => line.startsWith("braam —")))
             fail(`/share/motd did not read back: ${JSON.stringify(rows(s))}`);
         s = submit("clear", 1185);
-        // Two names, and the grid is stdout, so they share a row.
+        // Three names, and the grid is stdout, so they share a row; /share/pkg
+        // is the anchor's directory and is marked as one.
         s = submit("ls /share", 1186);
-        if (output(s).join("|") !== "help  motd")
+        if (output(s).join("|") !== "help  motd  pkg/")
             fail(`/share did not list its files: ${JSON.stringify(output(s))}`);
         // The README is at the root, where somebody arriving will see it. Not
         // the whole row: what else is at the top level moves with boot.cpp.

@@ -19,14 +19,15 @@ Package_Format.md, and the two host operations are in System_Calls.md. Phase C
 went with them, P5 to P12: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
-`version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp` and `db.cpp` are the digest,
-the two encodings, apk's version grammar, the dependency token, the stanza
-grammar with its records, the zip's directory and `/pkg`'s layout, compiled into
-`tests.wasm` as well. `unzip.cpp` inflates an entry and `store.cpp` performs the
-steps `db.cpp` computes; those two are the pieces that stay out. `/pkg/bin` is
-the second word of `SYS_PATH_DEFAULT`, so an installed program is already
-reachable — what is missing is anything that installs one. So this starts at
-P13.
+`version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp`, `db.cpp` and `trust.cpp` are
+the digest, the two encodings, apk's version grammar, the dependency token, the
+stanza grammar with its records, the zip's directory, `/pkg`'s layout and the
+anchor's checks, compiled into `tests.wasm` as well — `trust.cpp` because its
+verifier is a parameter. `unzip.cpp` inflates an entry, `store.cpp` performs the
+steps `db.cpp` computes and `anchor.cpp` reads `/share/pkg/anchor`; those three
+are the pieces that stay out. Phase D's first half went the same way: the anchor
+is in the archive and `anchor_load` is written, so what is missing is anything
+that fetches. So this starts at P14.
 
 ## The shape being built
 
@@ -113,31 +114,6 @@ Everything above can be got wrong and fixed. This cannot: §7's rule is that
 nothing is unzipped, written or run before its hash matches a hash from a
 signed index, and the rule has exactly one crossing point.
 
-### P13. The anchor
-
-`rootfs/share/pkg/anchor`, unpacked to `/share/pkg/` at boot with the rest of
-the archive, and the loader for it.
-
-- A key is named by the SHA-256 of its public key. A name that is a hash of the
-  key cannot be claimed by a different key.
-- Threshold counting takes **at most one signature per key**. Otherwise one
-  signature repeated meets any threshold — §7 step 4 says this outright, and it
-  is the single easiest thing here to get wrong.
-- Missing or unreadable: stop. There is no fallback and nothing to rebuild it
-  from.
-- The anchor-chain walk of §10: an anchor is signed by a threshold of the old
-  root keys *and* a threshold of the new ones, and anchors are numbered, so a
-  client at anchor 1 walks forward to anchor 3 checking each against the one
-  before it.
-
-There is **no prompt** (§6). A key becomes trusted by shipping in the archive,
-or by a person typing its full fingerprint. There is no trust-on-first-use.
-
-Done when: a good anchor loads; an anchor one signature short of the threshold
-is refused; an anchor meeting the threshold with one key's signature repeated is
-refused; an anchor 3 is reached from anchor 1 and is refused if anchor 2 is
-withheld.
-
 ### P14. The checked-index pipeline
 
 §7's steps 1 to 7, in that order and in one function, so that the order is
@@ -145,7 +121,7 @@ reviewable in one screen:
 
 1. **Fix the time once** from `Sys::Clock` and use that one value everywhere. A
    clock that moves mid-run must not make two checks disagree.
-2. **Load the anchor.**
+2. **Load the anchor** — `anchor_load`, with the time from step 1.
 3. **Fetch the index, capped — and well below `SYS_STAGE_MAX`.** `Sys::Verify`
    takes the signed bytes as one staged payload, so an index over a megabyte
    cannot be checked at all; the cap has to leave room for that. `web/svc.js`
@@ -153,7 +129,8 @@ reviewable in one screen:
    this is `pkg`'s to enforce: count the bytes coming off the descriptor and
    close it when the cap is passed. Longer than the cap is a failure, not a
    truncation.
-4. **Check the signatures** to the anchor's threshold.
+4. **Check the signatures** to the anchor's threshold — `trust_meet` over the
+   `index` keys, which counts at most one signature per key.
 5. **Check the version** against the highest seen before. Lower is a rollback
    and a failure; equal means nothing to do and is not an error.
 6. **Check the expiry** against the time from step 1.
@@ -317,7 +294,9 @@ glob matches a directory the transaction modified.
 - `tools/signindex.py` — Ed25519, and the `Y:` block Package_Format.md §2
   defines. It must compute the signed region the way `pkg` does, which is the
   one place a publisher and a client can disagree in silence.
-- `tools/mkanchor.py` — the anchor, signed by a threshold of root keys.
+- `tools/mkanchor.py` — the anchor, signed by a threshold of root keys, and
+  what replaces the placeholder `rootfs/share/pkg/anchor` P13 shipped, whose
+  private halves were destroyed the moment it was signed.
 
 §9 is absolute and this is where it is at risk. **No private key** may be in the
 git tree, in anything built from it, inside `rootfs.zip`, or anywhere a browser

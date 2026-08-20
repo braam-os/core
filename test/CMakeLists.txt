@@ -35,6 +35,7 @@ add_executable(tests
     unit/test_text.cpp
     unit/test_textbuf.cpp
     unit/test_time.cpp
+    unit/test_trust.cpp
     unit/test_tty.cpp
     unit/test_vec.cpp
     unit/test_version.cpp
@@ -60,15 +61,19 @@ add_executable(tests
     ../src/proc/time.cpp
 
     # pkg's digest, its encodings, the version grammar, the dependency token,
-    # the stanza reader, the zip's directory and the store's layout:
-    # syscall-free, so braam_pkg is not linked here either. stanza.cpp
-    # allocates; the constraint is the import list. unzip.cpp is the half that
-    # inflates and store.cpp the half that writes; both stay out.
+    # the stanza reader, the zip's directory, the store's layout and the
+    # anchor's checks: syscall-free, so braam_pkg is not linked here either.
+    # stanza.cpp allocates; the constraint is the import list. trust.cpp takes
+    # its verifier as a parameter, so the suite passes svc_verify where /bin/pkg
+    # passes Sys::Verify. unzip.cpp is the half that inflates, store.cpp the
+    # half that writes and anchor.cpp the half that reads /share/pkg/anchor;
+    # all three stay out.
     ../src/cmd/pkg/db.cpp
     ../src/cmd/pkg/dep.cpp
     ../src/cmd/pkg/encode.cpp
     ../src/cmd/pkg/sha256.cpp
     ../src/cmd/pkg/stanza.cpp
+    ../src/cmd/pkg/trust.cpp
     ../src/cmd/pkg/version.cpp
     ../src/cmd/pkg/zip.cpp)
 

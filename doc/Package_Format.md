@@ -206,9 +206,24 @@ grammar version.
 
 - **Missing or unreadable is a stop.** There is no fallback, and no prompt
   (Package_Management.md §6).
+- **A higher `X` refuses the whole file**, as it does for an index (§3.1).
+- **`E` is checked against the caller's fixed time** (Package_Management.md §7
+  step 1). An anchor that has expired is refused, whatever else it says.
+- **Every anchor meets its own `H:root` over its own `K:root`** — the one in
+  the archive as much as one walked to. It proves nothing on its own, since
+  whoever edits the file edits the keys with it; what it buys is one check
+  rather than two, and an anchor amended by hand after signing is refused.
+- **An `H` comes once per use and a `K` once.** Two thresholds for one use is a
+  threshold nobody can read, and a key listed twice is a key counted twice.
+- **A `K` of another algorithm is left alone**; an `ed25519` one whose key is
+  not 32 bytes makes the anchor unusable. That asymmetry is what the algorithm
+  name is for (Package_Management.md §8).
 - **The chain walk is `G`.** A client at anchor 1 reaches anchor 3 by checking 2
   against 1 and 3 against 2 (Package_Management.md §10). Withholding 2 stops the
-  walk; it does not let 3 through.
+  walk; it does not let 3 through. `G` must increase and need not increase by
+  one: the numbering orders the chain and stops a rollback, and the signatures
+  are what carry the trust, so a withheld anchor stops the walk by the signature
+  that is missing rather than by the number that is.
 
 ---
 
