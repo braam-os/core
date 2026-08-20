@@ -280,7 +280,7 @@ Each is a `Task<Result<T>>`. `Result` carries an `Error` and is unpacked with
 | Group | What is there |
 | --- | --- |
 | Streams | `write_all(fd, Str)`, `read_chunk(fd)`, `close_fd(fd)` |
-| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `remove_path`, `touch_path`, `make_link`, `read_link`, `rename_path` |
+| Files | `open_at(path, flags)`, `open_read`, `read_file`, `stat_of`, `list_dir`, `make_dir`, `make_dir_all`, `remove_path`, `touch_path`, `make_link`, `read_link`, `rename_path` |
 | Directory | `cwd_get()`, `cwd_set(path)` — this process's own, inherited from whoever spawned it |
 | Children | `make_pipe()`, `spawn(Args, ChildIo, const Args *env)`, `wait_child(pid)`, `kill_child(pid)`, `set_fg(pid)` |
 | Terminal | `tty_of(fd)`, `keys_claim(bool)`, `screen_claim(bool)`, `key_read()`, `cursor_get()`, `cursor_set(x, y, on)`, `style_set(fg, bg, attrs)`, `cursor_echo(x, y, cur, flags, runs)` |
@@ -328,6 +328,12 @@ at: walk a tree on `SYS_KIND_DIR` alone and it cannot follow a link out of the
 tree, which is why neither `ls -R` nor the shell's globber needs a cycle guard.
 `make_link` stores the target as written, so it may dangle and a relative one
 reads against the directory the link is in.
+
+`make_dir` is one level and `Err(Exists)` on a leaf that is already there.
+`make_dir_all` is the walk over the components — what `mkdir -p` is — creating
+each missing one and tolerating a directory that stands already. A leaf standing
+as anything else is `Err(Exists)` still, and a file part-way along fails the
+component below it.
 
 `rename_path(from, to)` follows neither end and replaces the destination — and
 its `Err(Unsupported)` is an instruction rather than a failure: the store cannot

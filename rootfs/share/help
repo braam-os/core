@@ -71,7 +71,7 @@ Programs in /bin
   ln        -s [-f] <target> <name> — make a symbolic link
   ls        [-1CRSdhlrt] [<path>...] — list directories, in columns on a
             terminal
-  mkdir     <dir>... — create directories
+  mkdir     [-p] <dir>... — create directories, with missing parents under -p
   mount     list the mounted filesystems
   mv        [-fi] <src>... <dst> — move or rename files
   pbcopy    [<file>...] — put the input on the clipboard

@@ -136,12 +136,11 @@ its `bin/` link farm, `/pkg/world`, `/pkg/repositories` and the installed-db
 stanzas, and read `/pkg/active` — which is a symlink, so `read_link` and not
 `Read`.
 
-One helper has to be written because the system does not have it. There is **no
-recursive `mkdir`** — `Sys::MkDir` is one level and refuses an existing
-directory (`vfs_mkdir`, `src/fs/vfs.cpp`), so this is a walk over the components
-tolerating `Error::Exists`, the way `web/fs.js`'s `installOps` does it;
-`boot.cpp`'s `make_dirs` is a fixed list and not a helper, and `mkdir` has no
-`-p`.
+The recursive `mkdir` this needs now exists: `make_dir_all` (`src/proc/io.h`),
+the walk over the components tolerating `Error::Exists`, since `Sys::MkDir` is
+one level and refuses an existing directory (`vfs_mkdir`, `src/fs/vfs.cpp`).
+`/bin/mkdir -p` is its other caller. Build a store directory with it rather than
+a chain of `make_dir` calls.
 
 `rename_path` (`src/proc/io.h`, over `Sys::Rename`) does exist. Its
 `Err(Unsupported)` means "copy instead" — a directory, or a move across mounts —

@@ -1238,6 +1238,56 @@ if (mode === "--kernel") {
 
     submit("rm -r /home/t", 1186.9);
 
+    // mkdir -p: the walk over the components, which is make_dir_all in
+    // src/proc/io.cpp. Sys::MkDir is one level, so what is checked here is that
+    // an existing directory is tolerated and a file in the way is not.
+    {
+        let mt = 1187;
+        const mkdir = (line) => {
+            submit("clear", (mt += 0.01));
+            const s = submit(line, (mt += 0.01));
+            return [output(s).join("|"), rows(s)];
+        };
+        const ok = (line) => {
+            const [said, r] = mkdir(line);
+            if (said !== "")
+                fail(`\`${line}\` printed ${JSON.stringify(said)}, expected nothing`);
+            if (!r.includes(prompt(0)))
+                fail(`\`${line}\` left a status other than 0`);
+        };
+        const bad = (line, want, status = 1) => {
+            const [said, r] = mkdir(line);
+            if (!said.includes(want))
+                fail(`\`${line}\` printed ${JSON.stringify(said)}, expected ${want}`);
+            if (!r.includes(prompt(status)))
+                fail(`\`${line}\` left a status other than ${status}`);
+        };
+
+        // One level at a time still refuses a missing parent.
+        bad("mkdir /home/p/a/b", "not found");
+        ok("mkdir -p /home/p/a/b");
+        // Idempotent: every component of it stands now.
+        ok("mkdir -p /home/p/a/b");
+        // Without -p the leaf must not exist, which -p has not changed.
+        bad("mkdir /home/p", "already exists");
+        // A file where the leaf goes is an error even with -p, which is the
+        // stat make_dir_all does when the whole path was already there.
+        submit("touch /home/p/f", (mt += 0.01));
+        bad("mkdir -p /home/p/f", "already exists");
+        bad("mkdir -p /home/p/f/g", "mkdir: /home/p/f/g: ");
+        // Relative, so the walk's prefixes resolve against the cwd.
+        submit("cd /home/p", (mt += 0.01));
+        cwd = "/home/p";
+        ok("mkdir -p r/s/t");
+        const [seen] = mkdir("ls -d r/s/t");
+        if (seen !== "r/s/t/")
+            fail(`a relative mkdir -p left ${JSON.stringify(seen)}`);
+        submit("cd /home", (mt += 0.01));
+        cwd = "/home";
+        bad("mkdir -z /home/p", "mkdir: illegal option -- z", 2);
+        submit("rm -r /home/p", (mt += 0.01));
+    }
+
     // M5, second criterion, as amended: df reports the quota and the usage as
     // a BSD table, the durability having moved to the boot banner. The whole
     // line is matched, since a row wider than this grid's sixty columns wraps.
@@ -3109,7 +3159,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 5,338-byte file: more than the eight writes a pipe
+    // Three copies of a 5,439-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -3138,11 +3188,11 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 16,209 bytes is thirty-two chunks against eight
+    // The many-writes case: 16,317 bytes is thirty-two chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
     // The counts are three copies of /share/help, so a line added there moves
     // them.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "312 2562 16209");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "312 2580 16317");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

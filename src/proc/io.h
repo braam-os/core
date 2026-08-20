@@ -67,6 +67,10 @@ Task<Result<Vec<DirEntry>>> list_dir(Str path);
 
 Task<Result<void>> make_dir(Str path);
 
+// Every missing component of `path`. An existing directory is no error;
+// anything else in the leaf's place is Err(Exists).
+Task<Result<void>> make_dir_all(Str path);
+
 Task<Result<void>> remove_path(Str path, bool all);
 
 // Moves an existing file's mtime to now. Err(Unsupported) where the store

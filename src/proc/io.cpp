@@ -179,6 +179,44 @@ Task<Result<void>> make_dir(Str path)
     co_return {};
 }
 
+Task<Result<void>> make_dir_all(Str path)
+{
+    String p;
+    if (path.starts_with("/") && !p.push('/'))
+        co_return Err(Error::NoMemory);
+
+    bool stood = false; // the last component was already there
+    Str rest   = path;
+    while (!rest.empty()) {
+        Str name = rest.split('/', rest);
+        if (name.empty() || name == ".")
+            continue;
+        if (p.size() && p[p.size() - 1] != '/' && !p.push('/'))
+            co_return Err(Error::NoMemory);
+        if (!p.append(name))
+            co_return Err(Error::NoMemory);
+
+        Result<void> r = Err(Error::NoMemory);
+        if (Task<Result<void>> t = make_dir(p.str()))
+            r = co_await t;
+        if (r.is_err() && r.error() != Error::Exists)
+            co_return r;
+        stood = r.is_err();
+    }
+
+    // Only the leaf is told apart; a file lower down fails the component below.
+    if (stood) {
+        Result<FileInfo> s = Err(Error::NoMemory);
+        if (Task<Result<FileInfo>> t = stat_of(p.str()))
+            s = co_await t;
+        if (s.is_err())
+            co_return Err(s.error());
+        if (s.value().kind != SYS_KIND_DIR)
+            co_return Err(Error::Exists);
+    }
+    co_return {};
+}
+
 Task<Result<void>> remove_path(Str path, bool all)
 {
     Result<SysReply> r = co_await sys_call(Sys::Remove, all ? 1 : 0, path);

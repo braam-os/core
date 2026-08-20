@@ -88,6 +88,41 @@ their argument's name into a weak symbol, and `--gc-sections` with comdat
 resolves the collision silently. `grep -rn "^struct <Name>" src/` before adding
 one costs nothing; not doing it cost a session.
 
+## `mkdir -p`, and the walk it is made of
+
+`Sys::MkDir` creates one level and refuses a leaf that already exists, so until
+now nothing in the system could build a path from nothing: `boot.cpp`'s
+`make_dirs` is a fixed list of two names, `web/fs.js`'s `installOps` open-codes
+the walk on the host side, and P11 of [pkg's TODO](../src/cmd/pkg/TODO.md) was
+going to have to write a third copy for `/pkg/gen/<N>/…`. `-p` on `/bin/mkdir`
+is the same walk, so it is written once, as `make_dir_all` in `src/proc/io.cpp`,
+and `pkg` is its second caller rather than its author.
+
+**The walk is userland, not a flag on the syscall.** `Sys::MkDir` has a flags
+word going spare and a recursive bit would have been two lines in `vfs_mkdir`,
+which is the argument against it: the kernel would then own a loop that can fail
+half-way, and the partial tree it left behind would be a kernel decision rather
+than a program's. Nothing about the walk needs privilege, the components are
+independent syscalls either way, and the ABI does not move. A program that wants
+different behaviour on a component that already stands — refusing, or asking —
+writes its own loop over `make_dir`, which is still there.
+
+**The prefixes are textual, on the path as written.** No `cwd_get`, no
+`path_resolve`: a prefix of a relative path is relative and resolves against the
+same cwd, `.` drops on the way past, and `..` reaches the VFS which already
+normalises it. That is one syscall per component and not one more, and it is why
+`mkdir -p r/s/t` needs nothing that `mkdir -p /a/b/c` does not.
+
+**`Error::Exists` is tolerated rather than pre-empted.** Statting each component
+first would double the syscalls on the common path — most of a `/pkg/gen/<N>`
+already exists — to learn what the `mkdir` is about to say anyway. The cost of
+try-then-tolerate is that `Exists` does not say *what* stands there, and for an
+intermediate that does not matter: a file part-way along fails the component
+below it, with that component named. It matters for the leaf, where `mkdir -p f`
+over a regular file would otherwise report success, so the leaf alone is
+statted, and only when the whole path turned out to be there already. One extra
+syscall in the case that did no work at all.
+
 ## A dependency is a name and a bitfield
 
 P8 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last Phase C
