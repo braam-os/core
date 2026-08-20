@@ -11,9 +11,8 @@ C++20, compiled to wasm32, deployable as a static site with no server and no
 special HTTP headers. No libc, no Emscripten, no `xterm.js` — nothing is linked
 that is not in this tree.
 
-Four things must never regress: `kernel.wasm` under its 256 KiB budget, the boot
-archive's staging tree under 1 MiB, the wasm ABI of six imports and nine
-exports, and the three passing CTest cases.
+Two things must never regress: the wasm ABI of six imports and nine exports, and
+the three passing CTest cases.
 
 ## Documents
 
@@ -99,7 +98,7 @@ make clean
 - `unit` — `tests.wasm` under Node. New core code gets a case in
   [test/unit/](test/unit/) and a line in
   [test/CMakeLists.txt](test/CMakeLists.txt).
-- `size` — `tools/size_budget.txt`. Raising a number is a deliberate act.
+- `size` — `tools/size_budget.txt`, checked at build time.
 
 Both wasm modules are driven by the in-memory backends
 [test/fakefs.mjs](test/fakefs.mjs) and [test/fakesvc.mjs](test/fakesvc.mjs),

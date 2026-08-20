@@ -1421,9 +1421,8 @@ recorded in `Release_Notes.md`; `CLAUDE.md`'s "Known gaps" is the current list.
   image out of the store. The host caches the compiled `Module` by path, so the
   bytes still cross the VFS on every `exec` and only the compile is saved.
 - **Duplication.** With no dynamic linking, every binary embeds its own
-  allocator, string types and coroutine runtime. That is why the boot archive is
-  ~400 KB where four binaries once cost 47 KB, and why the process-side runtime
-  is kept deliberately minimal.
+  allocator, string types and coroutine runtime. That is what the boot archive
+  costs, and why the process-side runtime is kept deliberately minimal.
 - **Every asynchronous syscall parks.** `await_ready()` is false
   unconditionally; there is no fast path for an answer the kernel already has.
 - **One process at a time may hold the screen.** `Pane` is a primitive, not a

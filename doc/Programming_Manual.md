@@ -86,7 +86,7 @@ cmake -B build --toolchain <prefix>/lib/cmake/braam/wasm32-unknown-unknown.cmake
 cmake --build build
 ```
 
-`build/hello.wasm` is the program, about 6 KB.
+`build/hello.wasm` is the program.
 
 **The toolchain file is the one thing you have to name, and only on that first
 command.** It is what makes the compiler a wasm32 one, and it points

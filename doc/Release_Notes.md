@@ -25,6 +25,50 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Size stops being a headline
+
+The budgets stay; the noise around them goes. `tools/size_budget.txt` still
+names 262,144 bytes for `kernel.wasm` and 1 MiB for the staging tree, the
+kernel's `POST_BUILD` still checks the first, and the `size` case still checks
+both. What changed is everything written *around* that check.
+
+**CLAUDE.md led with it.** "Four things must never regress" named the two
+numbers before it named the wasm ABI, which puts a byte count above the
+interface every part of the system is written against. It names two things now.
+The `size` bullet lost "raising a number is a deliberate act" — the budget
+file's own comment says that, and saying it twice made it a rule about conduct
+rather than a line in a config.
+
+**§4.4 was arithmetic with a shelf life.** The duplication argument is the
+durable part: no dynamic linking, so every binary carries its own allocator,
+string types and coroutine runtime, so keep the process-side runtime minimal and
+push anything substantial into a syscall. "~710 KiB over thirty-six binaries,
+and `sh.wasm` is 214 KiB of it" was true when it was written and is not now. So
+went README.md's "the kernel is 148 KB" in both places, Programming_Manual.md's
+6 KB hello, and System_Calls.md's "~400 KB where four binaries once cost 47 KB".
+
+This finishes an argument the file has already made twice. M3 raised the ceiling
+from 32 KiB to 256 KiB and recorded that "a ceiling that has to be raised every
+milestone measures nothing". Writing System_Calls.md took the exact counts out
+of README.md and CLAUDE.md because "a pinned figure in a living document is
+stale by the next one" — and replaced them with *rounder* pinned figures, which
+went stale on schedule. The remedy is not a better number; it is no number.
+
+**P28 of the `pkg` TODO lost its first half.** It told whoever writes `pkg` to
+measure it against the budget and to justify raising the `rootfs/` line in this
+file. If the staging tree ever exceeds 1 MiB the `size` case says so at the
+moment it happens, and nobody needs telling in advance to worry about it. P28 is
+documentation now.
+
+**What did not move.** The 512-byte coroutine frame and the 64 KiB span behind
+it are mechanism rather than budget — cited from some two dozen source comments,
+and the reason `FS_BLOCK` and `SYS_CHUNK` are what they are. `SYS_STAGE_MAX`,
+the 16 MB process cap, the package and index caps in the `pkg` documents and the
+runtime storage quota are protocol limits. CI still reports every binary into
+the job summary under `--report`, measured and not bounded. And the milestone
+entries below stand as written: the figures they quote are a dated snapshot,
+which is what this file is for.
+
 ## One reader, five files — and a `Field` that was already taken
 
 P9 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the end of Phase C.

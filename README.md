@@ -9,9 +9,9 @@ close to native speed. There is no server side. The whole system is a handful of
 static files, so any web host can serve it.
 
 Nothing is borrowed. There is no C library, no Emscripten runtime, no
-`xterm.js`; every part was written for this project. The kernel is 148 KB and
-contains no programs at all. Each program is a separate WebAssembly file that
-runs in a sandbox of its own.
+`xterm.js`; every part was written for this project. The kernel contains no
+programs at all. Each program is a separate WebAssembly file that runs in a
+sandbox of its own.
 
 Open the page and there is a prompt:
 
@@ -133,8 +133,8 @@ find_package(braam REQUIRED)
 braam_add_program(NAME hello SOURCES hello.cpp)
 ```
 
-The result is a 6 KB wasm file. The `Args` parameter has no name because this
-program ignores it, and the build treats an unused named parameter as an error.
+The result is a wasm file. The `Args` parameter has no name because this program
+ignores it, and the build treats an unused named parameter as an error.
 
 A program does not have to be part of the system image to run. Paths are looked
 up through the ordinary filesystem, so you can bring the file in with the
@@ -176,8 +176,8 @@ installs.
 ## Status
 
 Finished, as a first version: everything above works and the tests pass. The
-kernel is 148 KB and the archive holding the programs is 288 KB, unpacked into
-browser storage the first time the page is opened.
+archive holding the programs is unpacked into browser storage the first time the
+page is opened.
 
 A tablet works: tap to type, drag to select. The row of buttons under the
 terminal supplies the keys a touch keyboard does not have, since `Esc`, `Tab`,

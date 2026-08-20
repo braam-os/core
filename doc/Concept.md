@@ -919,14 +919,10 @@ key: a keystroke is two round trips and Enter to the next prompt is five, paid
 once a line, which is why it is affordable.
 
 **The real cost is duplication.** With no dynamic linking, every binary embeds
-its own copy of the allocator, the string types and the coroutine runtime; the
-staged tree is ~710 KiB over thirty-six binaries, and `sh.wasm` is 214 KiB of it
-— the shell is a language now (§4.5), and nearly a third of the tree. Keep the
+its own copy of the allocator, the string types and the coroutine runtime, and
+the shell — a language now (§4.5) — is the largest of them by some way. Keep the
 process-side runtime minimal and push anything substantial into syscalls, so it
-lives once in the kernel rather than N times in userland. That *tree* carries a
-size budget and the individual binaries do not, so that number is where the
-duplication stays visible — `rootfs.zip` is deflated, and its own size would
-hide it.
+lives once in the kernel rather than N times in userland.
 
 Cross-instance data movement is Appendix B.
 

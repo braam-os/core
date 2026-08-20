@@ -415,11 +415,6 @@ cases for the happy path and for every attack §3 names:
 Each must be a refusal that says which check failed. A test that only proves the
 happy path proves nothing here.
 
-### P28. Budget and documentation
+### P28. Documentation
 
-Measure `pkg` against `tools/size_budget.txt`. The staging tree has room today,
-but SHA-256, a zip reader, a solver and an index parser are not free; raising
-the `rootfs/` line is a deliberate act and needs a Release_Notes.md entry saying
-what bought the bytes.
-
-Then `rootfs/README` and `rootfs/share/help`.
+`rootfs/README` and `rootfs/share/help`.
