@@ -25,6 +25,53 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Versions, ported rather than designed
+
+P7 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `version.cpp` is apk's
+`src/version.c` — the token grammar of Package_Format.md §7, the suffix table
+with `none` as its pivot, and a comparison that answers a bit rather than a
+sign. `test/unit/version.data` is apk's fixture file and
+`test/unit/test_version.cpp` is its loop; all 785 cases pass.
+
+**The interesting decision is that there was no decision.** A version
+comparison looks like the sort of thing to write freshly and simply — split on
+dots, compare numbers — and every such attempt is wrong in the same places.
+`1.07 < 1.1` because a run with a leading zero sorts as a string, and it is a
+*string* even when the other side has no leading zero. `1.1_alpha1 < 1.1`
+because a pre-release suffix makes the longer version the smaller one, which no
+lexicographic or field-wise rule produces. `2.3.0b` orders after `2.3.0` but
+before `2.3.1`. Package_Format.md §9 already froze the grammar for the sake of
+this file and `test/solver/`'s fixtures; P7 is what that freeze was for.
+
+**The token-type ordering is the whole algorithm.** The nine token kinds are an
+enum whose *numeric order* is load-bearing twice over: `token_next` validates a
+transition by comparing the previous token against a bound (a letter after a
+suffix is invalid because `LETTER` is not greater than `DIGIT`), and the tail of
+the comparison, once the shared prefix matches, decides by which side's next
+token has the higher number — the higher number being the *lesser* version,
+because `END` is 7 and everything that can still follow is below it. Reordering
+that enum would silently change what a version means.
+
+**Two behaviours are apk's and are kept although they look like bugs.** A digit
+run is pulled as a `u64` and wraps rather than failing, and two versions that
+both go invalid at the same token index compare *equal*. Both fall out of the C
+the fixtures were written against. A port that "fixed" either would pass fewer
+of them, and the fixtures are the specification.
+
+**The fixture is data, not a rewritten table.** `version.data` is byte-for-byte
+apk's with `R"DATA(` prepended and `)DATA"` appended — two lines, so a reader
+can diff it against upstream and the test compiles it in without a build step.
+`tests.wasm` cannot open a host file, and a generated header would have been a
+script, a custom command and a dependency edge for the same 12 KB of text. What
+the wrapper buys is that nobody retypes 785 comparisons: a rewritten table is a
+table with new mistakes in it.
+
+`version_mask` and `version_match` land here rather than in P8 because the
+fixture's line format is `ver1 op ver2` and running it needs them. The mask is
+also the shape P8 was written around — an operator is a set of acceptable
+results, so nine spellings collapse into one `match()` and a bitfield. apk's
+conflict bit waits for the dependency that carries it.
+
 ## A digest that streams, and two decoders that refuse
 
 P6 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `sha256.cpp` is FIPS 180-4

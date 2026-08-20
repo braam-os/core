@@ -1,6 +1,6 @@
 # /bin/pkg — development tasks
 
-A sequential plan. `/bin/pkg` does not exist;
+A sequential plan. `/bin/pkg` is a skeleton;
 [doc/Package_Management.md](../../../doc/Package_Management.md) is the policy
 written before it, and this is the order the code goes in.
 
@@ -18,9 +18,9 @@ way: the decisions are in Concept.md, Package_Management.md and
 Package_Format.md, and the two host operations are in System_Calls.md. P5 and
 P6 went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
-table each task below fills a row of, and `sha256.cpp` and `encode.cpp` are the
-digest and the two encodings, compiled into `tests.wasm` as well. So this
-starts at P7.
+table each task below fills a row of, and `sha256.cpp`, `encode.cpp` and
+`version.cpp` are the digest, the two encodings and apk's version grammar,
+compiled into `tests.wasm` as well. So this starts at P8.
 
 ## The shape being built
 
@@ -102,35 +102,6 @@ large crosses the ABI. That is P6.
 ---
 
 ## Phase C — pkg's own primitives, no network
-
-### P7. Version comparison
-
-apk's grammar, in `version.cpp`:
-
-```
-digit{.digit}...{letter}{_suf{#}}...{~hash}{-r#}
-```
-
-What has to be right, because it is where the subtlety is:
-
-- The **token-type ordering** is the semantics. When the two sides diverge in
-  token *type*, the side whose next token is a pre-release suffix is the lesser
-  one — that is what makes `1.1_alpha1 < 1.1`.
-- The **suffix table** with `NONE` as the pivot:
-  `alpha beta pre rc <none> cvs svn git hg p`.
-- A digit run beginning with `0` compares **as a string**, not as a number.
-- Fuzzy (`~`) is: if the right side ran out, the result is equal. That single
-  rule is the whole of prefix matching.
-
-The grammar is Package_Format.md §7; the four bullets above are what to get
-right while implementing it.
-
-`apk-tools/test/unit/version.data` is 788 comparison cases. Port it into
-`test/unit/` as data rather than restating it — a rewritten table is a table
-with new mistakes in it. Its line format is `ver1 op ver2`, a bare `version` for
-a validity check, and a leading `!` on either to invert; `#` starts a comment.
-
-Done when: all 788 cases pass.
 
 ### P8. Dependency parsing
 

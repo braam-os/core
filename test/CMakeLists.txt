@@ -34,6 +34,7 @@ add_executable(tests
     unit/test_time.cpp
     unit/test_tty.cpp
     unit/test_vec.cpp
+    unit/test_version.cpp
     unit/test_vfs.cpp
 
     # The grammar, the word expander, the pattern matcher and `test`'s
@@ -54,10 +55,11 @@ add_executable(tests
     ../src/proc/opt.cpp
     ../src/proc/time.cpp
 
-    # pkg's digest and its encodings, pure and allocation-free, so braam_pkg is
-    # not linked here either.
+    # pkg's digest, its encodings and the version grammar, pure and
+    # allocation-free, so braam_pkg is not linked here either.
     ../src/cmd/pkg/encode.cpp
-    ../src/cmd/pkg/sha256.cpp)
+    ../src/cmd/pkg/sha256.cpp
+    ../src/cmd/pkg/version.cpp)
 
 target_link_libraries(tests PRIVATE
     braam_user braam_fs braam_svc braam_ui braam_core braam_flags)
