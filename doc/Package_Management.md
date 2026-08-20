@@ -270,8 +270,9 @@ that for an intrinsic key identity. No point repeating the first attempt. A name
 that is a hash of the key cannot be claimed by a different key.
 
 **On availability.** WebCrypto's Ed25519 arrived much later in Chrome than in
-Safari and Firefox, so check `caniuse` again when `pkg` is built. Whatever the
-answer:
+Safari and Firefox — Chrome 137, in 2025 — so it is present across the three by
+the time `pkg` needs it, and `Sys::Verify` is built on that. The refusal below
+is still what an older engine gets, and is the point of the paragraph:
 
 > **A missing algorithm means `pkg` refuses to run. It never means `pkg`
 > installs without checking.**

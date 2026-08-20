@@ -1,4 +1,5 @@
 add_library(braam_svc STATIC
+    crypto.cpp
     net.cpp
     proc.cpp
     svc.cpp

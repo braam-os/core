@@ -513,6 +513,16 @@ bool pack_pair(String &out, Str first, Str second)
            out.append(first) && out.append(second);
 }
 
+// The same for three: two lengths, then the pieces. The third is what is left.
+bool pack_triple(String &out, Str first, Str second, Str third)
+{
+    u8 head[8];
+    sys_put_u32(head, u32(first.size()));
+    sys_put_u32(head + 4, u32(second.size()));
+    return out.append(Str(reinterpret_cast<const char *>(head), sizeof(head))) &&
+           out.append(first) && out.append(second) && out.append(third);
+}
+
 } // namespace
 
 Task<Result<Fetched>> fetch_url(Str url, Str spec)
@@ -614,6 +624,21 @@ Task<Result<void>> fexport(Str name, Str bytes)
     if (r.is_err())
         co_return Err(r.error());
     co_return {};
+}
+
+Task<Result<bool>> verify_sig(Str key, Str sig, Str bytes)
+{
+    String req;
+    if (!pack_triple(req, key, sig, bytes))
+        co_return Err(Error::NoMemory);
+
+    Result<SysReply> r = co_await sys_call(Sys::Verify, 0, req.str());
+    if (r.is_err()) {
+        if (r.error() == Error::Perm)
+            co_return false;
+        co_return Err(r.error());
+    }
+    co_return true;
 }
 
 Task<void> errln(Str who, Str what, Error why)

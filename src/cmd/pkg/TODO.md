@@ -79,8 +79,8 @@ The alternative, which was the plan before symbolic links, `Sys::Rename` and
 
 ### Two new operations
 
-- **`Sys::Verify`** — Ed25519 through `crypto.subtle.verify`, which Concept.md
-  §6 already reserves.
+- **`Sys::Verify`** — Ed25519 through `crypto.subtle.verify`, the host service
+  Concept.md §6 provides for.
 - **`Sys::Inflate`** — `DecompressionStream("deflate-raw")`. The payload is the
   compressed entry and the status is a descriptor, so `Read` and `Close` serve
   it exactly as they serve a fetched body and nothing is duplicated.
@@ -91,8 +91,8 @@ whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI.
 
-Both are described in `doc/System_Calls.md` §8 already, at 57 and 58, as rows
-that no enum yet carries (P1). P3 and P4 make them true.
+`Verify` is built (P3). `Inflate` is still a reserved row in
+`doc/System_Calls.md` §8 that no enum carries; P4 makes it true.
 
 ---
 
@@ -158,29 +158,28 @@ Both of these are enum values on each side (Concept.md §2.2), not new imports.
 `SvcOp`'s values are positional and restated by hand in `web/svc.js`, so
 **append at the end of the enum, never insert**.
 
-### P3. `Sys::Verify` / `SvcOp::Verify`
+### P3. `Sys::Verify` / `SvcOp::Verify` — **done**
 
-Ed25519 over `crypto.subtle.verify`. The payload is the public key, the
-signature and the signed bytes; the reply is a yes or a no, and an error is not
-a no.
+Ed25519 over `crypto.subtle.verify`, at `Sys::Verify = 57` and
+`SvcOp::Verify = 19`; `PROC_ABI` is 15.
 
-Touches: `src/svc/svc.h`, a new `src/svc/crypto.cpp` and its `CMakeLists.txt`
-line, `src/kernel/sysabi.h` (`Sys::Verify = 57`, and **bump `PROC_ABI` to 15**),
-`src/user/syscall.cpp`, `src/proc/io.h` and `io.cpp`, `web/svc.js` (the `OP`
-table and a `perform` arm), `test/fakesvc.mjs` (whose switch fails closed on an
-op it does not know), `test/unit/`.
+Two things worth carrying forward:
 
-`doc/System_Calls.md`'s row for it already exists (P1) and says what the payload
-carries; this is where it stops being reserved. Drop it from the reserved note
-under the table, move `PROC_ABI` in the ABI-history paragraph and at `:262`, and
-correct Concept.md's count sentence.
+- **`verify_sig` (`src/proc/io.h`) returns `Result<bool>`**, and is the one
+  place the wire's `Err(Perm)` becomes a value. Below it — `svc_verify`, the
+  syscall arm, `web/svc.js` — a bad signature stays a refusal, so nothing that
+  forgets to look at a boolean can read one as a pass.
+- **The message is one staged payload**, so `SYS_STAGE_MAX` caps what can be
+  checked at 1 MiB. P14's index fetch must cap well below it.
 
-§8 is load-bearing here: where the browser has no Ed25519 the operation answers
-`Err(Unsupported)` and `pkg` **refuses to run**. It must be impossible for that
-path to become a skipped check.
+`test/fakesvc.mjs` verifies for real, with `node:crypto` and synchronously: its
+`perform` answers from inside the import, which is what lets a unit test finish
+a `co_await` in one `sched_tick`, and `crypto.subtle` is a promise.
 
-Done when: a unit test verifies a known-good RFC 8032 vector, rejects a
-tampered one, and rejects a signature by the wrong key.
+Done: `test/unit/test_svc.cpp` runs RFC 8032 §7.1's TEST 1 and TEST 2, and
+rejects a tampered message, a signature by the wrong key, the wrong signature
+and a short key. Removing the fake's arm makes every one of them fail as
+`Unsupported` rather than passing, which is §8's rule demonstrated.
 
 ### P4. `Sys::Inflate` / `SvcOp::Inflate`
 

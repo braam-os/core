@@ -24,7 +24,7 @@ struct ProcMeta {
 
 constexpr Str PROC_SECTION   = "braam";
 constexpr u32 PROC_MAGIC     = 0x6d617262; // "bram"
-constexpr u32 PROC_ABI       = 14;
+constexpr u32 PROC_ABI       = 15;
 constexpr u32 PROC_PAGE      = 65536;
 constexpr u32 PROC_MAX_PAGES = 256; // 16 MB, the ceiling the kernel imposes
 
@@ -169,6 +169,10 @@ enum class Sys : u32 {
     PickOpen,   // arg = the set's fd; payload = u32 index; status = the file's fd
     Fexport,    // payload = u32 name_len, the name, the bytes
 
+    // Ed25519. Status 0 is a good signature, Err(Perm) a bad one and
+    // Err(Unsupported) a browser without the algorithm.
+    Verify, // payload = u32 key_len, u32 sig_len, the key, the signature, the bytes
+
     // The terminal. Cells, never a byte stream (§2.3), so a full-screen
     // program paints a grid of its own and blits the part of it that changed.
     // Both claims are held by the *kernel*, on the process's record: a killed
@@ -289,8 +293,13 @@ constexpr u32 SYS_PROC_DEPTH  = 16;
 
 // The most a blit may carry, which is the largest grid there can be. Sys::Stage
 // is capped at the same number: a process asks the host for room before it
-// sends, and an uncapped ask is an allocation a hostile binary chooses.
+// sends, and an uncapped ask is an allocation a hostile binary chooses. It is
+// also the ceiling on what Sys::Verify can check, the message being one payload.
 constexpr u32 SYS_STAGE_MAX = 1u << 20;
+
+// Ed25519's fixed sizes, in bytes.
+constexpr u32 SYS_ED25519_KEY = 32;
+constexpr u32 SYS_ED25519_SIG = 64;
 
 // One entry of Sys::List's reply: u32 kind, u64 size, u64 mtime, u32 name_len,
 // the name. `mtime` is milliseconds since the epoch, 0 when the filesystem

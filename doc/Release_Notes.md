@@ -25,6 +25,66 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A signature check, and a refusal that cannot be mistaken for a pass
+
+`Sys::Verify` is op 57 and `SvcOp::Verify` is 19: Ed25519 over
+`crypto.subtle.verify`, an enum value on each side of the one `host_svc` import
+rather than an import of its own. `PROC_ABI` moves to 15. It is the first code
+`/bin/pkg` needs and the load-bearing one — every other check in
+[Package_Management.md](Package_Management.md) §7 assumes a signature was
+checked first.
+
+**The boolean lives in one place, and everything below it refuses.** A bad
+signature is `-Error::Perm` on the wire, a failed `Result` in the kernel, and a
+`false` only once it reaches `verify_sig` in `src/proc/io.h`. The alternative
+was a status of 1 for good and 0 for bad, which reads better at a call site and
+fails in the wrong direction: a caller that ignored the value would take a bad
+signature for a good one. This way the slip is `CO_TRY_VOID` on something that
+returns a value — visibly wrong — and the default behaviour of every layer that
+does not know about `Verify` is to refuse. **A program still gets a `bool`**,
+because the layer that has to tell "this signature is bad, try the next `Y:`
+line" from "this browser has no Ed25519, stop" is the one that would otherwise
+have to special-case `Perm` by hand at every call.
+
+**Where the algorithm is missing, `Err(Unsupported)` must not look like a check
+that failed.** `web/svc.js` catches a `NotSupportedError` and rethrows it as
+`E.UNSUPPORTED`, because `statusOf` would otherwise map an unrecognised
+exception to `E.IO` — an error either way, but not the one §8 attaches a rule
+to. The property was tested by deletion rather than asserted: removing the arm
+from `test/fakesvc.mjs` makes every vector fail, the good ones because they no
+longer verify and the bad ones because the error is the wrong kind. A suite that
+went green with the crypto gone would have proved nothing.
+
+**The fake verifies for real, and synchronously.** `test/fakesvc.mjs` answers
+from inside the import, which is what lets a unit test drive a whole `co_await`
+chain in one `sched_tick` — there is no drain loop in the unit suite, so an arm
+that parked could never be answered at all. `crypto.subtle` is a promise, so the
+fake uses `node:crypto`'s synchronous `verify` over the raw key wrapped in
+Ed25519's twelve-byte SPKI header. Two implementations of one check is the
+opposite of what this codebase usually wants, and it is right here: the fake is
+not a stand-in for the real verifier, it *is* a verifier, so RFC 8032's vectors
+are checked rather than a canned answer being replayed.
+
+**The lengths are refused before the host is asked.** 32 bytes of key and 64 of
+signature, from `SYS_ED25519_KEY` and `SYS_ED25519_SIG` — constants rather than
+something the payload states, since §8 is one algorithm and no negotiation.
+Anything else is `Err(Invalid)`, which also keeps a malformed anchor from
+reaching WebCrypto at all.
+
+**Being one staged payload caps what can be signed at `SYS_STAGE_MAX`.** A
+signature over bytes the kernel fetched separately would be a signature over
+whichever bytes arrived last, so key, signature and message are staged together
+and the 1 MiB ceiling follows. That is a real bound on how large a signed index
+may be, and it belongs in the record now rather than being discovered when the
+fetch cap is written.
+
+**57 landed with no caller in `src/cmd/`.** The note written two commits ago
+said `Sys` would gain each reserved number with its caller, and that has been
+rewritten rather than left standing: §4.3's rule bars *growing* the table on
+speculation, and a row specified, reviewed and committed before a line of it was
+written is not a guess. `Cursor` and `Style` have no caller either, and the reference has
+said so for some time. `kernel.wasm` grew 1,402 bytes, to 173,743 of 262,144.
+
 ## Five formats, frozen before a parser exists
 
 [Package_Format.md](Package_Format.md) defines one stanza grammar and the five

@@ -113,6 +113,46 @@ Task<i32> ask_dropped_socket()
     co_return 0;
 }
 
+// Ed25519, against RFC 8032 §7.1. The vectors stay hex so they can be read
+// against the RFC; test/fakesvc.mjs is what actually checks them.
+constexpr Str T1_KEY = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+constexpr Str T1_SIG = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555"
+                       "fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
+constexpr Str T2_KEY = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
+constexpr Str T2_SIG = "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da0"
+                       "85ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00";
+
+u8 t1_key[32], t1_sig[64];
+u8 t2_key[32], t2_sig[64];
+
+usize unhex(Str hex, u8 *out, usize cap)
+{
+    usize n = 0;
+    for (usize i = 0; i + 1 < hex.size() && n < cap; i += 2) {
+        u8 hi = u8(hex[i] <= '9' ? hex[i] - '0' : (hex[i] | 32) - 'a' + 10);
+        u8 lo = u8(hex[i + 1] <= '9' ? hex[i + 1] - '0' : (hex[i + 1] | 32) - 'a' + 10);
+        out[n++] = u8(hi << 4 | lo);
+    }
+    return n;
+}
+
+Str raw(const u8 *p, usize n) { return Str(reinterpret_cast<const char *>(p), n); }
+
+bool verify_good;
+
+Task<i32> ask_verify(Str key, Str sig, Str msg)
+{
+    Task<Result<void>> t = svc_verify(key, sig, msg);
+    if (!t)
+        co_return 1;
+    Result<void> r = co_await t;
+    answered       = true;
+    verify_good    = !r.is_err();
+    if (r.is_err())
+        failure = r.error();
+    co_return 0;
+}
+
 } // namespace
 
 void test_svc()
@@ -183,6 +223,66 @@ void test_svc()
     CHECK(failure == Error::Cancelled);
     CHECK_EQ(jsref_live(), live);
     CHECK_EQ(host_orphans(), 0);
+
+    // Ed25519. A good signature is Ok, a bad one Err(Perm) — an answer, not a
+    // fault — and a browser with no algorithm is Err(Unsupported), which must
+    // never look like either.
+    CHECK_EQ(unhex(T1_KEY, t1_key, sizeof(t1_key)), sizeof(t1_key));
+    CHECK_EQ(unhex(T1_SIG, t1_sig, sizeof(t1_sig)), sizeof(t1_sig));
+    CHECK_EQ(unhex(T2_KEY, t2_key, sizeof(t2_key)), sizeof(t2_key));
+    CHECK_EQ(unhex(T2_SIG, t2_sig, sizeof(t2_sig)), sizeof(t2_sig));
+
+    Str t1_key_s = raw(t1_key, sizeof(t1_key));
+    Str t1_sig_s = raw(t1_sig, sizeof(t1_sig));
+    Str t2_key_s = raw(t2_key, sizeof(t2_key));
+    Str t2_sig_s = raw(t2_sig, sizeof(t2_sig));
+
+    // TEST 1's message is empty and TEST 2's is one byte, 0x72.
+    Str t2_msg = "\x72";
+
+    struct {
+        Str key, sig, msg;
+        bool want;
+        Str what;
+    } vectors[] = {
+        { t1_key_s, t1_sig_s, Str(), true, "RFC 8032 TEST 1" },
+        { t2_key_s, t2_sig_s, t2_msg, true, "RFC 8032 TEST 2" },
+        { t2_key_s, t2_sig_s, "\x73", false, "a tampered message" },
+        { t1_key_s, t2_sig_s, t2_msg, false, "a signature by the wrong key" },
+        { t2_key_s, t1_sig_s, t2_msg, false, "the wrong signature" },
+    };
+
+    for (auto &v : vectors) {
+        test_begin(v.what); // so a failure names the vector, not just the line
+        sched_reset();
+        answered    = false;
+        verify_good = false;
+        failure     = Error::Invalid;
+        CHECK(sched_spawn(ask_verify(v.key, v.sig, v.msg)) != 0);
+        CHECK_EQ(sched_tick(0), -1);
+        CHECK(answered);
+        CHECK_EQ(verify_good, v.want);
+        if (!v.want)
+            CHECK(failure == Error::Perm);
+        CHECK_EQ(host_orphans(), 0);
+    }
+
+    // A key of the wrong length is Invalid, not Perm: it is malformed rather
+    // than a signature that failed. The syscall arm refuses it before the host
+    // is asked; here the call is direct, so the host is what refuses.
+    test_begin("svc: a short key");
+    sched_reset();
+    answered    = false;
+    verify_good = false;
+    failure     = Error::Perm;
+    CHECK(sched_spawn(ask_verify(t2_key_s.substr(0, 31), t2_sig_s, t2_msg)) != 0);
+    CHECK_EQ(sched_tick(0), -1);
+    CHECK(answered);
+    CHECK(!verify_good);
+    CHECK(failure == Error::Invalid);
+    CHECK_EQ(host_orphans(), 0);
+
+    test_begin("svc");
 
     sched_reset();
     CHECK_EQ(heap_stats().bytes_in_use, in_use);

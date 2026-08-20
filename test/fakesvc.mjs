@@ -8,12 +8,27 @@
 // nothing to deliver is the one operation that really parks: it records the
 // request and is answered later, by a send or by the socket being dropped.
 
-import { E, Request, statusOf } from "../web/abi.js";
+import { createPublicKey, verify as nodeVerify } from "node:crypto";
+
+import { E, Request, statusOf, u32le } from "../web/abi.js";
 import { makeProc } from "../web/proc.js";
 import { OP } from "../web/svc.js";
 import { makeFakeLinks } from "./fakeworker.mjs";
 
 const utf8 = new TextEncoder();
+
+// An Ed25519 SubjectPublicKeyInfo header; the raw 32 bytes follow it.
+const SPKI = Uint8Array.of(0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00);
+
+// Real Ed25519, and synchronous — crypto.subtle is a promise, and an arm that
+// parked could never be answered in the unit suite, which has no drain loop.
+function verifyEd25519(key, sig, msg) {
+    if (key.length !== 32 || sig.length !== 64)
+        throw { braam: E.INVALID };
+    const der = Buffer.concat([Buffer.from(SPKI), Buffer.from(key)]);
+    const pub = createPublicKey({ key: der, format: "der", type: "spki" });
+    return nodeVerify(null, Buffer.from(msg), pub, Buffer.from(sig));
+}
 
 // What perform() returns when it has not answered yet.
 const PARKED = Symbol("parked");
@@ -232,6 +247,20 @@ export function makeFakeSvc(mem, net, kernel) {
             net.exported.push({ name: r.arg(), bytes: r.bytes() });
             r.ok();
             return;
+
+        case OP.VERIFY: {
+            const buf = r.bytes();
+            const keyLen = u32le(buf, 0);
+            const sigLen = u32le(buf, 4);
+            const good = verifyEd25519(buf.subarray(8, 8 + keyLen),
+                                       buf.subarray(8 + keyLen, 8 + keyLen + sigLen),
+                                       buf.subarray(8 + keyLen + sigLen));
+            if (good)
+                r.ok();
+            else
+                r.fail(E.PERM);
+            return;
+        }
 
         // Spawning executes no wasm, so it can be answered from inside the
         // import like everything else here. A step cannot.

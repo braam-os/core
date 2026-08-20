@@ -86,6 +86,11 @@ export class Request {
 }
 
 // Maps a rejection onto one of src/kernel/result.h's Error values.
+// A length word out of a staged payload, little-endian like every other field.
+export function u32le(bytes, at) {
+    return (bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) | (bytes[at + 3] << 24)) >>> 0;
+}
+
 export function statusOf(e) {
     if (e && e.braam)
         return e.braam;

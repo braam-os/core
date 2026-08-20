@@ -1041,6 +1041,31 @@ Task<Result<String>> proc_syscall(Proc &p, Call &c)
             break;
         }
 
+        case Sys::Verify: {
+            if (payload.size() < 8) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            u32 key_len = sys_get_u32(c.stage);
+            u32 sig_len = sys_get_u32(c.stage + 4);
+            if (usize(key_len) + usize(sig_len) + 8 > payload.size()) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            if (key_len != SYS_ED25519_KEY || sig_len != SYS_ED25519_SIG) {
+                status = -i32(Error::Invalid);
+                break;
+            }
+            Result<void> r = Err(Error::NoMemory);
+            CO_CALL(r, svc_verify(payload.substr(8, key_len),
+                                  payload.substr(8 + key_len, sig_len),
+                                  payload.substr(8 + key_len + sig_len)));
+            status = 0;
+            if (r.is_err())
+                status = -i32(r.error());
+            break;
+        }
+
         case Sys::KeyClaim:
         case Sys::ScreenEnter: {
             bool take = sys_op_arg(c.op) & 1;

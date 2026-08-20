@@ -750,16 +750,15 @@ The wire's conventions:
   and its own scheduler job, so a socket read that never completes cannot starve
   the keystroke behind it.
 
-**The table is forty-two operations and `PROC_ABI` is 14**: four synchronous —
-`exit`, `getpid`, `now`, `stage` — and thirty-eight asynchronous. `Rename` is
-the newest: it is what `/bin/mv` tries before it falls back to copying, and the
-only way a move keeps a modification time the system has no setter for.
-[System_Calls.md](System_Calls.md) lists them all with what each carries. Two
-numbers past the end of the host-services group are spoken for and are not in
-the table: 57 and 58, `Verify` and `Inflate`, which `/bin/pkg` needs (§6). The
-reference describes them so the shape cannot be argued twice; `Sys` gains them
-when the program that calls them exists, and `PROC_ABI` moves to 15 and then 16
-as each does.
+**The table is forty-three operations and `PROC_ABI` is 15**: four synchronous —
+`exit`, `getpid`, `now`, `stage` — and thirty-nine asynchronous. `Verify` is the
+newest: Ed25519 over `crypto.subtle`, which is what a package manager checks a
+repository's index with before it believes a word of it.
+[System_Calls.md](System_Calls.md) lists them all with what each carries. One
+number past it is spoken for and not in the table: 58, `Inflate`, which
+`/bin/pkg` needs (§6). The reference describes it so the shape cannot be argued
+twice; `Sys` gains it when the program that calls it exists, and `PROC_ABI`
+moves to 16 then.
 
 Four rules bound the table:
 
@@ -1308,8 +1307,7 @@ an enum value on each side.
   than an interface of their own; `aux` in the request record is the pid they
   name.
 - **A signature check** — `crypto.subtle.verify`, Ed25519, over the index that
-  names a package's hash. **Unbuilt**: nothing needs it until `/bin/pkg` exists,
-  and what it must guarantee is
+  names a package's hash. What it must guarantee is
   [Package_Management.md](Package_Management.md). It belongs here and not in
   wasm because WebCrypto is a promise, so it is this convention already — and
   because the host is inside the trusted base unconditionally, a verifier there

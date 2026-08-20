@@ -276,6 +276,11 @@ Task<Result<i32>> pick_open(const Chosen &c, usize index);
 // Hands the bytes to the browser as a download.
 Task<Result<void>> fexport(Str name, Str bytes);
 
+// Checks an Ed25519 signature. The bool is the answer; an Err is a fault, and
+// Err(Unsupported) is a browser with no Ed25519. The message is capped at
+// SYS_STAGE_MAX.
+Task<Result<bool>> verify_sig(Str key, Str sig, Str bytes);
+
 // A diagnostic on stderr: "who: what: why".
 Task<void> errln(Str who, Str what, Error why);
 

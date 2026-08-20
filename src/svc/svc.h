@@ -33,6 +33,10 @@ enum class SvcOp : u32 {
     ProcStep,  // aux = pid, buf = the payload for _start or _resume
                //   -> result_lo = ProcStep, result_hi = the instance's pages
     ProcKill,  // req = pid; no record, no reply
+
+    // Appended, never inserted: web/svc.js restates these numbers by hand.
+    Verify, // buf = u32 key_len, u32 sig_len, the key, the signature, the bytes
+            //   -> status 0 good, Err(Perm) bad, Err(Unsupported) no Ed25519
 };
 
 // A service operation. The record's inline string argument is a URL or a name.
@@ -95,6 +99,10 @@ Task<Result<WallClock>> svc_clock();
 
 Task<Result<String>> clip_read();
 Task<Result<void>> clip_write(Str text);
+
+// Ed25519. Ok is a good signature, Err(Perm) a bad one, Err(Unsupported) a
+// browser without the algorithm. src/proc/io.cpp turns that into a bool once.
+Task<Result<void>> svc_verify(Str key, Str sig, Str bytes);
 
 // What the browser will state about itself: browser, OS, architecture, cores,
 // memory, locale. Asked once at boot and cached (src/user/boot.cpp), because a

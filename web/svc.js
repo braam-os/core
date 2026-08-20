@@ -8,7 +8,7 @@
 // the file picker and the download need the DOM, so those are relayed to the
 // page and answered from there.
 
-import { E, Request, statusOf } from "./abi.js";
+import { E, Request, statusOf, u32le } from "./abi.js";
 
 export const OP = {
     CLOCK: 1,
@@ -29,9 +29,13 @@ export const OP = {
     PROC_SPAWN: 16,
     PROC_STEP: 17,
     PROC_KILL: 18,
+    VERIFY: 19,
 };
 
 const utf8 = new TextEncoder();
+
+// The one signature algorithm there is (Package_Management.md §8).
+const ED25519 = { name: "Ed25519" };
 
 // A request body and a clipboard string arrive as text; a response body and a
 // picked file are bytes. Both ends of the wire are byte counts.
@@ -371,6 +375,31 @@ export function makeSvcImport(mem, deposit, relay, reply, proc) {
             await relay({ svc: "clipWrite", text: r.text() });
             r.ok();
             return;
+
+        // No relay: crypto.subtle is in the worker.
+        case OP.VERIFY: {
+            const buf = r.bytes();
+            const keyLen = u32le(buf, 0);
+            const sigLen = u32le(buf, 4);
+            const key = buf.subarray(8, 8 + keyLen);
+            const sig = buf.subarray(8 + keyLen, 8 + keyLen + sigLen);
+            const msg = buf.subarray(8 + keyLen + sigLen);
+            let good;
+            try {
+                const k = await crypto.subtle.importKey("raw", key, ED25519, false, ["verify"]);
+                good = await crypto.subtle.verify(ED25519, k, sig, msg);
+            } catch (e) {
+                // statusOf would otherwise call this IO.
+                if (e && e.name === "NotSupportedError")
+                    throw { braam: E.UNSUPPORTED };
+                throw e;
+            }
+            if (good)
+                r.ok();
+            else
+                r.fail(E.PERM);
+            return;
+        }
 
         case OP.PICK: {
             const files = await relay({ svc: "pick" });

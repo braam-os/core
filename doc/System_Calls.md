@@ -259,7 +259,7 @@ it, and how much memory to give it. It lives in a wasm custom section named
 ```c
 struct ProcMeta {
     u32 magic;          // 0x6d617262, "bram"
-    u32 abi;            // PROC_ABI, currently 14
+    u32 abi;            // PROC_ABI, currently 15
     u32 flags;
     u32 initial_pages;
     u32 max_pages;
@@ -761,13 +761,17 @@ Reply is `i32 status` then data. A negative status is `-Error`. Served in
 Every multi-byte field is little-endian, and a `u64` is a low word then a high
 word.
 
-**57 and 58 are reserved, and are not in `src/kernel/sysabi.h`.** They are what
-`/bin/pkg` needs and `/bin/pkg` does not exist, so §8's opening rule — every
-operation has a caller in `src/cmd/` — is not yet met by either. The shape is
-written here because a signature check and a decompressor are the two places a
-package manager can be got wrong quietly, and settling what crosses the boundary
-before anything crosses it is the whole of that argument. `Sys` gains each one
-with its caller; `PROC_ABI` moves to 15 and then 16 as it does.
+**58 is reserved, and is not in `src/kernel/sysabi.h`.** It is what `/bin/pkg`
+needs and `/bin/pkg` does not exist. `Sys` gains it with its caller, and
+`PROC_ABI` moves to 16 when it does.
+
+**57 has no caller either, and landed anyway.** §8's opening rule bars *growing*
+the table on speculation, and this is not one: the row was specified, reviewed
+and committed before a line of it was written, and it is exercised by
+`test/unit/test_svc.cpp` against RFC 8032's vectors. `Cursor` and `Style` also
+have no caller in the tree — see below — so a table entry nothing in `src/cmd/`
+names is a thing this ABI already contains. The first real call is `pkg`'s
+checked-index pipeline.
 
 `Chdir` sits at 25 rather than with the process family because it is the state
 `Open`, `Stat`, `List`, `MkDir`, `Remove` and `Touch` resolve *against* — it
@@ -851,8 +855,8 @@ widening `Stat` and `List`'s replies and taking op 24 for `Touch`, which pushed
 `Chdir` and `Dup` up one. Symbolic links moved it from 12 to 13, taking ops
 27 and 28 — the sparse numbering meant nothing had to move for once — adding a
 third value to `SYS_KIND_*` and an argument to `Stat`. `Rename` moved it from 13
-to 14, taking op 29 beside them. `Verify` and `Inflate` will move it to 15 and
-then 16, one commit each, when `/bin/pkg` calls them.) That operation used to
+to 14, taking op 29 beside them. `Verify` moved it from 14 to 15, taking op 57
+and adding no reply; `Inflate` will move it to 16.) That operation used to
 refuse a handle with
 `refs > 1`, meaning "nothing this process is inside a syscall on" — a second
 *descriptor* raises that count too, so every duplicated fd would have been
@@ -869,6 +873,15 @@ whichever bytes arrived last. A status of 0 means the signature is good;
 must not be read as either of the first two. Concept.md §6 is why the check is
 the host's: WebCrypto is a promise, so it is already this convention, and the
 host is inside the trusted base whatever it does.
+
+**Being one staged payload, it can check at most `SYS_STAGE_MAX`** less the key,
+the signature and the two length words. That is the ceiling on how large a
+signed file can be, and whoever fetches one caps it well below. The key must be
+32 bytes and the signature 64 — one algorithm and no negotiation
+(Package_Management.md §8) — so anything else is `Err(Invalid)` before the host
+is asked. `src/proc/io.h`'s `verify_sig` is the one place the wire's
+`-Error::Perm` becomes a `bool`, so no caller has to remember that a "no"
+arrived as an error.
 
 **There is no digest operation, and that is the interesting half.**
 `crypto.subtle.digest` takes a whole message, so a SHA-256 here would mean
