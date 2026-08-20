@@ -25,6 +25,54 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A digest that streams, and two decoders that refuse
+
+P6 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `sha256.cpp` is FIPS 180-4
+with an init/update/finish shape, `encode.cpp` is hex and base64 in both
+directions, and both are pure enough to compile straight into `tests.wasm`
+beside the shell's grammar — `braam_pkg` is not linked there, so a syscall in
+either would be a link error.
+
+**The digest streams because the host's cannot.** `crypto.subtle.digest` is
+one-shot: it takes a whole buffer and answers once. Asking the host for a
+package's hash would mean staging the package through `SYS_STAGE_MAX`, which
+caps a package at a megabyte and puts the whole of it across the ABI at the
+moment `pkg` is least sure of it — a body it has not yet checked. Concept.md §6
+already refused it on those grounds; what P6 adds is the shape that makes the
+refusal cheap. `update()` takes whatever came off the fetch descriptor, so
+P18's step 2 hashes and writes the same chunk and nothing accumulates.
+
+**The context is 112 bytes and says so in its header.** A `Sha256` in a
+coroutine frame is a fifth of the 512-byte budget a frame has before it costs a
+whole 64 KiB span, and the coroutine that wants one is the loop reading a body,
+which is exactly the long-lived frame. So the header says where it goes: the
+heap record the read already needs, not the frame.
+
+**The encoders write into the caller's buffer.** Every value `pkg` encodes has
+a size known before it starts — 32 bytes of digest, 32 of public key, 64 of
+signature — so `hex_size`/`base64_size` are `constexpr`, a caller declares an
+array of exactly that, and the module allocates nothing. Returning a `String`
+would have been shorter at each call site and would have put a failure that
+cannot happen (a heap that cannot find 44 bytes) on the path where a digest is
+compared.
+
+**Both decoders refuse rather than normalise, and the tail-bit rule is the
+point.** A base64 group that yields fewer than three bytes has bits no byte
+carries. A decoder that ignores them accepts `Zg==` and `Zh==` as the same
+byte — and Package_Format.md §2 matches a key's name by *recomputing* it, so
+two spellings of one name is two ways to be the key the anchor trusts. The
+check is one mask and it is the difference between a name and a label.
+Whitespace is not skipped and `=` is not tolerated anywhere but the end for the
+same reason: every relaxation is another spelling. Nothing partial comes back —
+a rejection is `None`, never a count with garbage behind it.
+
+**Hex is here although no format uses it.** Package_Format.md is base64
+throughout. Hex is what a person types when they pin a key by fingerprint
+(Package_Management.md §6), and what a test vector is written in — which is
+immediately its second job: `test_svc.cpp` had a private `unhex` for the RFC
+8032 vectors, and it is now the same decoder, under the same rule about two
+readers of one encoding that P10 states about the zip.
+
 ## `/bin/pkg`, which knows its own names and nothing else
 
 P5 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the first Phase C task.

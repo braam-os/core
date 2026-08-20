@@ -15,10 +15,12 @@ are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 **A finished task is deleted from this file, and the numbers do not move** —
 Release_Notes.md and the tasks below cite them. Phases A and B are gone that
 way: the decisions are in Concept.md, Package_Management.md and
-Package_Format.md, and the two host operations are in System_Calls.md. P5 went
-with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`, `braam_pkg` is
-the library its `main.cpp` links, and `pkg.cpp` holds the subcommand table each
-task below fills a row of. So this starts at P6.
+Package_Format.md, and the two host operations are in System_Calls.md. P5 and
+P6 went with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
+`braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
+table each task below fills a row of, and `sha256.cpp` and `encode.cpp` are the
+digest and the two encodings, compiled into `tests.wasm` as well. So this
+starts at P7.
 
 ## The shape being built
 
@@ -100,16 +102,6 @@ large crosses the ABI. That is P6.
 ---
 
 ## Phase C — pkg's own primitives, no network
-
-### P6. SHA-256, and the encodings
-
-`sha256.h`/`sha256.cpp`: an init/update/final API, so a body is hashed as it
-arrives rather than held whole. Plus hex and base64, encode and decode — the
-tree has neither, and `src/kernel/hash.h` is a HashMap, not a digest.
-
-Done when: the NIST vectors pass, including the multi-block and empty-input
-cases, and a digest computed in one update matches one computed a byte at a
-time.
 
 ### P7. Version comparison
 

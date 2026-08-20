@@ -25,6 +25,8 @@ void test_screen();
 void test_tty();
 void test_cond();
 void test_console();
+void test_encode();
+void test_sha256();
 void test_text();
 void test_procfs();
 void test_pane();
@@ -99,6 +101,8 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_match();
     test_cond();
     test_opt();
+    test_encode();
+    test_sha256(); // after encode: the vectors are compared as hex
     test_procfs();
 
     u32 failures = test_failures();

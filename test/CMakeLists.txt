@@ -6,6 +6,7 @@ add_executable(tests
     unit/test_cond.cpp
     unit/test_console.cpp
     unit/test_coroutine.cpp
+    unit/test_encode.cpp
     unit/test_fmt.cpp
     unit/test_hash.cpp
     unit/test_hostfs.cpp
@@ -20,6 +21,7 @@ add_executable(tests
     unit/test_result.cpp
     unit/test_sched.cpp
     unit/test_screen.cpp
+    unit/test_sha256.cpp
     unit/test_expand.cpp
     unit/test_str.cpp
     unit/test_tokenize.cpp
@@ -50,7 +52,12 @@ add_executable(tests
     # for the same reason: Args, Str and Result and nothing else. braam_proc is
     # not linked here.
     ../src/proc/opt.cpp
-    ../src/proc/time.cpp)
+    ../src/proc/time.cpp
+
+    # pkg's digest and its encodings, pure and allocation-free, so braam_pkg is
+    # not linked here either.
+    ../src/cmd/pkg/encode.cpp
+    ../src/cmd/pkg/sha256.cpp)
 
 target_link_libraries(tests PRIVATE
     braam_user braam_fs braam_svc braam_ui braam_core braam_flags)

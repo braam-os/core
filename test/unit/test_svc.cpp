@@ -1,3 +1,4 @@
+#include "cmd/pkg/encode.h"
 #include "harness.h"
 #include "kernel/alloc.h"
 #include "kernel/hostcall.h"
@@ -125,15 +126,11 @@ constexpr Str T2_SIG = "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223
 u8 t1_key[32], t1_sig[64];
 u8 t2_key[32], t2_sig[64];
 
-usize unhex(Str hex, u8 *out, usize cap)
+// pkg's decoder rather than a second one here.
+usize unhex(Str hex, Span<u8> out)
 {
-    usize n = 0;
-    for (usize i = 0; i + 1 < hex.size() && n < cap; i += 2) {
-        u8 hi = u8(hex[i] <= '9' ? hex[i] - '0' : (hex[i] | 32) - 'a' + 10);
-        u8 lo = u8(hex[i + 1] <= '9' ? hex[i + 1] - '0' : (hex[i + 1] | 32) - 'a' + 10);
-        out[n++] = u8(hi << 4 | lo);
-    }
-    return n;
+    Option<usize> n = hex_decode(hex, out);
+    return n ? n.value() : 0;
 }
 
 Str raw(const u8 *p, usize n) { return Str(reinterpret_cast<const char *>(p), n); }
@@ -274,10 +271,10 @@ void test_svc()
     // Ed25519. A good signature is Ok, a bad one Err(Perm) — an answer, not a
     // fault — and a browser with no algorithm is Err(Unsupported), which must
     // never look like either.
-    CHECK_EQ(unhex(T1_KEY, t1_key, sizeof(t1_key)), sizeof(t1_key));
-    CHECK_EQ(unhex(T1_SIG, t1_sig, sizeof(t1_sig)), sizeof(t1_sig));
-    CHECK_EQ(unhex(T2_KEY, t2_key, sizeof(t2_key)), sizeof(t2_key));
-    CHECK_EQ(unhex(T2_SIG, t2_sig, sizeof(t2_sig)), sizeof(t2_sig));
+    CHECK_EQ(unhex(T1_KEY, Span<u8>(t1_key)), sizeof(t1_key));
+    CHECK_EQ(unhex(T1_SIG, Span<u8>(t1_sig)), sizeof(t1_sig));
+    CHECK_EQ(unhex(T2_KEY, Span<u8>(t2_key)), sizeof(t2_key));
+    CHECK_EQ(unhex(T2_SIG, Span<u8>(t2_sig)), sizeof(t2_sig));
 
     Str t1_key_s = raw(t1_key, sizeof(t1_key));
     Str t1_sig_s = raw(t1_sig, sizeof(t1_sig));
