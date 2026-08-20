@@ -76,6 +76,7 @@ Programs in /bin
   mv        [-fi] <src>... <dst> — move or rename files
   pbcopy    [<file>...] — put the input on the clipboard
   pbpaste   write the clipboard to the output
+  pkg       <command> [<arg>...] — install and remove packages
   ps        list the tasks the kernel is running, and which are processes
   pwd       print the working directory
   rm        [-r] <path>... — remove files, or directories with -r

@@ -619,8 +619,9 @@ directory on `PATH`. The design is in
 packages is materialised as a directory of symbolic links into `/pkg/store/`,
 `/pkg/bin` names the live one, and the default search list becomes
 `/bin:/pkg/bin` with `/bin` first, so nothing installed can shadow the system.
-**Unbuilt**: `/bin/pkg` does not exist and the constant is still `/bin`. What is
-settled is that the kernel gains nothing when it does. The alternative was a
+**Unbuilt**: `/bin/pkg` is a skeleton that knows its own subcommand names and
+nothing else, and the constant is still `/bin`. What is settled is that the
+kernel gains nothing when it does. The alternative was a
 clause in `exec_resolve` after the `PATH` search, reading `/pkg`'s own record of
 which generation is active and which command it names — two file formats the
 kernel would have to learn, two reads on every failed lookup, and four ways of
@@ -1373,7 +1374,9 @@ src/kernel/hostcall.h   the asynchronous host request, shared by both interfaces
 src/kernel/jsref.h      the externref table and JsRef (§3.7)
 src/kernel/sysabi.h     the kernel↔process wire, included by both sides (§4.3)
 src/proc/               a process binary's whole runtime: _start, syscalls, stdio
-src/cmd/                one file per program; every program is a binary of its own
+src/cmd/                one file per program, bar the two below; every program is a binary
+src/cmd/pkg/            the package manager (Package_Management.md), and the main.cpp that
+                        makes it a binary like any other
 src/cmd/sh/             the shell (§4.5): grammar, word expander, pattern matcher, condition
                         evaluator, variables, LineEditor, job runtime, builtins, and the
                         main.cpp that makes them a binary like any other

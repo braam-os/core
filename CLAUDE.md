@@ -35,8 +35,8 @@ exports, and the three passing CTest cases.
   **[doc/Package_Management.md](doc/Package_Management.md)** the policy a
   package manager must satisfy, with
   **[doc/Package_Format.md](doc/Package_Format.md)** the grammars written to
-  satisfy it (`/bin/pkg` does not exist yet; its plan is
-  [src/cmd/pkg/TODO.md](src/cmd/pkg/TODO.md)).
+  satisfy it (`/bin/pkg` is a skeleton — a subcommand table and nothing behind
+  it; the rest is [src/cmd/pkg/TODO.md](src/cmd/pkg/TODO.md)).
 
 ## Build
 
@@ -281,7 +281,7 @@ argue in Concept.md first.
   operations); `src/ui/` (layout over a `Grid`: `Pane`, `TextBuf`, `TextView`);
   `src/user/` (exec and the syscall dispatcher, console, pipes, `ProcFs`, boot
   and init); `src/proc/` (a process binary's runtime); `src/cmd/` (one file per
-  program) and `src/cmd/sh/`.
+  program, bar `src/cmd/pkg/` and `src/cmd/sh/`).
 - `braam_fs` and `braam_svc` are siblings above the kernel and below userland:
   no upward dependency and none on each other; anything needing the scheduler or
   the screen belongs in `src/user/` (hence `ProcFs`). **`braam_sh` links

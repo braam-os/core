@@ -1304,6 +1304,35 @@ if (mode === "--kernel") {
     if (!rows(s).includes(prompt(2)))
         fail(`uname -z left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
 
+    // /bin/pkg is a skeleton: it knows its subcommand names and nothing else
+    // (src/cmd/pkg/TODO.md). A bare `pkg` is a usage error and 2; a name no
+    // table row carries is the same; a row whose command is unbuilt says so and
+    // reports 1, which is what tells the two apart.
+    s = submit("clear", 1184.7);
+    s = submit("pkg", 1184.71);
+    if (!rows(s).some((line) => line.startsWith("usage: pkg ")))
+        fail(`pkg printed ${JSON.stringify(rows(s))}, expected a usage line`);
+    // The names come off the table rather than a second list beside it. The
+    // line is wider than this grid, so it is the start of it that is asserted.
+    if (!rows(s).some((line) => line.startsWith("commands: autoremove ")))
+        fail(`pkg's usage named no commands: ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes(prompt(2)))
+        fail(`pkg left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
+
+    s = submit("clear", 1184.72);
+    s = submit("pkg nonesuch", 1184.73);
+    if (!rows(s).includes("pkg: unknown command: nonesuch"))
+        fail(`pkg nonesuch printed ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes(prompt(2)))
+        fail(`pkg nonesuch left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
+
+    s = submit("clear", 1184.74);
+    s = submit("pkg install braam", 1184.75);
+    if (!rows(s).includes("pkg: install is not built yet"))
+        fail(`pkg install printed ${JSON.stringify(rows(s))}`);
+    if (!rows(s).includes(prompt(1)))
+        fail(`pkg install left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
+
     // /proc/tasks is every task in one open, so no two rows describe different
     // moments, and `ps` reformats it the way `df` reformats /proc/mounts. Both
     // are wider than this grid, so it goes wide the way it does for help.
@@ -3109,9 +3138,11 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 16,014 bytes is thirty-one chunks against eight
+    // The many-writes case: 16,209 bytes is thirty-two chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "309 2538 16014");
+    // The counts are three copies of /share/help, so a line added there moves
+    // them.
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "312 2562 16209");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

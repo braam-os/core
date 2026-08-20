@@ -15,8 +15,10 @@ are in `src/cmd/tmp/apk-tools/` (gitignored scratch, not part of the tree).
 **A finished task is deleted from this file, and the numbers do not move** —
 Release_Notes.md and the tasks below cite them. Phases A and B are gone that
 way: the decisions are in Concept.md, Package_Management.md and
-Package_Format.md, and the two host operations are in System_Calls.md. So this
-starts at P5.
+Package_Format.md, and the two host operations are in System_Calls.md. P5 went
+with them: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`, `braam_pkg` is
+the library its `main.cpp` links, and `pkg.cpp` holds the subcommand table each
+task below fills a row of. So this starts at P6.
 
 ## The shape being built
 
@@ -98,24 +100,6 @@ large crosses the ABI. That is P6.
 ---
 
 ## Phase C — pkg's own primitives, no network
-
-### P5. Skeleton
-
-`src/cmd/pkg/` on the shell's pattern — it is the only other program with a
-directory: a `CMakeLists.txt` building a `braam_pkg` static library, and a
-`main.cpp` holding `proc_main` that stays out of the library.
-
-Touches: `src/cmd/pkg/CMakeLists.txt`, `src/cmd/pkg/main.cpp`,
-`src/cmd/CMakeLists.txt` (`add_subdirectory(pkg)`, `pkg` in `BRAAM_BIN_LIST`,
-`BRAAM_BIN_LIB_pkg`, `BRAAM_BIN_SRC_pkg`), `rootfs/share/help`, the help list
-in `test/run.mjs`.
-
-Nothing else in the test harness needs touching: the per-binary import
-assertion is a loop over the binaries CMake hands it.
-
-Done when: `pkg` with no subcommand prints usage and exits 2, and `make run`
-passes — which is the smoke test asserting that `pkg` imports nothing but the
-process ABI.
 
 ### P6. SHA-256, and the encodings
 

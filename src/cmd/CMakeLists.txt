@@ -2,12 +2,13 @@
 # itself is cmake/BraamProgram.cmake, which the SDK installs — so a program built
 # out of tree is built the way these are.
 
-# The shell is the one program with a directory of its own, and the library it
-# builds is linked below like any other.
+# Two programs have a directory of their own, and the library each builds is
+# linked below like any other.
+add_subdirectory(pkg)
 add_subdirectory(sh)
 
 set(BRAAM_BIN_LIST cat chat clear curl date df echo edit env false fexport fimport grep head hog
-                   less ln ls mkdir mount mv pbcopy pbpaste ps pwd rm sh sleep spin tail
+                   less ln ls mkdir mount mv pbcopy pbpaste pkg ps pwd rm sh sleep spin tail
                    test timeout touch true uname vmstat watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 
@@ -15,8 +16,10 @@ set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 # nothing to ask for: it is what a program is (Concept.md §4).
 
 # A program that is more than one translation unit names the library that holds
-# the rest of it, and where its own source is when that is not <name>.cpp. Only
-# the shell is either.
+# the rest of it, and where its own source is when that is not <name>.cpp.
+set(BRAAM_BIN_LIB_pkg braam_pkg)
+set(BRAAM_BIN_SRC_pkg pkg/main.cpp)
+
 set(BRAAM_BIN_LIB_sh braam_sh)
 set(BRAAM_BIN_SRC_sh sh/main.cpp)
 

@@ -25,6 +25,53 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## `/bin/pkg`, which knows its own names and nothing else
+
+P5 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the first Phase C task.
+`pkg` is a binary in the archive, `src/cmd/pkg/` is a directory beside
+`src/cmd/sh/`, and `braam_pkg` is a static library the binary links with
+`main.cpp` outside it. It carries a table of its eleven subcommand names and a
+dispatch over it. Nothing behind any of them: no network, no digest, no `/pkg`
+tree, and the default `PATH` is still `/bin`.
+
+**A directory before there is anything to put in it.** Every other program in
+`src/cmd/` is one translation unit, and the shell earned its directory by being
+a grammar, an expander, a line editor and twenty-six builtins. `pkg` has none of
+that yet, so the shape is being chosen ahead of the code rather than discovered
+by it — which is the point. What P6 to P28 add is a digest, a version grammar,
+a stanza reader, a zip reader, a signature pipeline and a solver, each with a
+test of its own, and every one of them wants to be a translation unit that
+`main.cpp` does not see. Starting one-file and splitting later would have meant one commit
+that moves everything and no test able to name a piece before then. The library
+also settles what `pkg` may reach: it links `braam_proc`, so nothing in it can
+touch a kernel header that pulls in the scheduler, the same fence `braam_sh`
+lives behind.
+
+**The table is explicit and carries no prose.** Explicit for
+`builtin/table.cpp`'s reason — `--gc-sections` never extracts an unreferenced
+archive member, so anything self-registering would be dropped without a word.
+No prose for the other of that file's reasons: what a command is *for* belongs
+in `/share/help`, and a description compiled into the binary is a second copy to
+go stale. The usage text's list of command names is generated from the table for
+the same reason, so a row added by P15 cannot drift from what `pkg` prints.
+
+**An unbuilt command answers 1, an unknown one answers 2.** Both could have been
+a usage error, and collapsing them would have been simpler by a branch. They are
+kept apart because they are different facts: `pkg nonesuch` is a typo and the
+usage line is the useful reply, while `pkg install` is a correctly spelled
+command this build does not have yet, which is not a usage error and printing
+usage for it would say the word was wrong. It also gives `test/run.mjs` a way to
+assert that the table is real rather than that the binary refuses everything —
+`pkg install braam` reporting 1 and `pkg nonesuch` reporting 2 is the whole
+difference between a dispatch and a stub. Each later task turns one null into a
+function and the exit code changes with it.
+
+**`/share/help` describes what `pkg` will do, not what it does.** The line is
+`install and remove packages`, phrased for the finished command, because the
+smoke test requires every shipped binary to be named there exactly once and a
+line that has to be rewritten as the commands land is a line that will be
+forgotten. What the build actually has is what `pkg` itself says when run.
+
 ## A decompressor that hands back a stream, not a buffer
 
 `Sys::Inflate` is op 58 and `SvcOp::Inflate` is 20; `PROC_ABI` moves to 16. Raw
