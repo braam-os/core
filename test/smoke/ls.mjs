@@ -16,17 +16,21 @@ export function check() {
         if (!rows(s).some((line) => line.startsWith("braam —")))
             fail(`/etc/motd did not read back: ${JSON.stringify(rows(s))}`);
         s = submit("clear", 1185);
-        // Three names, and the grid is stdout, so they share a row; /etc/pkg
-        // is the anchor's directory and is marked as one.
+        // Five names and no directory among them, in columns down the grid
+        // rather than across it. version is the boot unpack's stamp.
         s = submit("ls /etc", 1186);
-        if (output(s).join("|") !== "help  motd  pkg/")
+        const etc = output(s).join(" ").split(/ +/).filter(Boolean).sort();
+        if (etc.join("|") !== "anchor|help|motd|repositories|version")
             fail(`/etc did not list its files: ${JSON.stringify(output(s))}`);
         // The README is at the root, where somebody arriving will see it. Not
         // the whole row: what else is at the top level moves with boot.cpp.
+        // The root is where a directory is still marked as one.
         s = submit("clear", 1186.1);
         s = submit("ls /", 1186.2);
         if (!words(s).includes("README"))
             fail(`/ did not list the README: ${JSON.stringify(output(s))}`);
+        if (!words(s).includes("etc/"))
+            fail(`/ did not mark etc as a directory: ${JSON.stringify(output(s))}`);
     }
 
     // The layout itself, on a fixture the suite owns: /bin re-breaks whenever a

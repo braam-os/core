@@ -51,7 +51,7 @@ export function check() {
     // declining leaves what is there — including the binaries the shell that
     // is about to run comes out of.
     if (hasRootfs) {
-        store.files.set("/version", new TextEncoder().encode("0.0.1-stale"));
+        store.files.set("/etc/version", new TextEncoder().encode("0.0.1-stale"));
         store.files.set("/bin/keepme", new Uint8Array(1));
         // What pkg installed is under /pkg, which the archive does not carry,
         // so a release replaces the system and leaves it standing.

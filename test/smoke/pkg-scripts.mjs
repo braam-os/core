@@ -13,7 +13,7 @@ export function check() {
     // P24. §5.1's scripts, which `noisy` carries all six of and nothing
     // else in the repository carries any of. Its own indexes, so the
     // assertions above are not disturbed by a package that makes noise.
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     net.routes.set(RURL + "/index",
                    { status: 200, headers: "content-type: text/plain\n",
                      body: repo("index3") });
@@ -86,7 +86,7 @@ export function check() {
                      body: repo("index") });
     submit("rm -r /pkg", at());
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     serve("libz-1.0-r0", good);
     serve("hello-1.0-r0", archive("hello-1.0-r0"));
     prints("pkg update", `${RURL}|index 1, 2 packages`);
@@ -103,7 +103,7 @@ export function check() {
     // disturbed by a package that exists to watch.
     submit("rm -r /pkg", at());
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     net.routes.set(RURL + "/index",
                    { status: 200, headers: "content-type: text/plain\n",
                      body: repo("index5") });

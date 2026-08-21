@@ -31,8 +31,8 @@ Task<Result<u32>> storage_unpack(Str version)
     // One round trip however long it takes: the host fetches the archive,
     // reads it and writes every file, and the kernel never sees the bytes.
     // `version` rides in the slot a path would use — it is what the host
-    // stamps /version with, so the stamp cannot disagree with the kernel that
-    // asked for it.
+    // stamps /etc/version with, so the stamp cannot disagree with the kernel
+    // that asked for it.
     FsCall c(FsOp::Unpack, version, 0);
     if (!c.ok())
         co_return Err(Error::NoMemory);

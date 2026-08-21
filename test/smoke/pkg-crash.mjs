@@ -17,7 +17,7 @@ export function check() {
     // index 1 again.
     submit("rm -r /pkg", at());
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     serve("libz-1.0-r0", good);
     serve("hello-1.0-r0", archive("hello-1.0-r0"));
     prints("pkg update", `${RURL}|index 1, 2 packages`);
@@ -46,7 +46,7 @@ export function check() {
     // since this one is left mid-transaction on purpose.
     submit("rm -r /pkg", at());
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     prints("pkg update", `${RURL}|index 1, 2 packages`);
 
     store.stall = (op, path) => op === OP.RENAME && path === "/pkg/active.new";
@@ -109,8 +109,8 @@ export function check() {
     submit("ln -s /pkg/gen/1 /pkg/active", at());
     prints("hi", "hi from hello");
 
-    // Put the release's anchor back and leave no /pkg, so what follows
-    // starts where it did.
+    // Put the release's /etc back and leave no /pkg, so what follows starts
+    // where it did.
     restore();
     net.routes.delete(RURL + "/index");
     net.routes.delete(`${RURL}/libz-1.0-r0.zip`);

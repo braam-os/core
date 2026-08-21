@@ -13,8 +13,8 @@
 namespace {
 
 constexpr Str USAGE = "Usage: pkg update\n";
-constexpr Str NONE  = "pkg: no repositories; put one URL in /pkg/repositories\n";
-constexpr Str MANY  = "pkg: /pkg/repositories: one repository, for now\n";
+constexpr Str NONE  = "pkg: no repositories; put one URL in /etc/repositories\n";
+constexpr Str MANY  = "pkg: /etc/repositories: one repository, for now\n";
 
 Task<Result<void>> put(u32 fd, Str text)
 {
@@ -55,17 +55,17 @@ Task<i32> pkg_update(Args args)
     }
 
     Result<String> text = Err(Error::NoMemory);
-    if (Task<Result<String>> t = store_slurp(PKG_REPOS))
+    if (Task<Result<String>> t = store_slurp(REPOS_PATH))
         text = co_await t;
     if (text.is_err()) {
-        if (Task<void> e = errln("pkg", PKG_REPOS, text.error()))
+        if (Task<void> e = errln("pkg", REPOS_PATH, text.error()))
             co_await e;
         co_return 1;
     }
 
     Vec<Str> repos;
     if (!repos_read(text.value().str(), repos)) {
-        if (Task<void> e = errln("pkg", PKG_REPOS, Error::NoMemory))
+        if (Task<void> e = errln("pkg", REPOS_PATH, Error::NoMemory))
             co_await e;
         co_return 1;
     }

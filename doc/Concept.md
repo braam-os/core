@@ -1127,14 +1127,16 @@ held, `read`/`write`/`getSize`/`truncate`/`flush` return immediately: those are
 plain value-returning imports, the second sanctioned exception to §2.2.
 
 **The store is unpacked from `rootfs.zip`, and stamped.** An empty store is
-filled at boot without asking; after that `/version` holds the `BRAAM_VERSION`
-of the kernel that wrote it, and boot compares it against its own. A mismatch is
-the user's decision — the prompt is on the grid before the shell, since a stale
-`/bin` may be exactly what they want kept — and declining boots on what is
-stored. The unpack replaces the top-level directories the archive carries, `bin`
-and `etc`, and never names any other, so `/home` and `/pkg` cannot be lost to
-one. The stamp is written last, so an interrupted unpack is done again rather
-than believed.
+filled at boot without asking; after that `/etc/version` holds the
+`BRAAM_VERSION` of the kernel that wrote it, and boot compares it against its
+own. A mismatch is the user's decision — the prompt is on the grid before the
+shell, since a stale `/bin` may be exactly what they want kept — and declining
+boots on what is stored. The unpack replaces the top-level directories the
+archive carries, `bin` and `etc`, and never names any other, so `/home` and
+`/pkg` cannot be lost to one. The stamp is inside `etc` and written last, so an
+interrupted unpack leaves none at all — and an absent stamp is an empty store,
+which is unpacked without asking. A half-written image is therefore finished
+rather than offered.
 
 That is also what a writable `/bin` is held up by. `rm /bin/sh` is reachable
 from the prompt and the stamp would still match, so `no_shell` offers the unpack

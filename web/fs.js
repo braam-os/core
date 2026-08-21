@@ -120,8 +120,9 @@ function parts(path) {
 }
 
 // Where the unpacked archive's version is left, for boot to compare against
-// the kernel's own (src/user/boot.cpp).
-export const VERSION_PATH = "/version";
+// the kernel's own (src/user/boot.cpp). The unpack replaces it with the rest
+// of /etc.
+export const VERSION_PATH = "/etc/version";
 
 const u16 = (b, at) => b[at] | (b[at + 1] << 8);
 const u32 = (b, at) => (u16(b, at) | (u16(b, at + 2) << 16)) >>> 0;
@@ -230,8 +231,11 @@ export function *installOps(entries, version) {
         yield { op: "write", path: "/" + e.name, bytes: e.bytes };
     }
 
-    // Last, so an interrupted unpack leaves a stamp that does not match and is
-    // therefore done again rather than believed.
+    // Last, so an interrupted unpack leaves no stamp and is done again rather
+    // than believed. Its directory is named here rather than assumed.
+    const stampDir = VERSION_PATH.slice(0, VERSION_PATH.lastIndexOf("/"));
+    if (stampDir && !made.has(stampDir))
+        yield { op: "mkdir", path: stampDir };
     yield { op: "write", path: VERSION_PATH, bytes: new TextEncoder().encode(version) };
 }
 

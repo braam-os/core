@@ -75,7 +75,7 @@ const CASES = [
     ["pkg-verify",  pkgVerify.check,  ARCHIVE],
     ["pkg-clean",   pkgClean.check,   ARCHIVE], // after upgrade: the generations it collects
     ["pkg-scripts", pkgScripts.check, ARCHIVE],
-    ["pkg-crash",   pkgCrash.check,   ARCHIVE], // last: puts the shipped anchor back, drops /pkg
+    ["pkg-crash",   pkgCrash.check,   ARCHIVE], // last: puts the shipped /etc back, drops /pkg
     ["procfs",     procfs.check],
     ["interrupt",  interrupt.check],
     ["persist",    persist.check],    // reloads the kernel and resets the store

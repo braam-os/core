@@ -11,7 +11,7 @@ export function check() {
     // several generations to have anything to choose between, so the tree
     // is built up rather than planted.
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     net.routes.set(RURL + "/index",
                    { status: 200, headers: "content-type: text/plain\n", body: repo("index") });
     serve("libz-1.0-r0", good);

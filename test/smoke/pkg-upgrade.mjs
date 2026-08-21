@@ -14,7 +14,7 @@ export function check() {
     prints("pkg upgrade", "pkg: no index; run pkg update", 1);
 
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     serve("libz-1.0-r0", good);
     serve("hello-1.0-r0", archive("hello-1.0-r0"));
     serve("hello-1.1-r0", archive("hello-1.1-r0"));

@@ -17,17 +17,19 @@ export function check() {
     // puts it back.
     keep();
 
-    // Nothing to update from: /pkg does not exist, and a file that is not
-    // there reads as an empty one (Package_Format.md §8.2).
+    // Nothing to update from: /pkg does not exist, and the release's own
+    // /etc/repositories is emptied first, since a file that is not there and
+    // one with nothing in it read alike (Package_Format.md §8.2).
+    plant("/etc/repositories", "");
     s = update();
     if (!rows(s).some((line) => line.startsWith("pkg: no repositories")))
         fail(`pkg update with no repositories printed ${JSON.stringify(output(s))}`);
     if (!rows(s).includes(prompt(1)))
         fail(`pkg update with no repositories left ${row(s, s.cursor_y)}`);
 
-    plant("/etc/pkg/anchor", fixture("anchor"));
+    plant("/etc/anchor", fixture("anchor"));
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", REPO + "\n");
+    plant("/etc/repositories", REPO + "\n");
 
     // P16's three read what an update left, and there has been none.
     submit("clear", at());
@@ -61,16 +63,16 @@ export function check() {
     // own H:root or it is not an anchor (§4). anchor.data is a key set of
     // its own, so these refuse before anything is fetched.
     route(fixture("good"));
-    plant("/etc/pkg/anchor", anchors("repeat"));
+    plant("/etc/anchor", anchors("repeat"));
     refuses("an anchor meeting its threshold with one key twice", "pkg: anchor:");
-    plant("/etc/pkg/anchor", anchors("short"));
+    plant("/etc/anchor", anchors("short"));
     refuses("an anchor one signature short", "pkg: anchor:");
     // The control the pair needs: three signatures, one of them a
     // stranger's and two of them counting. The anchor is taken, and the
     // refusal moves on to the index it does not vouch for.
-    plant("/etc/pkg/anchor", anchors("extra"));
+    plant("/etc/anchor", anchors("extra"));
     refuses("an index under an anchor that holds no key of its", "pkg: signature:");
-    plant("/etc/pkg/anchor", fixture("anchor"));
+    plant("/etc/anchor", fixture("anchor"));
 
     if (store.files.has("/pkg/index"))
         fail("a refused update recorded an index anyway");
@@ -179,9 +181,9 @@ export function check() {
 
     // One repository, for now: /pkg/index is one file and the floor is one
     // number, so a second line is refused rather than ignored.
-    plant("/pkg/repositories", REPO + "\n" + REPO + "\n");
+    plant("/etc/repositories", REPO + "\n" + REPO + "\n");
     s = update();
-    if (!rows(s).some((line) => line.startsWith("pkg: /pkg/repositories:")))
+    if (!rows(s).some((line) => line.startsWith("pkg: /etc/repositories:")))
         fail(`a second repository printed ${JSON.stringify(output(s))}`);
     if (!rows(s).includes(prompt(1)))
         fail(`a second repository left ${row(s, s.cursor_y)}`);

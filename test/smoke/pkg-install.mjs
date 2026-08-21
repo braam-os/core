@@ -18,9 +18,9 @@ export function check() {
 
     submit("rm -r /pkg", at());
     net.routes.delete(IDX);
-    plant("/etc/pkg/anchor", repo("anchor"));
+    plant("/etc/anchor", repo("anchor"));
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     net.routes.set(RURL + "/index",
                    { status: 200, headers: "content-type: text/plain\n", body: repo("index") });
     serve("libz-1.0-r0", archive("libz-1.0-r0"));

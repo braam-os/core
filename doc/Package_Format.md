@@ -178,9 +178,8 @@ so a field naming one could only be a second place to be wrong.
 
 ## 4. The anchor
 
-`/etc/pkg/anchor`, shipped in `rootfs.zip` and re-pinned from it at every
-version change (Package_Management.md §6). Signature block, empty line, one
-stanza.
+`/etc/anchor`, shipped in `rootfs.zip` and re-pinned from it at every version
+change (Package_Management.md §6). Signature block, empty line, one stanza.
 
 ```
 Y:ed25519 <keyid> <signature>
@@ -458,10 +457,12 @@ digit{.digit}...{letter}{_suf{#}}...{~hash}{-r#}
 
 ## 8. The local state
 
-Under `/pkg`, which the archive does not carry (Concept.md §5.1).
+Under `/pkg`, which the archive does not carry (Concept.md §5.1) — bar the
+one line of configuration, which sits with the anchor in `/etc` and is
+re-pinned by a release like it (Package_Management.md §6).
 
 ```
-/pkg/repositories                one URL per line; today, one line
+/etc/repositories                one URL per line; today, one line
 /pkg/index                       the last checked index, signature and all
 /pkg/store/<name>-<version>/     unpacked, checked, immutable once written
 /pkg/db/<name>-<version>         what was installed, and what vouched for it
@@ -524,7 +525,7 @@ less 1.6-r1
 ```
 
 `/pkg/world` is one dependency (§6) per line: what the user asked for, as
-distinct from what was pulled in to satisfy it. `/pkg/repositories` is one URL
+distinct from what was pulled in to satisfy it. `/etc/repositories` is one URL
 per line — and **`pkg` refuses a second line rather than ignoring it**, since
 `/pkg/index` is one file and Package_Management.md §7 step 5's floor is one
 number, so a second repository would be checked against the first's `G`. A
@@ -532,8 +533,9 @@ trailing slash is stripped, `<N>/index` being `//index` otherwise.
 
 In all three a blank line is skipped and a last line without a newline is still
 a line; **a file that is not there reads as an empty one**, so a `/pkg` that has
-never been written to needs no seeding. Nothing else is a comment: a `#` line
-would be a URL nobody could name.
+never been written to needs no seeding, and emptying `/etc/repositories` is how
+a system is pointed at nothing. Nothing else is a comment: a `#` line would be a
+URL nobody could name.
 
 ### 8.3 Committing a generation
 
@@ -643,7 +645,8 @@ python3 -c 'import datetime as d; print(int(d.datetime(2029,1,1,
     tzinfo=d.timezone.utc).timestamp()) * 1000)'
 ```
 
-Copy the result to `rootfs/etc/pkg/anchor` and rebuild. Then put `root1.key`,
+Copy the result to `rootfs/etc/anchor`, put your repository's URL in
+`rootfs/etc/repositories` beside it, and rebuild. Then put `root1.key`,
 `root2.key` and `root3.key` back where they came from; publishing does not need
 them again until you rotate a key or the anchor's expiry comes round, and each
 new anchor carries a higher `--version` than the last.
@@ -703,7 +706,7 @@ Upload `index` and the zips together — nothing serves an index whose packages
 are not beside it. On the client:
 
 ```
-echo https://packages.example/braam > /pkg/repositories
+echo https://packages.example/braam > /etc/repositories
 pkg update
 pkg install hello
 ```

@@ -31,7 +31,7 @@ disk on its own:
 pkg installs programs that did not ship with the system. It reads a signed
 index, checks every package against it, and unpacks into /pkg. /pkg/bin comes
 after /bin on PATH, so nothing installed can shadow a system command. A URL
-of public repo should be put in /pkg/repositories.
+of public repo should be put in /etc/repositories.
 
 help pages every command, and q quits it. uname -a says what this is and what
 it is running on, and df shows how much room the browser gave it. ps lists

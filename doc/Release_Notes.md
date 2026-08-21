@@ -25,6 +25,73 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Three files that were living in the wrong place
+
+`/version` is now `/etc/version`, `/etc/pkg/anchor` is `/etc/anchor`, and
+`/pkg/repositories` is `/etc/repositories`. The previous commit argued that
+`/etc` is where this system's shipped configuration goes; these three were left
+outside it, each for a different bad reason, and moving them makes `/` one name
+shorter, `/etc` a flat directory of five files, and `/pkg` entirely
+machine-owned.
+
+**The stamp was at the root because nothing else was there yet.** `/version` is
+one line the host writes at the end of an unpack and boot reads before the
+shell. It is not something a user opens, and the root is the first thing anyone
+types `ls` on. Two characters of a top-level namespace is a high price for a
+file that exists to be compared against a constant.
+
+**Moving it changes what an interrupted unpack leaves behind, for the better.**
+`installOps` removes each top-level directory the archive carries before
+rewriting it, and writes the stamp last. At the root, the stamp was outside
+everything the unpack touched, so an unpack that died halfway left the *old*
+version string standing over a half-written `/bin` — and the next boot read a
+mismatch, printed `the stored image is X and this kernel is Y`, and offered a
+choice. Declining kept an image that was not any version at all. Inside `/etc`
+the stamp is removed with everything else and rewritten only if the unpack
+finishes, so a half-written image leaves no stamp, and `unpack_if_stale` reads
+an absent stamp as an empty store and finishes the job without asking. The
+prompt now appears only where it means something: a complete image of a
+different version. This was a consequence of the move rather than its motive,
+and it is the sort of thing worth noticing before shipping rather than after.
+
+**`/etc/pkg/` was a directory holding one file.** The anchor is the only thing
+that was ever going to be in it. The extra component was there because the path
+was written when `pkg` looked like it would bring several files with it, and it
+did — but they went to `/pkg`, where the state belongs, and the one file left
+behind kept a directory to itself. `/etc/anchor` says the same thing in four
+fewer characters and one fewer `ls`.
+
+**The repository list was in the store because that is where `pkg` writes.**
+`/pkg` is deliberately the directory the archive does not carry, so that an
+installed program survives a release (Package_Management.md §11). That argument
+is about `pkg`'s *record* — the store, the database, the generations — which
+can only be rebuilt by reinstalling and re-checking. It was never an argument
+about the one line naming where to fetch from. That line is configuration: a
+human types it, nothing accumulates in it, and it sits beside the anchor it is
+checked against.
+
+**So the URL is now re-pinned by a release, and that is the point rather than
+the cost.** `/etc` is replaced wholesale at every version change, which is the
+property §6 relies on for the anchor: it cannot be poisoned in the store for
+good. The repository URL and the keys that vouch for its index are two halves
+of one decision, and having a release restore one but not the other was the odd
+arrangement. A user who points the system somewhere else has made an edit a
+version change undoes — the same bargain as a locally trusted key, and §11
+already documents it. What is gained is that `rootfs/etc/repositories` ships a
+working URL, so `pkg update` needs no seeding on a fresh store, and a publisher
+building their own braam sets it in the same step as the anchor.
+
+**The tests moved with the paths, and two numbers moved with them.**
+`test/unit/test_zip.cpp` compares the archive entry for entry against
+`web/fs.js`'s reading of the same bytes and asserts the count: 44 became 45,
+because `etc/repositories` is a new entry. `test/smoke/subst.mjs` asserts what
+`wc` prints over three copies of `/etc/help`, so editing that document moved
+`25548` to `25884` — the same hostage the previous commit collected, and the
+comment beside it still says so. `ls /etc` stopped fitting on one row: five
+names in columns down the grid rather than three across it, so the case now
+compares a sorted set of names instead of an exact row, and the check that a
+directory prints a trailing slash moved to `ls /`, which still has some.
+
 ## The directory was never shared with anybody
 
 `/share` is now `/etc`. It is one of the two top-level directories `rootfs.zip`

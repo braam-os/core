@@ -47,9 +47,9 @@ export function check() {
             fail("the unpack did not install /bin/sh");
         if (!store.dirs.has("/tmp") || !store.dirs.has("/import"))
             fail("boot did not make the directories the archive does not carry");
-        const stamp = new TextDecoder().decode(store.files.get("/version") || new Uint8Array(0));
+        const stamp = new TextDecoder().decode(store.files.get("/etc/version") || new Uint8Array(0));
         if (!/^\d+\.\d+\.\d+/.test(stamp))
-            fail(`/version reads ${JSON.stringify(stamp)}, expected a version`);
+            fail(`/etc/version reads ${JSON.stringify(stamp)}, expected a version`);
     }
 
     // init prints /etc/motd before the shell, in green, and the prompt sets

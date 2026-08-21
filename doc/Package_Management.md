@@ -150,8 +150,8 @@ tree, packed by `tools/pack.py`, served from the same origin as `kernel.wasm`
 over the same TLS, and unpacked into the store at boot by the code that installs
 `/bin`.
 
-It goes in **`/etc/pkg/`**. `/etc` is already a top-level directory the archive
-carries, so Concept.md §5.1's mount layering does not change.
+It goes in **`/etc/anchor`**. `/etc` is already a top-level directory the
+archive carries, so Concept.md §5.1's mount layering does not change.
 
 That gives us something useful for free. The unpack in `web/fs.js` **deletes
 each top-level directory the archive carries before rewriting it**, so `/etc` is
@@ -165,8 +165,14 @@ recovers from* — covers the trust anchor too. This is also what makes §10's
 worst case survivable: replacing the anchor out of band means cutting a release,
 and we already cut releases.
 
-The cost of the same behaviour is in §11: a key trusted *locally* under
-`/etc/pkg/` is wiped by the same unpack.
+`/etc/repositories` beside it is the same bargain. The list of URLs an update
+reads is configuration a release ships and a release puts back, not state a
+package manager accumulates — so it sits with the anchor rather than in
+`/pkg`, and pointing the system somewhere else is an edit a version change
+undoes.
+
+The cost of the same behaviour is in §11: a key trusted *locally* in `/etc` is
+wiped by the same unpack, and so is a URL added there.
 
 ### There is no prompt
 
@@ -222,7 +228,7 @@ whoever chooses the bytes also chooses a matching CRC.
 1. **Fix the time once**, from `SvcOp::Clock`, and use that one value for every
    expiry comparison. A clock that moves mid-run must not make two checks
    disagree.
-2. **Load the anchor** from `/etc/pkg/`. Missing or unreadable: stop. There is
+2. **Load the anchor** from `/etc/anchor`. Missing or unreadable: stop. There is
    no fallback and nothing to rebuild it from.
 3. **Fetch the index**, up to a cap `pkg` chooses. Longer than the cap is a
    failure, not a truncation.
@@ -418,9 +424,10 @@ the store tamper-evident.
 **A version change erases installed packages.** The unpack replaces each
 top-level directory the archive carries, and `bin` and `etc` are exactly those.
 Anything `pkg` put in `/bin` is gone at the next release, along with a locally
-trusted key under `/etc/pkg/`. For the anchor this is the property §6 relies on.
-It is also why `pkg`'s record of what it installed belongs in a directory the
-archive does not carry, so a wipe is fixed by reinstalling, and re-checking.
+trusted key in `/etc` and a URL added to `/etc/repositories`. For those two this
+is the property §6 relies on. It is also why `pkg`'s *record* of what it
+installed belongs in a directory the archive does not carry, so a wipe is fixed
+by reinstalling, and re-checking.
 
 `/pkg` is that directory. The archive names `bin` and `etc` and no other, so the
 store, the generations and the symlinks that activate one all survive an

@@ -63,12 +63,13 @@ export const text = (path) => {
     return new TextDecoder().decode(b);
 };
 
-// The release's own anchor, kept before a fixture is planted over it. Held here
-// rather than in a case because the case that puts it back is not the one that
-// took it.
+// The release's own /etc files, kept before a fixture is planted over them.
+// Held here rather than in a case because the case that puts them back is not
+// the one that took them.
+const SHIPPED = ["/etc/anchor", "/etc/repositories"];
 let shipped = null;
-export const keep = () => { shipped = store.files.get("/etc/pkg/anchor"); };
-export const restore = () => { store.files.set("/etc/pkg/anchor", shipped); };
+export const keep = () => { shipped = SHIPPED.map((p) => store.files.get(p)); };
+export const restore = () => SHIPPED.forEach((p, i) => store.files.set(p, shipped[i]));
 
 // One clock for the nine, since they are one session: a case picks up where
 // the one before it left off.

@@ -100,10 +100,12 @@ Packages
 
   `pkg` installs into /pkg, which the boot archive does not carry — so what it
   installed outlives a release that replaces /bin and /etc. /pkg/bin is on
-  PATH after /bin, so nothing installed can shadow a system command.
+  PATH after /bin, so nothing installed can shadow a system command. The URL
+  it reads from, /etc/repositories, is carried and so is put back by a
+  release, as the keys below it are.
 
   Nothing is installed unchecked. The repository's index is signed, the keys
-  it is checked against are in /etc/pkg/anchor and come out of the boot
+  it is checked against are in /etc/anchor and come out of the boot
   archive, and every package is compared against the size and the digest that
   index gave before a byte of it is unpacked. A check that fails names the
   step it failed at, and nothing is half-installed. Its commands, each of them
@@ -153,7 +155,7 @@ More
 
   /README           what this system is, in a page
   /etc/motd         what boot prints
-  /etc/pkg/anchor   the keys a repository's index is checked against
+  /etc/anchor       the keys a repository's index is checked against
   /proc             the system describing itself as text — try cat /proc/host
 
   help | grep ls    off a terminal `less` copies, so this list pipes

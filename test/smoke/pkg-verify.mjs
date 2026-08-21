@@ -12,7 +12,7 @@ export function check() {
     // is what an install has just written.
     submit("rm -r /pkg", at());
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     net.routes.set(RURL + "/index",
                    { status: 200, headers: "content-type: text/plain\n", body: repo("index") });
     prints("pkg update", `${RURL}|index 1, 2 packages`);

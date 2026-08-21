@@ -44,9 +44,10 @@ Task<Result<StorageBackend>> storage_info();
 
 // Fetches rootfs.zip and writes it into the store, replacing the top-level
 // directories it carries and leaving every other one alone, then stamps
-// `version` into /version. Returns how many files it installed.
+// `version` into /etc/version. Returns how many files it installed.
 Task<Result<u32>> storage_unpack(Str version);
 
 // Where the host leaves that stamp, and what boot compares against its own
-// BRAAM_VERSION to decide whether the stored image is this kernel's.
-constexpr Str VERSION_PATH = "/version";
+// BRAAM_VERSION to decide whether the stored image is this kernel's. The
+// unpack replaces it along with the rest of /etc.
+constexpr Str VERSION_PATH = "/etc/version";

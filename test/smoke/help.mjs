@@ -58,13 +58,13 @@ export function check() {
     // (Package_Format.md §4). This is the only place a real clock sees it, so
     // it is what says so before a release goes out with a stale one.
     if (hasRootfs) {
-        const a = store.entries.find((e) => e.name === "etc/pkg/anchor");
+        const a = store.entries.find((e) => e.name === "etc/anchor");
         if (!a)
-            fail("the archive carries no etc/pkg/anchor");
+            fail("the archive carries no etc/anchor");
         const m = new TextDecoder().decode(a.bytes).match(/\nE:(\d+)\n/);
         if (!m)
-            fail("/etc/pkg/anchor carries no expiry");
+            fail("/etc/anchor carries no expiry");
         else if (Number(m[1]) <= Date.now())
-            fail(`/etc/pkg/anchor expired at ${new Date(Number(m[1])).toISOString()}`);
+            fail(`/etc/anchor expired at ${new Date(Number(m[1])).toISOString()}`);
     }
 }

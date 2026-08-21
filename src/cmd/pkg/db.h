@@ -1,5 +1,5 @@
-// The local store (Package_Format.md §8): the paths under /pkg, §8.2's two
-// text files, and a generation as a list of steps store.h performs.
+// The local store (Package_Format.md §8): the paths under /pkg, §8.2's text
+// files, and a generation as a list of steps store.h performs.
 //
 // Syscall-free. Every Str views the text the caller holds.
 #pragma once
@@ -21,11 +21,14 @@ constexpr Str PKG_CACHE  = "/pkg/cache";
 constexpr Str PKG_ACTIVE = "/pkg/active";
 constexpr Str PKG_BIN    = "/pkg/bin";
 constexpr Str PKG_WORLD  = "/pkg/world";
-constexpr Str PKG_REPOS  = "/pkg/repositories";
 constexpr Str PKG_INDEX  = "/pkg/index";
 
 // Renamed over /pkg/active. That rename is the commit.
 constexpr Str PKG_ACTIVE_NEW = "/pkg/active.new";
+
+// Configuration, not store: shipped in rootfs.zip and re-pinned by the boot
+// unpack, as the anchor beside it is.
+constexpr Str REPOS_PATH = "/etc/repositories";
 
 // <name>-<version>: a store directory, and a db file.
 bool pkg_stem(Str name, Str version, String &out);

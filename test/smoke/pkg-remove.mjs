@@ -12,7 +12,7 @@ export function check() {
     // from a tree of its own.
     submit("rm -r /pkg", at());
     store.dirs.add("/pkg");
-    plant("/pkg/repositories", RURL + "\n");
+    plant("/etc/repositories", RURL + "\n");
     serve("libz-1.0-r0", good);
     serve("hello-1.0-r0", archive("hello-1.0-r0"));
     prints("pkg update", `${RURL}|index 1, 2 packages`);
