@@ -4,7 +4,7 @@ namespace {
 
 // Sorted, though nothing walks it in order any more: a linear search over
 // twenty-six entries is not worth an index, and sorted is how it stays
-// readable. What each one is for is /share/help's, not a string here.
+// readable. What each one is for is /etc/help's, not a string here.
 constexpr Builtin TABLE[] = {
     { ".", builtin_dot },
     { ":", builtin_colon },

@@ -13,7 +13,7 @@ kind, so each is a builtin *and* a file in /bin: the builtin is what a prompt
 runs, the file is what anything spawning the name by itself gets. [ and : are
 of that kind too and have no file, being punctuation nothing spawns.
 
-This list is what the boot archive ships, and is a file: /share/help. A
+This list is what the boot archive ships, and is a file: /etc/help. A
 program installed somewhere else on PATH runs perfectly well and is not named
 here. Each program also answers for itself — a usage error prints how the
 command is spelled and exits 2.
@@ -66,7 +66,7 @@ Programs in /bin
   fimport   [<dir>] — copy files from the browser into /import
   grep      [-i] [-v] <text> [<file>...] — pass matching lines
   head      [-n <count>] [<file>...] — the first lines, ten by default
-  help      page this list, which is /share/help
+  help      page this list, which is /etc/help
   hog       take memory until the cap refuses more
   less      [<file>] — page a file on a terminal, copy it off one; q quits
   ln        -s [-f] <target> <name> — make a symbolic link
@@ -99,11 +99,11 @@ Packages
 --------
 
   `pkg` installs into /pkg, which the boot archive does not carry — so what it
-  installed outlives a release that replaces /bin and /share. /pkg/bin is on
+  installed outlives a release that replaces /bin and /etc. /pkg/bin is on
   PATH after /bin, so nothing installed can shadow a system command.
 
   Nothing is installed unchecked. The repository's index is signed, the keys
-  it is checked against are in /share/pkg/anchor and come out of the boot
+  it is checked against are in /etc/pkg/anchor and come out of the boot
   archive, and every package is compared against the size and the digest that
   index gave before a byte of it is unpacked. A check that fails names the
   step it failed at, and nothing is half-installed. Its commands, each of them
@@ -152,8 +152,8 @@ More
 ----
 
   /README           what this system is, in a page
-  /share/motd       what boot prints
-  /share/pkg/anchor the keys a repository's index is checked against
+  /etc/motd         what boot prints
+  /etc/pkg/anchor   the keys a repository's index is checked against
   /proc             the system describing itself as text — try cat /proc/host
 
   help | grep ls    off a terminal `less` copies, so this list pipes

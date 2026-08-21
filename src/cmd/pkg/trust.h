@@ -24,7 +24,7 @@ constexpr Str TRUST_INDEX = "index";
 constexpr u32 TRUST_GRAMMAR = 1;
 
 // Shipped in rootfs.zip, re-pinned by the boot unpack (§6).
-constexpr Str ANCHOR_PATH = "/share/pkg/anchor";
+constexpr Str ANCHOR_PATH = "/etc/pkg/anchor";
 
 // One anchor: the text it owns, §2's split of it, and the record.
 struct AnchorFile {

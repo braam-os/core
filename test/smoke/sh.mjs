@@ -67,11 +67,11 @@ export function check() {
     // Its own working directory, moved by its own builtin and inherited by
     // what it spawns — a child of a child of the resident shell.
     s = submit("clear", 9207);
-    s = submit("cd /share", 9208);
-    chdir("/share"); // the child's, not the resident shell's
+    s = submit("cd /etc", 9208);
+    chdir("/etc"); // the child's, not the resident shell's
     s = submit("pwd", 9209);
-    if (!rows(s).includes("/share"))
-        fail(`cd in sh left ${JSON.stringify(rows(s))}, expected /share`);
+    if (!rows(s).includes("/etc"))
+        fail(`cd in sh left ${JSON.stringify(rows(s))}, expected /etc`);
 
     // ^C reaches what sh put in front, and sh survives it: the whole point of
     // Sys::Fg. The prompt that comes back is sh's, reporting 130.
@@ -152,7 +152,7 @@ export function check() {
     chdir("/home");
     s = submit("clear", 9214);
     s = submit("pwd", 9215);
-    if (rows(s).includes("/share"))
+    if (rows(s).includes("/etc"))
         fail("sh's cd moved the resident shell's working directory");
     s = submit("echo back", 9216);
     if (!rows(s).includes("back"))

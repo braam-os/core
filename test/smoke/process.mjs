@@ -43,7 +43,7 @@ export function check() {
     // nobody else's, feeding one another through a kernel pipe.
     net.peak = 0;
     s = submit("clear", 9014);
-    s = submit("tail -n 1 /share/motd | wc", 9015);
+    s = submit("tail -n 1 /etc/motd | wc", 9015);
     if (!rows(s).some((line) => /^1 \d+ \d+$/.test(line)))
         fail(`a two-stage pipeline printed ${JSON.stringify(rows(s))}`);
     if (net.peak < 2)
@@ -90,21 +90,21 @@ export function check() {
     // A file that is not a program is refused before anything runs, and says
     // so differently from a name that is not there at all.
     s = submit("clear", 9030);
-    s = submit("/share/motd", 9031);
-    if (!rows(s).some((line) => line.startsWith("/share/motd: not executable")))
+    s = submit("/etc/motd", 9031);
+    if (!rows(s).some((line) => line.startsWith("/etc/motd: not executable")))
         fail(`a non-binary was not refused: ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes(prompt(126)))
         fail(`a non-binary left ${row(s, s.cursor_y)}, expected ${prompt(126)}`);
 
     // The archive's own #! script, run as a program: /bin/help is `#!/bin/sh`
-    // over `less /share/help`, so this is an interpreter spawned by the kernel,
+    // over `less /etc/help`, so this is an interpreter spawned by the kernel,
     // a shell that is not a job of its own, and a screen claimed by its child.
     // On a terminal it pages rather than printing, and q gives the screen back.
     s = submit("clear", 9040);
     s = submit("help", 9041);
     if (row(s, 0) !== "braam — the commands")
         fail(`help did not page the document: ${JSON.stringify(rows(s))}`);
-    if (!rows(s).some((line) => line.startsWith(" /share/help ")))
+    if (!rows(s).some((line) => line.startsWith(" /etc/help ")))
         fail(`the pager named something else: ${JSON.stringify(rows(s))}`);
     press("q".codePointAt(0));
     run(9042);

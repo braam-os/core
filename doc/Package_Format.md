@@ -178,7 +178,7 @@ so a field naming one could only be a second place to be wrong.
 
 ## 4. The anchor
 
-`/share/pkg/anchor`, shipped in `rootfs.zip` and re-pinned from it at every
+`/etc/pkg/anchor`, shipped in `rootfs.zip` and re-pinned from it at every
 version change (Package_Management.md §6). Signature block, empty line, one
 stanza.
 
@@ -643,7 +643,7 @@ python3 -c 'import datetime as d; print(int(d.datetime(2029,1,1,
     tzinfo=d.timezone.utc).timestamp()) * 1000)'
 ```
 
-Copy the result to `rootfs/share/pkg/anchor` and rebuild. Then put `root1.key`,
+Copy the result to `rootfs/etc/pkg/anchor` and rebuild. Then put `root1.key`,
 `root2.key` and `root3.key` back where they came from; publishing does not need
 them again until you rotate a key or the anchor's expiry comes round, and each
 new anchor carries a higher `--version` than the last.

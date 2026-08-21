@@ -25,7 +25,7 @@ export function check() {
     if (!rows(s).includes(prompt(1)))
         fail(`pkg update with no repositories left ${row(s, s.cursor_y)}`);
 
-    plant("/share/pkg/anchor", fixture("anchor"));
+    plant("/etc/pkg/anchor", fixture("anchor"));
     store.dirs.add("/pkg");
     plant("/pkg/repositories", REPO + "\n");
 
@@ -61,16 +61,16 @@ export function check() {
     // own H:root or it is not an anchor (§4). anchor.data is a key set of
     // its own, so these refuse before anything is fetched.
     route(fixture("good"));
-    plant("/share/pkg/anchor", anchors("repeat"));
+    plant("/etc/pkg/anchor", anchors("repeat"));
     refuses("an anchor meeting its threshold with one key twice", "pkg: anchor:");
-    plant("/share/pkg/anchor", anchors("short"));
+    plant("/etc/pkg/anchor", anchors("short"));
     refuses("an anchor one signature short", "pkg: anchor:");
     // The control the pair needs: three signatures, one of them a
     // stranger's and two of them counting. The anchor is taken, and the
     // refusal moves on to the index it does not vouch for.
-    plant("/share/pkg/anchor", anchors("extra"));
+    plant("/etc/pkg/anchor", anchors("extra"));
     refuses("an index under an anchor that holds no key of its", "pkg: signature:");
-    plant("/share/pkg/anchor", fixture("anchor"));
+    plant("/etc/pkg/anchor", fixture("anchor"));
 
     if (store.files.has("/pkg/index"))
         fail("a refused update recorded an index anyway");

@@ -103,7 +103,7 @@ Task<void> unpack_if_stale(const u32 &pid)
             .put(BRAAM_VERSION);
         say(line.str());
         bool yes = false;
-        if (Task<bool> t = ask("replace /bin and /share?", pid))
+        if (Task<bool> t = ask("replace /bin and /etc?", pid))
             yes = co_await t;
         if (!yes) {
             say("keeping the stored image");
@@ -427,7 +427,7 @@ Task<i32> init_task(const u32 &pid)
             if (!restored) {
                 restored = true;
                 bool yes = false;
-                if (Task<bool> t = ask("restore /bin and /share from the archive?", pid))
+                if (Task<bool> t = ask("restore /bin and /etc from the archive?", pid))
                     yes = co_await t;
                 if (yes) {
                     Result<u32> r = Err(Error::NoMemory);

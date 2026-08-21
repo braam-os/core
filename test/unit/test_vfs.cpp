@@ -301,7 +301,7 @@ private:
 };
 
 // A filesystem that refuses everything, to prove the VFS checks before it
-// asks. /bin and /share are both this shape.
+// asks. /bin and /etc are both this shape.
 struct ReadOnlyFs final : Fs {
     Str kind() const override { return "rofs"; }
 
@@ -377,7 +377,7 @@ void test_vfs()
 
     CHECK(vfs_mount("/", heap_new<TempFs>()).is_ok());
     CHECK(vfs_mount("/home", heap_new<TempFs>()).is_ok());
-    CHECK(vfs_mount("/share", heap_new<ReadOnlyFs>()).is_ok());
+    CHECK(vfs_mount("/etc", heap_new<ReadOnlyFs>()).is_ok());
     CHECK_EQ(vfs_mounts().size(), 3);
 
     // Mounting twice on one point is an error, and the rejected filesystem is
@@ -475,9 +475,9 @@ void test_vfs()
     CHECK(vfs_size(fd).error() == Error::Invalid);
 
     // A read-only mount is refused above the filesystem, not by it.
-    CHECK(run_now(vfs_open("/share/x", O_WRITE | O_CREATE)).error() == Error::Perm);
-    CHECK(run_now(vfs_mkdir("/share/x")).error() == Error::Perm);
-    CHECK(run_now(vfs_remove("/share/x", false)).error() == Error::Perm);
+    CHECK(run_now(vfs_open("/etc/x", O_WRITE | O_CREATE)).error() == Error::Perm);
+    CHECK(run_now(vfs_mkdir("/etc/x")).error() == Error::Perm);
+    CHECK(run_now(vfs_remove("/etc/x", false)).error() == Error::Perm);
 
     // A mount point is not the filesystem underneath it to drop.
     CHECK(run_now(vfs_remove("/home", true)).error() == Error::Perm);
@@ -487,11 +487,11 @@ void test_vfs()
     {
         Vec<Entry> root = move(run_now(vfs_list("/")).value());
         CHECK(has(root, "home"));
-        CHECK(has(root, "share"));
+        CHECK(has(root, "etc"));
         for (const Entry &e : root)
             CHECK(e.kind == NodeKind::Dir);
         for (const Entry &e : root)
-            if (e.name == "home" || e.name == "share")
+            if (e.name == "home" || e.name == "etc")
                 CHECK_EQ(e.mtime, 0u);
     }
 
@@ -516,7 +516,7 @@ void test_vfs()
         CHECK(run_now(vfs_stat("/home/notes")).value().mtime > now);
 
         // A filesystem keeping none refuses rather than answering 0.
-        CHECK(run_now(vfs_touch("/share/x")).error() == Error::Perm);
+        CHECK(run_now(vfs_touch("/etc/x")).error() == Error::Perm);
         CHECK(run_now(vfs_touch("/count/f")).error() == Error::Unsupported);
     }
 
@@ -578,7 +578,7 @@ void test_vfs()
         vfs_close(wr);
 
         // A link may cross a mount: every hop goes back through the table.
-        CHECK(run_now(vfs_symlink("/share", "/home/tomount")).is_ok());
+        CHECK(run_now(vfs_symlink("/etc", "/home/tomount")).is_ok());
         CHECK(run_now(vfs_stat("/home/tomount")).value().kind == NodeKind::Dir);
         CHECK(run_now(vfs_stat("/home/tomount", false)).value().kind == NodeKind::Link);
         CHECK(run_now(vfs_list("/home/tomount")).is_ok());
@@ -636,8 +636,8 @@ void test_vfs()
         // Across mounts is the caller's signal to copy; a read-only mount at
         // either end is a refusal.
         CHECK(run_now(vfs_rename("/home/two", "/two")).error() == Error::Unsupported);
-        CHECK(run_now(vfs_rename("/share/x", "/home/x")).error() == Error::Perm);
-        CHECK(run_now(vfs_rename("/home/two", "/share/x")).error() == Error::Perm);
+        CHECK(run_now(vfs_rename("/etc/x", "/home/x")).error() == Error::Perm);
+        CHECK(run_now(vfs_rename("/home/two", "/etc/x")).error() == Error::Perm);
 
         // A mount point is not the filesystem's to move, as it is not its to
         // drop — and answering Unsupported would send the caller off to copy it.

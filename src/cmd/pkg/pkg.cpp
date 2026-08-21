@@ -11,7 +11,7 @@ namespace {
 constexpr Str NO_INDEX = "pkg: no index; run pkg update\n";
 
 // Explicit: --gc-sections never extracts an unreferenced archive member. In
-// /share/help's order, which is what a reader does with them rather than the
+// /etc/help's order, which is what a reader does with them rather than the
 // alphabet; find() is a scan, so nothing here depends on the order.
 constexpr PkgCommand TABLE[] = {
     { "update", "", "fetch the repository index", pkg_update },

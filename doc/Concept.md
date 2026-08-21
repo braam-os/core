@@ -584,9 +584,9 @@ variables, its options, its traps, its loop. That is `cd`, `fg`, `jobs`, `kill`,
 `break`, `continue`, `return`, `.`, `eval`, `exec` and `command`, whose answer
 *is* that state — the function table and the builtin table, which no syscall
 shows anyone either. **`help` is not one of them**: what a command is for is a
-document rather than state, so it is `/share/help` and the `#!` script that
-pages it, and the table carries no usage string to go stale. The second is that
-**its whole cost is the spawn**: a program costs an instantiation and a worker,
+document rather than state, so it is `/etc/help` and the `#!` script that pages
+it, and the table carries no usage string to go stale. The second is that **its
+whole cost is the spawn**: a program costs an instantiation and a worker,
 roughly a millisecond (§4.4), and `while [ … ]; do echo …; done` pays it twice a
 turn, so `test`, `[`, `:`, `echo`, `true` and `false` are builtins too — a few
 lines each, where the spawn *is* the runtime. The clause is closed and admits
@@ -1019,7 +1019,7 @@ unbuilt:
 ```
 
 **Two mounts, and one of them is generated.** Everything a user can name is in
-the one store: `/bin`, `/share`, `/home`, `/tmp`, `/import` and `/pkg` are
+the one store: `/bin`, `/etc`, `/home`, `/tmp`, `/import` and `/pkg` are
 directories in it, not filesystems of their own. There is no `/usr`, and no
 `/mnt` either: a directory named for mounting would promise a second filesystem
 there is no way to have. `fimport` writes the picker's bytes into `/import` like
@@ -1034,8 +1034,8 @@ which is a symbolic link and not a mount. Boot does not create it — a system
 that installs nothing never grows one. What writes the tree is `/bin/pkg`, and
 [Package_Format.md](Package_Format.md) §8 is the layout it writes.
 
-`/bin`, `/share` and `/README` are put there at boot by unpacking `rootfs.zip`,
-a deflated zip beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js`
+`/bin`, `/etc` and `/README` are put there at boot by unpacking `rootfs.zip`, a
+deflated zip beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js`
 reads; the kernel never sees its bytes. They are therefore **writable**, which
 is the price of one store: `/bin` used to be immutable because it was a
 read-only archive mount, and what stands in for that now is that the archive can
@@ -1132,7 +1132,7 @@ of the kernel that wrote it, and boot compares it against its own. A mismatch is
 the user's decision — the prompt is on the grid before the shell, since a stale
 `/bin` may be exactly what they want kept — and declining boots on what is
 stored. The unpack replaces the top-level directories the archive carries, `bin`
-and `share`, and never names any other, so `/home` and `/pkg` cannot be lost to
+and `etc`, and never names any other, so `/home` and `/pkg` cannot be lost to
 one. The stamp is written last, so an interrupted unpack is done again rather
 than believed.
 
@@ -1385,7 +1385,7 @@ src/ui/                 the layout layer over a Grid: Pane, TextBuf, TextView (�
 src/user/               exec and the syscall dispatcher, the console and its pump, the
                         pipes behind a stage's stdio, ProcFs, boot and init
 src/user/tty.h          the terminal claims: KeyInput, FullScreen
-rootfs/                 the tree tools/pack.py packs into the root: /bin, /share, /README
+rootfs/                 the tree tools/pack.py packs into the root: /bin, /etc, /README
 examples/hello/         the SDK's worked example, and an ordinary build target
 test/                   in-wasm unit tests, the Node driver, and the fakes: storage,
                         services, and a process worker with no thread in it

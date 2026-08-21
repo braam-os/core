@@ -8,13 +8,14 @@
 #include "kernel/task.h"
 #include "kernel/types.h"
 
-// The one program init runs. There is no getty and no /etc/inittab: init starts
-// another when this one *dies*, and the terminal is done when it exits.
+// The one program init runs. There is no getty and nothing configures this:
+// init starts another when this one *dies*, and the terminal is done when it
+// exits.
 constexpr Str SHELL = "/bin/sh";
 
 // Printed on the grid before that first prompt, and absent is not an error: a
 // boot archive without a greeting is not a broken one.
-constexpr Str MOTD = "/share/motd";
+constexpr Str MOTD = "/etc/motd";
 
 // False when there is no store to run on — a browser with no OPFS, which is
 // fatal now rather than a memory fallback (Concept.md §5.2). `pid` is init's,

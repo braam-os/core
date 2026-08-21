@@ -25,6 +25,57 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## The directory was never shared with anybody
+
+`/share` is now `/etc`. It is one of the two top-level directories `rootfs.zip`
+carries, and it holds three things: `help`, which is the whole of `/bin/help`;
+`motd`, which boot prints; and `pkg/anchor`, the root keys every repository
+index is checked against. The name was borrowed from `/usr/share`, and on a
+Unix that name means something precise — data a package installs that is
+independent of the architecture, so that several architectures may *share* one
+copy of it. None of that is true here. There is one architecture, wasm32; there
+is no `/usr` to hang it under (§5.1 says why); and nothing shares anything,
+because there is one store and one system in it. What is actually in the
+directory is this system's shipped configuration and its one document, which is
+what `/etc` has always meant.
+
+**The shorter name is worth two characters six times over.** `rootfs/etc/help`
+is written to 78 columns and read through `less` on an 80-column grid, and four
+of its lines carried the old path. `/etc/pkg/anchor` also lets the `More` table
+at the end of that document keep its column while the entries under it get
+narrower. The document lost eight bytes, which is visible: `test/smoke/subst.mjs`
+concatenates three copies of it and asserts what `wc` prints, so `25572` became
+`25548`. That case is not about the help text at all — it is about a pipe with
+eight slots and a drain that has to be running before the wait — and the number
+is a hostage to a file it never mentions. It has been one since the case was
+written and the comment beside it says so; renaming a directory is just the
+first thing that ever collected.
+
+**Two other `share`s in the tree are deliberately untouched.** The SDK installs
+into `share/braam/examples` and `share/doc/braam` on the developer's real
+machine, where `/usr/local/share` means exactly what it says on a Unix and this
+rename has no jurisdiction. And a *package* may carry a `share/` subtree of its
+own — `/pkg/store/<stem>/share/…`, which Package_Format.md §10's tutorial writes
+and the `g:` trigger globs in `test/unit/repo.data` match against. That is the
+publisher's layout inside their own zip, not ours; a package built for this
+system is free to call its data directory whatever a package on any other system
+would. Renaming it would also have meant regenerating a signed fixture to say
+nothing new.
+
+**A store written before this commit keeps a `/share` nobody deletes.** The
+unpack in `web/fs.js` removes each top-level directory *the archive carries*
+before rewriting it, which is the property Package_Management.md §6 leans on —
+the anchor cannot be poisoned in the store for good, because every version
+change re-pins it. The same rule is why a directory the archive stops carrying
+is never removed: `installOps` derives its removal list from the entries, and
+there are no `share/` entries any more. An upgraded store therefore shows both
+`/etc` and a stale `/share` in `ls /` until someone types `rm -r /share`. Adding
+a hardcoded removal to boot was considered and dropped: it would be a line
+naming a directory that has no other reason to exist in the source, kept for
+ever against a case that stops occurring after one boot, and the alternative is
+a command the user can already type. There is no upgrade machinery here and
+adding one for a rename would be the wrong first customer for it.
+
 ## What the tab asked for, and what came back
 
 A repository that would not answer gave three lines and no way to tell which of

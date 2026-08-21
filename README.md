@@ -46,7 +46,7 @@ editing with history. `^C` stops whatever is running and gives the prompt back.
 [doc/Shell.md](doc/Shell.md) is the manual.
 
 **A filesystem.** Everything lives in the browser's private storage and survives
-a reload; `/tmp` is emptied at boot. `/bin` and `/share` come from an archive
+a reload; `/tmp` is emptied at boot. `/bin` and `/etc` come from an archive
 downloaded with the kernel, and are replaced whenever a new version is opened.
 `/proc` shows what is running. Where the browser will not store files at all,
 the system says so and stops.

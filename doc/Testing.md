@@ -128,7 +128,7 @@ keystrokes is the thing under test — and it is what the rules are about.
 - **A program, the shell, the screen or a key** — a new file in `test/smoke/`
   and a line in the `CASES` table in `test/run.mjs`, placed where the state it
   needs already exists. Pick a clock base after its neighbour's.
-- **A new program or builtin updates `rootfs/share/help` in the same commit.**
+- **A new program or builtin updates `rootfs/etc/help` in the same commit.**
   That document is the whole of `help`, nothing notices at run time when it goes
   stale, and the `help` case fails on a forgotten line.
 - **A change to the wasm ABI updates `test/smoke/abi.mjs` in the same commit** —

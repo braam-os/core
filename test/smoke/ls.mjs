@@ -8,19 +8,19 @@ import {
 
 export function check() {
     let s = screen();
-    // /bin and /share are directories in the store, unpacked at boot from the
+    // /bin and /etc are directories in the store, unpacked at boot from the
     // archive tools/pack.py wrote at the end of the build.
     if (hasRootfs) {
         s = submit("clear", 1183);
-        s = submit("cat /share/motd", 1184);
+        s = submit("cat /etc/motd", 1184);
         if (!rows(s).some((line) => line.startsWith("braam —")))
-            fail(`/share/motd did not read back: ${JSON.stringify(rows(s))}`);
+            fail(`/etc/motd did not read back: ${JSON.stringify(rows(s))}`);
         s = submit("clear", 1185);
-        // Three names, and the grid is stdout, so they share a row; /share/pkg
+        // Three names, and the grid is stdout, so they share a row; /etc/pkg
         // is the anchor's directory and is marked as one.
-        s = submit("ls /share", 1186);
+        s = submit("ls /etc", 1186);
         if (output(s).join("|") !== "help  motd  pkg/")
-            fail(`/share did not list its files: ${JSON.stringify(output(s))}`);
+            fail(`/etc did not list its files: ${JSON.stringify(output(s))}`);
         // The README is at the root, where somebody arriving will see it. Not
         // the whole row: what else is at the top level moves with boot.cpp.
         s = submit("clear", 1186.1);

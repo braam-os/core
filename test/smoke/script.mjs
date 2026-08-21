@@ -13,18 +13,18 @@ export function check() {
     // the grammar over a real store, and the options reaching the walk.
     submit("mkdir /home/s8", t.at(0.01));
 
-    t.is("if [ -f /share/motd ]; then echo yes; fi", "yes");
+    t.is("if [ -f /etc/motd ]; then echo yes; fi", "yes");
     t.is("if [ -d /bin ]; then echo yes; fi", "yes");
     t.is("[ -f /bin ]; echo $?", "1");
     t.is("test -d /bin; echo $?", "0");
-    t.is("[ -f /share/motd -a -d /bin ]; echo $?", "0");
+    t.is("[ -f /etc/motd -a -d /bin ]; echo $?", "0");
     t.is("[ nope = nope ]; echo $?", "0");
     t.is("[ 2 -gt 1 ]; echo $?", "0");
     // Two that answer out of the gaps rather than out of a mode word: `-x` is
     // a file the kernel would instantiate, and `-w` is a writable mount.
     t.is("[ -x /bin/true ]; echo $?", "0");
-    t.is("[ -x /share/motd ]; echo $?", "1");
-    t.is("[ -w /share/motd ]; echo $?", "0");
+    t.is("[ -x /etc/motd ]; echo $?", "1");
+    t.is("[ -w /etc/motd ]; echo $?", "0");
     t.is("[ -w /proc/uptime ]; echo $?", "1");
     // The binary pair, over two files made in a known order.
     submit("touch /home/s8/a", t.at(0.01));
@@ -59,7 +59,7 @@ export function check() {
     // rule grew a second clause.
     submit("clear", t.at(0.01));
     const links0 = net.links.length;
-    submit("for i in 1 2 3 4 5; do [ -f /share/motd ]; done", t.at(0.01));
+    submit("for i in 1 2 3 4 5; do [ -f /etc/motd ]; done", t.at(0.01));
     if (net.links.length !== links0)
         fail(`a loop of builtins hired ${net.links.length - links0} workers`);
 

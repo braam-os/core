@@ -52,7 +52,7 @@ export function check() {
             fail(`/version reads ${JSON.stringify(stamp)}, expected a version`);
     }
 
-    // init prints /share/motd before the shell, in green, and the prompt sets
+    // init prints /etc/motd before the shell, in green, and the prompt sets
     // its own colour rather than inheriting one. COLOR_GREEN is 2 and
     // COLOR_WHITE|COLOR_BRIGHT is 15, from the enum in src/kernel/screen.h.
     s = screen();

@@ -65,7 +65,7 @@ export function check() {
         s = screen();
         if (!rows(s).some((line) => line.includes("0.0.1-stale")))
             fail(`a stale stamp went unmentioned: ${JSON.stringify(rows(s))}`);
-        if (!rows(s).some((line) => line.includes("replace /bin and /share?")))
+        if (!rows(s).some((line) => line.includes("replace /bin and /etc?")))
             fail(`boot did not ask before overwriting: ${JSON.stringify(rows(s))}`);
 
         press("n".codePointAt(0));

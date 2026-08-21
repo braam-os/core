@@ -111,7 +111,7 @@ make clean
   `host.svc`), its exports (`init`, `key`, `memory`, `ref`, `resize`, `sys`,
   `sys_async`, `tick`, `wake`) and every binary's surface and `braam` section
   are [test/smoke/abi.mjs](test/smoke/abi.mjs); the boot to a prompt is
-  `boot.mjs`; `rootfs/share/help` against the builtin table and the archive's
+  `boot.mjs`; `rootfs/etc/help` against the builtin table and the archive's
   `bin/` is `help.mjs`.
 - `unit` — `test/run.mjs --tests` over `tests.wasm`, with `rootfs.zip` alongside
   so that `src/cmd/pkg/zip.cpp` and `web/fs.js` are compared over the same bytes
@@ -330,10 +330,10 @@ argue in Concept.md first.
 - **The builtin table is an explicit array and must stay one.** `--gc-sections`
   never extracts an unreferenced archive member, so a self-registering builtin
   would be dropped silently.
-- **A new program or builtin updates `rootfs/share/help` in the same commit.**
+- **A new program or builtin updates `rootfs/etc/help` in the same commit.**
   That document is the whole of `help` (`/bin/help` is `#!/bin/sh` over `less
-  /share/help`), nothing notices at run time when it goes stale, and `smoke`
-  fails on a forgotten line.
+  /etc/help`), nothing notices at run time when it goes stale, and `smoke` fails
+  on a forgotten line.
 - Exports are declared with `BRAAM_EXPORT("name")`, imports with
   `BRAAM_IMPORT("name")` — never by linker flag. Either changes the ABI: update
   the expected surface in [test/smoke/abi.mjs](test/smoke/abi.mjs) in the same

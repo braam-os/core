@@ -31,7 +31,7 @@ let name = "run.mjs";
 let addr = 0;
 let tick_count = 0;
 
-// Whether the archive came along: the cases that read /share or /pkg are
+// Whether the archive came along: the cases that read /etc or /pkg are
 // skipped without it, and run.mjs gates the rest off the same flag.
 export let hasRootfs = false;
 

@@ -39,6 +39,6 @@ struct Builtin {
 };
 
 // Null when the name is not a builtin, which is when it is looked for in /bin.
-// The only way in: what a builtin is *for* is a line in /share/help, which
+// The only way in: what a builtin is *for* is a line in /etc/help, which
 // /bin/help pages, so the table carries no usage string to go stale.
 const Builtin *builtin_find(Str name);

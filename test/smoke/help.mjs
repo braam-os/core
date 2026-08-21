@@ -1,4 +1,4 @@
-// /share/help against the builtin table and the archive, and the anchor's expiry.
+// /etc/help against the builtin table and the archive, and the anchor's expiry.
 // Part of the smoke suite; test/run.mjs runs the cases in order and
 // doc/Testing.md has the rules they run by.
 
@@ -7,15 +7,15 @@ import { readFileSync } from "node:fs";
 import { fail, hasRootfs, names, store } from "./harness.mjs";
 
 export function check() {
-    // /share/help is the whole of `help` now — /bin/help pages it — so nothing
+    // /etc/help is the whole of `help` now — /bin/help pages it — so nothing
     // in the system notices when it goes stale. This does: every builtin the
     // table carries and every binary the archive ships is named once, and the
     // document names nothing else. The archive rather than the source tree,
     // since what ships is what a reader gets.
     if (hasRootfs) {
-        const doc = store.entries.find((e) => e.name === "share/help");
+        const doc = store.entries.find((e) => e.name === "etc/help");
         if (!doc)
-            fail("the archive carries no share/help");
+            fail("the archive carries no etc/help");
         const text = new TextDecoder().decode(doc.bytes);
 
         // A section is a heading at the left margin; an entry inside one is two
@@ -23,7 +23,7 @@ export function check() {
         const section = (heading) => {
             const at = text.indexOf(`\n${heading}\n`);
             if (at < 0)
-                fail(`/share/help has no ${JSON.stringify(heading)} section`);
+                fail(`/etc/help has no ${JSON.stringify(heading)} section`);
             const rest = text.slice(at + heading.length + 2);
             const end = rest.search(/\n[^\s-]/);
             return (end < 0 ? rest : rest.slice(0, end))
@@ -46,11 +46,11 @@ export function check() {
                 fail(`nothing to check ${heading} against`);
             for (const name of want)
                 if (got.filter((n) => n === name).length !== 1)
-                    fail(`/share/help names ${name} ${got.filter((n) => n === name).length} ` +
+                    fail(`/etc/help names ${name} ${got.filter((n) => n === name).length} ` +
                          `times under ${heading}, expected once`);
             for (const name of got)
                 if (!want.includes(name))
-                    fail(`/share/help lists ${name} under ${heading}, which is not there`);
+                    fail(`/etc/help lists ${name} under ${heading}, which is not there`);
         }
     }
 
@@ -58,13 +58,13 @@ export function check() {
     // (Package_Format.md §4). This is the only place a real clock sees it, so
     // it is what says so before a release goes out with a stale one.
     if (hasRootfs) {
-        const a = store.entries.find((e) => e.name === "share/pkg/anchor");
+        const a = store.entries.find((e) => e.name === "etc/pkg/anchor");
         if (!a)
-            fail("the archive carries no share/pkg/anchor");
+            fail("the archive carries no etc/pkg/anchor");
         const m = new TextDecoder().decode(a.bytes).match(/\nE:(\d+)\n/);
         if (!m)
-            fail("/share/pkg/anchor carries no expiry");
+            fail("/etc/pkg/anchor carries no expiry");
         else if (Number(m[1]) <= Date.now())
-            fail(`/share/pkg/anchor expired at ${new Date(Number(m[1])).toISOString()}`);
+            fail(`/etc/pkg/anchor expired at ${new Date(Number(m[1])).toISOString()}`);
     }
 }

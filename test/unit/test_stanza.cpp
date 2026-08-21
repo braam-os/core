@@ -213,7 +213,7 @@ void test_stanza()
         r.pkg.origin         = "awk";
         r.pkg.build_time     = 1755648000000ull;
         r.pkg.priority       = 5;
-        r.pkg.globs          = "/bin /share";
+        r.pkg.globs          = "/bin /etc";
         r.pkg.depends        = "cmd:sh so";
         r.pkg.provides       = "cmd:awk";
         r.pkg.install_if     = "less";
@@ -243,7 +243,7 @@ void test_stanza()
         CHECK(back.files[0].dir == "bin" && back.files[0].name == "awk");
         CHECK(back.files[2].dir == "share/man" && back.files[2].name == "awk.1");
         CHECK_EQ(u32(back.index_version), 41);
-        CHECK(back.pkg.globs == "/bin /share" && back.pkg.priority == 5);
+        CHECK(back.pkg.globs == "/bin /etc" && back.pkg.priority == 5);
         CHECK(back.broken.empty());
 
         // b is §11's failed script. Lowercase, so an index stanza carrying one

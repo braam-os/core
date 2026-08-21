@@ -18,7 +18,7 @@ export function check() {
 
     submit("rm -r /pkg", at());
     net.routes.delete(IDX);
-    plant("/share/pkg/anchor", repo("anchor"));
+    plant("/etc/pkg/anchor", repo("anchor"));
     store.dirs.add("/pkg");
     plant("/pkg/repositories", RURL + "\n");
     net.routes.set(RURL + "/index",

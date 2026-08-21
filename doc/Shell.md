@@ -543,7 +543,7 @@ Both are builtins **and** files in `/bin`, because their whole cost was the
 spawn. Typing the name runs the builtin; `/bin/test` gives the same answers.
 
 ```
-$ [ -f /share/motd ] && echo yes
+$ [ -f /etc/motd ] && echo yes
 yes
 $ test 12x -eq 12; echo $?
 0
@@ -861,7 +861,7 @@ run past a hole; at a prompt it abandons the line and asks again.
 
 Everything not in §10 is an ordinary program in `/bin`, in a worker of its own —
 `/bin` being where the archive puts them and what `PATH` names at boot. `help`
-is a `#!` script that pages `/share/help`, which carries this list and the
+is a `#!` script that pages `/etc/help`, which carries this list and the
 builtins with it; each program also answers for itself.
 
 | | |
@@ -880,7 +880,7 @@ builtins with it; each program also answers for itself.
 | `fimport` | copy files from the browser into `/import` |
 | `grep` | pass matching lines; a substring search, with no regular expressions |
 | `head` | the first lines, ten by default |
-| `help` | page `/share/help`, which is this list and the builtins |
+| `help` | page `/etc/help`, which is this list and the builtins |
 | `hog` | take memory until the cap refuses more |
 | `less` | page a file on a terminal, copy it off one; `q` quits |
 | `ln` | make a symbolic link |
