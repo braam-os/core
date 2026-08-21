@@ -41,13 +41,14 @@ and B did: `cmd:` was never code here, and the grammar it asked for is
 Package_Format.md §6.1. Phase F is done as well: P24 ran §5.1's six scripts
 around the commit, and P25 fired `.trigger` after the whole transaction, both
 under the paragraph §11 wrote before either — nothing implies a fence §11 says
-does not exist, and a package that only places files still runs no code. So this
-starts at P26.
-
-Four of P26's tools came early with P18, which needed a signed repository to
-install from: `tools/ed25519.py`, `signindex.py`, `mkanchor.py`, `mkpkg.py`,
-`mkindex.py` and the fixture driver `mkrepo.py`, which writes
-`test/unit/repo.data` under keys it destroys.
+does not exist, and a package that only places files still runs no code. P26 is
+gone the same way: the six publisher tools — `tools/ed25519.py`, `signindex.py`,
+`mkanchor.py`, `mkpkg.py`, `mkindex.py` and the fixture driver `mkrepo.py`,
+which writes `test/unit/repo.data` under keys it destroys — build and sign a
+repository, `mkindex.py` derives §6.1's `cmd:` names out of each package's
+`bin/` so no publisher writes one down, Package_Format.md §10 is the tutorial
+over them, and `rootfs/share/pkg/anchor` is signed by keys somebody holds. So
+this starts at P27.
 
 ## The shape being built
 
@@ -127,25 +128,6 @@ wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
 
 ## Phase G — the other side of the wire, and proof
-
-### P26. Publisher tools
-
-The tools are done. `tools/mkindex.py` derives §6.1's `cmd:` names out of each
-package's `bin/`, `tools/mkrepo.py` has given up its hand-written `p:cmd:hi` so
-`test/unit/repo.data` proves the derivation, `test/run.mjs` installs `cmd:hi`,
-`tools/ed25519.py` makes a key from a command line, and Package_Format.md §10 is
-the tutorial. What is left:
-
-- A real `rootfs/share/pkg/anchor`, signed by keys somebody holds, replacing
-  the placeholder P13 shipped, whose private halves were destroyed the moment
-  it was signed. `tools/mkanchor.py` is what signs it, §10's step 2 is the
-  command, and its `G` must be above the placeholder's 1.
-
-§9 is absolute and this is where it is at risk. **No private key** may be in the
-git tree, in anything built from it, inside `rootfs.zip`, or anywhere a browser
-can reach. The signer reads a key from a path given on its command line, keeps
-nothing, and writes nothing but the signature. `pkg` itself never signs and
-holds no code to make a key.
 
 ### P27. End to end
 

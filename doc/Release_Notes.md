@@ -25,6 +25,34 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## An anchor somebody can sign again
+
+The rest of P26, and the end of it. `rootfs/share/pkg/anchor` names four keys
+that exist: three root, two of them needed, and one index key, signed on a
+machine this tree has never seen. The placeholder P13 shipped is gone with the
+private halves it never had.
+
+**`G:2`, and no chain leads to it.** §4's walk adopts an anchor when a threshold
+of the *previous* anchor's roots signed it, and the previous anchor's roots were
+destroyed the day it was made — so nothing can sign the step from 1 to 2. That
+is not a gap: §6 says the anchor is re-pinned from `rootfs.zip` wholesale at
+every version change, so replacing it *is* cutting a release, which is what §10
+of Package_Management.md calls the out-of-band path and what it says the worst
+case costs. The number still had to rise, because a client that walks anchors
+compares `G` and nothing else orders them.
+
+**Nothing about the build changed.** The anchor is a file in `rootfs/`, copied
+by `copy_directory` and packed by `pack.py` like the other four, and no build
+step reads a key or signs anything — `pip3 install cryptography` remains a
+publisher's problem and not a builder's. Swapping the file was a swap.
+
+**The expiry is 2029-01-01, and `run.mjs` is still the only thing watching it.**
+Two years and a bit, which §9 asks be a period somebody can actually keep. The
+smoke test reads the archive's `E:` against a real clock and fails the build
+once it passes; every other test carries its own clock so that the fixtures do
+not rot. It is a build-time alarm for a run-time expiry, and it is now armed
+over a date somebody can act on.
+
 ## A name the publisher does not get to write down
 
 P26 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), less the anchor. §6.1 of
