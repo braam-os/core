@@ -25,6 +25,55 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## One session, told in thirty-nine cases
+
+`test/run.mjs` had reached 4,651 lines: 535 assertions driven through 427 shell
+submissions, all inside a single `if (mode === "--kernel")` block 4,380 lines
+long at one indent level, with no inner functions. Nothing else in the tree is
+close — `test/unit/test_vfs.cpp` is 693 lines and nothing in `web/` passes 631 —
+and the C++ suite sitting beside it had been 47 topic files behind one ordered
+call list in `main.cpp` since M0. The smoke suite now has the same shape:
+`run.mjs` is the `CASES` table and nothing else, `test/smoke/harness.mjs` owns
+the kernel, the grid and the tracked cwd, and thirty-nine topic files hold the
+assertions. [Testing.md](Testing.md) is the document that was missing with it.
+
+**The obvious split is the wrong one.** A file per topic suggests a CTest case
+per topic, and cost is no argument against it: the whole suite runs in under a
+second, no real workers are spawned, and a fresh boot costs about 150 ms. The
+argument against it is that *the suite is one cumulative session, and that is
+the point of it*. A shell that has been running for four thousand keystrokes is
+the thing under test. `/home/notes` is written two thousand lines before
+`persist` reads it back; `pkg-install` leaves `/pkg` broken on purpose because
+`pkg-remove` starts from that; `store.unpacks` is asserted as an absolute
+running total at four different moments; `respawn` needs its blocks a second
+apart or the kernel's own crash-loop guard fires. Isolating the cases would mean
+rewriting the assertions rather than moving them, and would delete the coverage
+that comes from long-lived state. So: many files, one process, one boot, one
+list that fixes the order — and the order's dependencies written down beside the
+entries, the way `test/unit/main.cpp` has always written them down.
+
+`--upto=<case>` is named for what it does rather than for what would be nicer.
+It is a prefix, not a filter, because by the paragraph above there is no state
+from which a single case could start. It earns its place anyway: iterating on
+one case without the output of the thirty after it.
+
+**The move had to be provably behaviour-preserving**, and 67 lines of boot log
+was too weak a signal for relocating 4,400 lines. The check used while it was
+done was a temporary hook in `submit` that printed each command, its timestamp
+and a digest of the resulting screen — 1,430 lines of fingerprint, deterministic
+across runs once the boot banner's elapsed microseconds are stripped. Every step
+was made to reproduce it exactly. The only deliberate divergence was four clock
+cursors: `vt` and `gt` were each one running variable spanning several of the
+new files, and the four chunks downstream of `gt` were re-based into the gap it
+never reached. Nothing else about those cases changed, and the final output is
+byte-identical to the output before the split.
+
+The nine near-identical `*shows` helpers — `gshows`, `cshows`, `fshows`,
+`tshows`, `rshows`, `sshows`, `ishows` were byte-identical bar the clock — are
+one `shows(base, step)` factory in the harness. That is the only code that
+changed rather than moved, and it is why the total is 5,185 lines across 42
+files where a pure cut would have been longer.
+
 ## Nine attacks, and the two that had nowhere to be refused
 
 P27, the end of Phase G. §3's table has been true since it was written and

@@ -150,7 +150,7 @@ built per instantiation with its pid baked in — `workerOps(pid)` at
 kernel's exports take a pid the *host* supplies; the process's imports have no
 argument for one. "A process cannot issue a syscall on behalf of another PID" is
 therefore not a check that runs, it is a shape the ABI has, and
-`test/run.mjs:206` asserts the shape.
+`test/smoke/abi.mjs` asserts the shape.
 
 **What crosses is bytes, not addresses.** Two instances have two memories, so
 every transfer is a copy through the host (Appendix B). The kernel cannot be
@@ -1314,7 +1314,7 @@ across the kernel's hundred call sites when it was a `Str`.
 
 ### What the tests assert of every binary
 
-`test/run.mjs:158-199` is where the ABI is enforced, and it is worth reading as
+`test/smoke/abi.mjs` is where the ABI is enforced, and it is worth reading as
 documentation rather than as a test:
 
 - **Imports are a whitelist checked as a subset**: `env.memory` is required,

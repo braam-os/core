@@ -517,8 +517,8 @@ $ node -e 'const m=new WebAssembly.Module(require("fs").readFileSync("build/hell
   console.log(new Uint32Array(WebAssembly.Module.customSections(m,"braam")[0]))'
 ```
 
-In the Braam source tree, `test/run.mjs` asserts all of that for every binary,
-and will do it for a binary of yours if you hand it one:
+In the Braam source tree, `test/smoke/abi.mjs` asserts all of that for every
+binary, and will do it for a binary of yours if you hand it one:
 
 ```
 node test/run.mjs --kernel build/kernel.wasm build/web/rootfs.zip /path/to/hello.wasm

@@ -1531,8 +1531,8 @@ it.
   while exporting `operator new`. Exports are named individually with
   `BRAAM_EXPORT` (`export_name`), imports with `BRAAM_IMPORT`
   (`import_module`/`import_name`) — never by linker flag. Either changes the
-  ABI, so the expected surface in [test/run.mjs](../test/run.mjs) changes in the
-  same commit.
+  ABI, so the expected surface in [test/smoke/abi.mjs](../test/smoke/abi.mjs)
+  changes in the same commit.
 - **`--allow-undefined` is absent**, so nothing is left to resolve and an
   accidental libc dependency is a link error instead of a runtime trap.
   `memcpy`/`memset` do not leak in: bulk-memory lets LLVM lower them inline.

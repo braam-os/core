@@ -29,6 +29,9 @@ the three passing CTest cases.
   mechanism (§4.3 is normative). Changes to `src/proc/`, `src/user/`,
   [src/kernel/sysabi.h](src/kernel/sysabi.h) or [web/proc.js](web/proc.js) must
   keep it true.
+- **[doc/Testing.md](doc/Testing.md)** is how the two suites are organised, what
+  can be tested in which, and the rules the smoke suite's one cumulative session
+  runs by. Read it before adding a case or moving one.
 - **[doc/Shell.md](doc/Shell.md)** is the `/bin/sh` manual,
   **[doc/Programming_Manual.md](doc/Programming_Manual.md)** the SDK guide, and
   **[doc/Package_Management.md](doc/Package_Management.md)** the policy a
@@ -57,6 +60,8 @@ make clean
 - A single test: `ctest --test-dir build -R unit --output-on-failure`, with
   `smoke`, `unit` and `size` the three names. The wasm suite has no filter of
   its own; run one case by building `tests` and reading the harness output.
+  `node test/run.mjs --list` names the smoke cases and `--upto=<case>` runs
+  through one and stops — a prefix, not a filter (doc/Testing.md §7).
 - The always-run `web` target uses `copy_directory`, which never deletes — cut a
   release from a clean tree.
 - Version = `BRAAM_VERSION_BASE` ([src/kernel/version.h](src/kernel/version.h),
@@ -94,7 +99,12 @@ make clean
   `host.svc`) and exports (`init`, `key`, `memory`, `ref`, `resize`, `sys`,
   `sys_async`, `tick`, `wake`), every binary's surface and `braam` section, that
   the kernel boots to a prompt, and that `rootfs/share/help` matches the builtin
-  table and the archive's `bin/`.
+  table and the archive's `bin/`. `run.mjs` is the ordered `CASES` table and
+  nothing else: a case is one file in [test/smoke/](test/smoke/) exporting
+  `check()`, over the driver in
+  [test/smoke/harness.mjs](test/smoke/harness.mjs). **The order is
+  load-bearing** — it is one cumulative session, so state crosses cases and an
+  entry that depends on an earlier one says so beside it.
 - `unit` — `tests.wasm` under Node, with `rootfs.zip` alongside so that
   `src/cmd/pkg/zip.cpp` and `web/fs.js` are compared over the same bytes rather
   than each trusted against its own reading of the format. New core code gets a
@@ -117,7 +127,8 @@ are in that list by taking a `PkgHost` — syscalls from `/bin/pkg`
 (`src/cmd/pkg/host.cpp`), the kernel's own services from the suite
 (`test/unit/fakehost.h`) — which is how a check that must be tested keeps out of
 the half that cannot be. Anything needing a program to run belongs in
-`test/run.mjs`.
+`test/smoke/`, as a file and a line in `run.mjs`'s table.
+[doc/Testing.md](doc/Testing.md) is the whole of both suites.
 
 ## Architecture invariants
 
@@ -180,9 +191,9 @@ Further constraints, easy to violate by habit:
   views. Route JS-side access through a `view()` accessor.
 - **A process binary shares headers with the kernel, not code.** `src/proc/`
   links `alloc.cpp`, `result.cpp`, `text.cpp`, `fs/path.cpp` and `braam_ui` and
-  nothing else from the kernel's trees; `test/run.mjs` asserts each binary's
-  import list. Hence `panic` is declared in `host.h`, defined once per binary,
-  and takes `(ptr, len)` rather than a `Str`.
+  nothing else from the kernel's trees; `test/smoke/abi.mjs` asserts each
+  binary's import list. Hence `panic` is declared in `host.h`, defined once per
+  binary, and takes `(ptr, len)` rather than a `Str`.
 
 ### Keyboard, foreground and claims
 
@@ -307,7 +318,8 @@ argue in Concept.md first.
   fails on a forgotten line.
 - Exports are declared with `BRAAM_EXPORT("name")`, imports with
   `BRAAM_IMPORT("name")` — never by linker flag. Either changes the ABI: update
-  the expected surface in [test/run.mjs](test/run.mjs) in the same commit.
+  the expected surface in [test/smoke/abi.mjs](test/smoke/abi.mjs) in the same
+  commit.
 - `.clang-format` at the root is authoritative: 4-space indent, 100 columns.
   Types `PascalCase`, functions and variables `snake_case`, constants
   `SCREAMING_SNAKE`.
