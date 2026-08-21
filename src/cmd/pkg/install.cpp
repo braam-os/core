@@ -28,6 +28,7 @@ constexpr Str NO_MEMORY      = "pkg: out of memory\n";
 constexpr Str NOTHING        = "nothing installed\n";
 constexpr Str CANNOT_INSTALL = "pkg: cannot install:";
 constexpr Str CANNOT_REMOVE  = "pkg: cannot remove:";
+constexpr Str CANNOT_UPGRADE = "pkg: cannot upgrade:";
 constexpr Str CACHE_EXT      = ".zip";
 
 // Everything one run holds: a frame past 512 bytes costs a 64 KiB span.
@@ -515,9 +516,9 @@ Task<i32> begin(Txn &in, bool need_index)
             co_return bad;
 
         // /pkg/cache and /pkg/store must stand before anything writes into
-        // them. Only an install builds the tree: a removal writes nothing a
-        // generation has not already made, so making one would be the whole
-        // of what `pkg remove nonesuch` did.
+        // them. Only a command that wants the index builds the tree: a
+        // removal writes nothing a generation has not already made, so making
+        // one would be the whole of what `pkg remove nonesuch` did.
         Vec<StoreOp> tree;
         Result<void> made = Err(Error::NoMemory);
         if (!pkg_tree_ops(tree))
@@ -892,7 +893,7 @@ Task<i32> pkg_upgrade(Args args)
         co_return bad;
 
     in.flags = SOLVE_UPGRADE;
-    if (Task<i32> t = decide(in, CANNOT_INSTALL))
+    if (Task<i32> t = decide(in, CANNOT_UPGRADE))
         bad = co_await t;
     if (bad != 0)
         co_return bad;

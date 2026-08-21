@@ -28,8 +28,9 @@ written against 0.2's shell was a list of commands, and one written against
 ## One transaction, because the signature covers one file
 
 P20 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last of Phase E's
-commands that change the installed set. `pkg upgrade` is fifteen lines:
-`begin`, `SOLVE_UPGRADE`, `decide`, `settle`. The work was the fixture.
+commands that change the installed set. `pkg upgrade` is thirty lines of
+arity check, `begin`, `SOLVE_UPGRADE`, `decide`, `settle`. The work was the
+fixture.
 
 **It is one solve and one generation, and that is a requirement rather than a
 convenience.** §6's "the whole package set, signed as one file" is what stops
@@ -59,14 +60,25 @@ record are what the previous generation names, and that generation is what a
 rollback swings back to; `pkg clean` collects them at P22. Same rule as a
 removal's, and the smoke test asserts both are still there after an upgrade.
 
-**P18's different-digest refusal stays out of reach.** A bare upgrade sets no
-`SOLVE_AVAILABLE`, so a repository that republishes an installed version under
-new bytes loses: `compare_providers` skips its early `ipkg` rung under
-`SOLVE_UPGRADE`, but the late one at
-[solve.cpp:791](../src/cmd/pkg/solve.cpp#L791) still fires once the versions
-compare equal, and the installed package wins. No `Replacing`, so `stem_state`
-is never asked. That is exactly what apk's `-a` exists to override, and not
-building it is what keeps the store's immutability from ever being tested here.
+**P18's different-digest refusal is out of reach while the record and the index
+agree about a version** — which is the only state a working repository
+produces. A bare upgrade sets no `SOLVE_AVAILABLE`, so a repository that
+republishes an installed version under new bytes loses: `compare_providers`
+skips its early `ipkg` rung under `SOLVE_UPGRADE`, but its last rung still
+prefers the installed package once the versions compare equal. No `Replacing`,
+so `stem_state` is never asked. That is what apk's `-a` exists to override, and
+not building it is what keeps the store's immutability from being tested here.
+
+It is worth saying what that does *not* cover, since the first draft of this
+paragraph claimed more. Three rungs sit **above** the version comparison —
+`selectable`, `deps_used` and `conflicts` — and they can differ between two
+copies of one name-version when the *local record* and the index disagree about
+metadata: an installed stanza whose own `D:` nothing satisfies is disqualified
+by `disqualify_package`, and the index's copy then wins at an equal version.
+That is a `Replacing`, and it does reach the refusal. The right answer is still
+a refusal — §8 makes a store directory immutable and a rollback target may be
+executing out of it — but it is reachable, and by exactly the hand-doctored
+record P18's own suite plants.
 
 **Nor does `pkg upgrade` fetch an index first**, for the reason `pkg install`
 does not: §7's checks belong to the command that fetches one, and a command
