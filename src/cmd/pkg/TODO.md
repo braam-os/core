@@ -47,8 +47,11 @@ gone the same way: the six publisher tools — `tools/ed25519.py`, `signindex.py
 which writes `test/unit/repo.data` under keys it destroys — build and sign a
 repository, `mkindex.py` derives §6.1's `cmd:` names out of each package's
 `bin/` so no publisher writes one down, Package_Format.md §10 is the tutorial
-over them, and `rootfs/share/pkg/anchor` is signed by keys somebody holds. So
-this starts at P27.
+over them, and `rootfs/share/pkg/anchor` is signed by keys somebody holds. P27
+is gone with it: `test/run.mjs` refuses every attack §3 names, each at the §7
+step that stopped it, and `store.stall` in `test/fakefs.mjs` cuts a transaction
+between the store write and the rename so that a tab dying there is a case and
+not a claim. So this starts at P28.
 
 ## The shape being built
 
@@ -128,24 +131,6 @@ wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
 
 ## Phase G — the other side of the wire, and proof
-
-### P27. End to end
-
-A static repository fixture served by `test/fakesvc.mjs`, and `test/run.mjs`
-cases for the happy path and for every attack §3 names:
-
-- a tampered package — the hash does not match;
-- a wrong signature;
-- a signature by a key the anchor does not name;
-- one key's signature repeated to meet a threshold;
-- an expired index;
-- an index whose version went backwards;
-- a name the index does not list;
-- a body longer than the size the index gave;
-- a tab that dies between the store write and the `/pkg/active` rename.
-
-Each must be a refusal that says which check failed. A test that only proves the
-happy path proves nothing here.
 
 ### P28. Documentation
 

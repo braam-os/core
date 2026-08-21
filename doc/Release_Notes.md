@@ -25,6 +25,62 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Nine attacks, and the two that had nowhere to be refused
+
+P27, the end of Phase G. §3's table has been true since it was written and
+mostly tested since P15; what this adds is the three cases that were not, and a
+sentence about the four that read alike.
+
+**Two fixtures had been sitting unused since the day they were made.**
+`index.data`'s `@stranger` — an index signed by a key the anchor does not name —
+and the whole of `anchor.data`, which `run.mjs` had never opened. The C suite
+reads both, and what it proves there is that the *function* refuses. What only
+`run.mjs` can prove is that the refusal reaches a person: that `pkg update`
+prints it, exits 1, and records nothing. Those are different claims, and P27 is
+the one that wanted the second.
+
+**The counting rule is proven by a pair, not by a case.** `@repeat` meets
+`H:root 2` with one key's signature written twice. On its own, a test that it is
+refused proves only that *some* anchor with two `Y:` lines is refused — the file
+is unfamiliar in several ways at once. `@short` is one signature under the same
+threshold, and `@extra` is three signatures of which two count: that one is
+*accepted*, and the refusal moves on to `pkg: signature:` because `anchor.data`
+holds no key that signed `index.data`'s index. Three runs, three different
+outcomes, and the difference between them is where the rule lives. Swapping
+`@repeat` for `@extra` moves the message from `anchor:` to `signature:`, which
+is the check that the case is load-bearing.
+
+**Four of the nine attacks print the same line, and that is not a defect.**
+`trust_meet` returns a bare bool, so a wrong signature, a key the anchor does
+not name, a repeated signature and no signature at all are all
+`pkg: signature: permission denied`. §7 step 4 is one check; the step name is
+what says which check failed, and it does. Telling an attacker which way a
+forgery failed buys nothing, and a reason code would be a second thing to keep
+true. What keeps the tests honest is the pairing above rather than the wording.
+
+**A dying tab needed a request that never happens.** `store.defer` was the
+nearest thing and is the wrong shape: it performs the operation and withholds
+the *reply*, so a deferred rename still renames. `store.stall` is the other
+half — a predicate consulted before `perform`, so the matching request is
+neither performed nor answered. Stall the rename of `/pkg/active.new`, then
+throw the kernel away with `reopen()` and `instantiate()`, and the store is left
+exactly as a tab that died there leaves it. It is ten lines, and it is the only
+way to test the one step §8.3 calls the commit.
+
+**What the dead tab leaves is a working generation, and `pkg clean` keeps it.**
+The rename is the last operation, so everything above it — the store
+directories, the records, `/pkg/world`, the generation directory and its whole
+link farm — had already been written. After the reload nothing names it, so
+nothing is installed and `hi` is `not found`; the retry then builds generation
+*2*, because numbering runs past what is on disk rather than reusing a number.
+`pkg clean` then keeps generation 1: it is the highest below the active one,
+which is what a rollback swings back to, and nothing can distinguish a
+generation abandoned mid-commit from one that was superseded. That is the right
+answer rather than a missed collection, and the test proves it by swinging
+`/pkg/active` back and running the command out of it. §8.3's "rolling back is
+swinging the link back" now has a case where the thing rolled back to was never
+committed in the first place.
+
 ## An anchor somebody can sign again
 
 The rest of P26, and the end of it. `rootfs/share/pkg/anchor` names four keys

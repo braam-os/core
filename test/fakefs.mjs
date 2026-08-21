@@ -6,7 +6,9 @@
 // Replies are synchronous here, called from inside the import. A browser can
 // never do that, but the kernel cannot tell: wake() only queues a resumption,
 // and the tick that issued the request drains the queue on its way out. Set
-// `defer` to hold replies back and prove the parked path as well.
+// `defer` to hold replies back and prove the parked path as well, or `stall`
+// to hold a request back before it happens, which is a tab that died with one
+// in flight.
 
 import {
     E, OP, Request, SYNC, installOps, linkBytes, linkTarget, packEntries, packInfo, packStat,
@@ -66,6 +68,7 @@ export class FakeStore {
         this.unpacks = 0;
         this.defer = false;
         this.held = [];         // tokens whose replies are being withheld
+        this.stall = null;      // (op, path) => the request is never performed
     }
 
     usage() {
@@ -86,14 +89,20 @@ export class FakeStore {
     reopen() {
         this.handles = [];
         this.held = [];
+        this.stall = null;
     }
 }
 
 // `mem` is the shim run.mjs supplies; `kernel` returns the live instance's
 // exports, which change when the test re-instantiates.
 export function makeFakeImports(mem, store, kernel) {
+    // INFO and UNPACK carry no path; everything else names one.
+    function pathOf(r, op) {
+        return op === OP.INFO || op === OP.UNPACK ? "" : r.arg();
+    }
+
     function perform(r, op) {
-        const path = op === OP.INFO || op === OP.UNPACK ? "" : r.arg();
+        const path = pathOf(r, op);
         if (path && notDir(store, path))
             return r.fail(E.NOTDIR);
         switch (op) {
@@ -273,7 +282,16 @@ export function makeFakeImports(mem, store, kernel) {
 
     return {
         fs(op, token, req) {
-            perform(new Request(mem, req), op);
+            const r = new Request(mem, req);
+            // A stalled request is never performed and never answered, which
+            // is what a request in flight when the tab died looks like from
+            // the store's side. `defer` is the other half: performed, answered
+            // later.
+            if (store.stall && store.stall(op, pathOf(r, op))) {
+                store.held.push(token);
+                return;
+            }
+            perform(r, op);
             if (store.defer)
                 store.held.push(token);
             else
