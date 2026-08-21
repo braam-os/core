@@ -34,6 +34,7 @@ void test_stanza();
 void test_trust();
 void test_index();
 void test_solve();
+void test_plan();
 void test_text();
 void test_procfs();
 void test_pane();
@@ -118,6 +119,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_index(); // after trust: the pipeline stands on it
     test_solve(); // after dep and version, which it decides with
     test_db();    // after dep: world is a list of dependency tokens
+    test_plan();  // after solve and db: a changeset as texts and steps
     test_zip(); // after sha256 and svc: rootfs.zip is compared by digest
     test_procfs();
 

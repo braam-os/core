@@ -18,7 +18,6 @@ namespace {
 constexpr Str USAGE_SEARCH = "usage: pkg search <pattern>\n";
 constexpr Str USAGE_INFO   = "usage: pkg info <package>\n";
 constexpr Str USAGE_LIST   = "usage: pkg list\n";
-constexpr Str NO_INDEX     = "pkg: no index; run pkg update\n";
 constexpr Str NO_MEMORY    = "pkg: out of memory\n";
 
 // `info`'s label column, and the gap between the columns of a listing.
@@ -42,57 +41,6 @@ bool pad_to(String &out, Str s, usize w)
 }
 
 // ------------------------------------------------------------ the two files
-
-// /pkg/index as `pkg update` left it. 0 is a read index; anything else is the
-// exit status, its refusal already printed.
-Task<i32> load(CheckedIndex &c)
-{
-    Result<String> text = Err(Error::NoMemory);
-    if (Task<Result<String>> t = store_slurp(PKG_INDEX))
-        text = co_await t;
-    if (text.is_err()) {
-        if (text.error() == Error::Cancelled)
-            co_return 130;
-        if (Task<void> e = errln("pkg", PKG_INDEX, text.error()))
-            co_await e;
-        co_return 1;
-    }
-    if (text.value().empty()) {
-        if (Task<Result<void>> t = put(SYS_STDERR, NO_INDEX))
-            co_await t;
-        co_return 1;
-    }
-
-    Result<void> r = index_read(move(text.value()), c);
-    if (r.is_err()) {
-        if (Task<void> e = errln("pkg", PKG_INDEX, r.error()))
-            co_await e;
-        co_return 1;
-    }
-    co_return 0;
-}
-
-// The active generation's packages file. An empty `path` is no generation.
-Task<Result<void>> generation(String &path, String &text)
-{
-    Result<u32> gen = Err(Error::NoMemory);
-    if (Task<Result<u32>> t = store_active())
-        gen = co_await t;
-    if (gen.is_err())
-        co_return Err(gen.error());
-    if (gen.value() == 0)
-        co_return Result<void>();
-
-    if (!pkg_gen_dir(gen.value(), "packages", path))
-        co_return Err(Error::NoMemory);
-    Result<String> got = Err(Error::NoMemory);
-    if (Task<Result<String>> t = store_slurp(path.str()))
-        got = co_await t;
-    if (got.is_err())
-        co_return Err(got.error());
-    text = move(got.value());
-    co_return Result<void>();
-}
 
 // The version the generation carries for `name`. A view into `text`.
 Str installed_of(Str text, Str name)
@@ -234,7 +182,7 @@ Task<i32> pkg_search(Args args)
     }
 
     i32 bad = 1;
-    if (Task<i32> t = load(*held.p))
+    if (Task<i32> t = pkg_load_index(*held.p))
         bad = co_await t;
     if (bad != 0)
         co_return bad;
@@ -291,7 +239,7 @@ Task<i32> pkg_info(Args args)
     }
 
     i32 bad = 1;
-    if (Task<i32> t = load(*held.p))
+    if (Task<i32> t = pkg_load_index(*held.p))
         bad = co_await t;
     if (bad != 0)
         co_return bad;
@@ -308,7 +256,7 @@ Task<i32> pkg_info(Args args)
 
     String path, text;
     Result<void> g = Err(Error::NoMemory);
-    if (Task<Result<void>> t = generation(path, text))
+    if (Task<Result<void>> t = pkg_generation(path, text))
         g = co_await t;
     if (g.is_err()) {
         if (g.error() == Error::Cancelled)
@@ -341,7 +289,7 @@ Task<i32> pkg_list(Args args)
 
     String path, text;
     Result<void> g = Err(Error::NoMemory);
-    if (Task<Result<void>> t = generation(path, text))
+    if (Task<Result<void>> t = pkg_generation(path, text))
         g = co_await t;
     if (g.is_err()) {
         if (g.error() == Error::Cancelled)

@@ -5,7 +5,9 @@ add_library(braam_pkg STATIC
     encode.cpp
     host.cpp
     index.cpp
+    install.cpp
     pkg.cpp
+    plan.cpp
     query.cpp
     sha256.cpp
     solve.cpp

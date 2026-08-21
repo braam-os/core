@@ -25,6 +25,148 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## One rename, and everything above it is a check
+
+P18 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `pkg install` is
+Package_Management.md §7's steps 8 to 10 and then §8.3's commit: fetch each
+package capped at the size the index gave, hash what arrived, and only then
+unzip into `/pkg/store/`, build `/pkg/gen/<N>/` whole and swing `/pkg/active`
+onto it. `solve.cpp`, `gen_ops`, `zip_read` and `store_commands` all get their
+first caller.
+
+**§7's crossing is a function, not a comment.** The rule — *nothing is
+unzipped, written to the store, or run before its hash matches a hash from a
+signed index* — is the whole point of the task, so it is `index_fetch` in
+[index.cpp](../src/cmd/pkg/index.cpp): it derives the URL from the header's
+`N`, caps the body at `S` through the `ZipSink` the index fetch already used,
+and returns `Err` unless `package_check` agrees on both the size and the
+digest. It lives beside steps 1 to 7 rather than in `install.cpp` because
+`index.cpp` takes a `PkgHost` and is compiled into `tests.wasm`, so the two
+refusals that matter most — a byte changed after signing, a body longer than
+`S` — are driven by `ctest -R unit` and not only by the browser harness. What
+crosses the line in `install.cpp` is then two statements with the rule written
+between them.
+
+**The record is what a reinstall re-checks, so it decides three ways.** §7 says
+`pkg` keeps its own record of which index version vouched for what, *so that a
+reinstall re-checks rather than believing the disk*. `/pkg/db/<stem>` is that
+record and `stem_state` reads it before any fetch: no record means rebuild, a
+record whose `C` is the one the index gives now means there is nothing to do,
+and a record whose `C` differs is a **refusal**. The third row is the one that
+matters. A store directory is keyed by `<name>-<version>` and §8 makes it
+immutable once written, so a repository that republishes a version under new
+bytes would otherwise have `pkg` write over files a live generation is
+executing out of. Refusing costs a rebuild nobody asked for and keeps the
+property the task exists for.
+
+**Rebuilding is safe because records are written last.** A `Remove` of a store
+directory is only reachable when there is no db record for it, and a record is
+only written at the commit — so no committed generation can name a directory
+this run is willing to destroy. That one ordering is what lets a dead tab's
+half-unpack be cleared without a rule about which generations are live.
+
+**Nothing under `/pkg/db` is written before every package has unpacked.** Each
+record is serialised into memory as its package finishes, because a `DbFile`
+views the archive and the archive is released next, and the texts go out with
+the commit. The commit is then one list — a `Write` per record, `/pkg/world`,
+then `gen_ops` — performed by one `store_perform` that ends in the rename. A
+failure before it leaves store directories nothing refers to, which is
+`pkg clean`'s to collect, and `/pkg/active` where it was.
+
+**`^C` is the tab dying, and that is not a gap.** System_Calls.md §8:
+`Cancelled` never reaches a process, because the instance is dropped and
+[rt.h](../src/proc/rt.h) says a killed process never unwinds. So no cleanup of
+`pkg`'s runs on `^C`, and the `Error::Cancelled → 130` mapping is convention
+rather than machinery. The property the task asks for does not come from a
+handler: it comes from the ordering, and it holds for a killed process, a
+closed tab and a crashed one alike.
+
+**World runs ahead of the generation, never behind.** `/pkg/world` is written
+in the same list as the commit but before the rename, so a tab that dies
+between them leaves a wish nothing fulfils — which the same command run again
+fixes. The other order would leave a package installed that nothing explicitly
+wants, and only `pkg autoremove` would ever find it. For the same reason an
+install with nothing to do still writes world: making an implicit package
+explicit must not be silent.
+
+**The generation number counts directories, not the active link.** `N` is one
+past the highest `/pkg/gen/<n>`. After a rollback — which §8.3 says is swinging
+the link back — the active generation is not the highest one, and
+`store_active() + 1` would have `gen_ops`'s leading `Remove` destroy exactly
+the generation P22 is told to keep.
+
+**The cache is re-hashed, not believed.** `/pkg/cache/<name>-<version>.zip` is
+written *after* the digest matched, so no unverified bytes ever reach the disk,
+and a later install uses it only when it hashes to what the index says now.
+That departs from the task's wording, which had the download streamed into the
+cache as it arrived; the archive is held whole for `zip_entries` either way, so
+streaming bought no memory and cost the crossing its strictness. What it buys
+instead is real: install, roll back, install again costs no network.
+
+**`I` stops being decoration.** `S` bounds the compressed archive and says
+nothing about what it unpacks to. `I` is inside the signed body and therefore
+as trusted as `C`, so the payload entries' declared sizes must sum to no more
+than it, and to no more than `UNPACK_MAX` when a stanza carries none — which
+bounds a single entry too. `PACKAGE_MAX` bounds `S` itself at four megabytes,
+since the archive is held whole and a process has sixteen.
+
+**`.PKGINFO` cannot be a §3.2 stanza, and the format now says so.** `C` and `S`
+name the archive and cannot be inside it, so `package_read` — which requires
+both — would refuse every well-formed one. Package_Format.md §5.1 gains the
+sentence: `.PKGINFO` is required, carries §3.2's letters less those two, is
+read field by field, and `P` and `V` are what must agree with the index, since
+they are what choose the store directory and the generation's line. Comparing
+the list fields as well would refuse a good package over a space.
+
+**The refusal names the step, the way `pkg update`'s does.** `pkg:
+libz-1.0-r0: digest: permission denied` and `pkg: libz-1.0-r0: package:
+invalid` are one `Error` and two answers, and the word between the colons is
+the difference — `IndexStep` gains `Package` and `Digest` for exactly that.
+
+**`install.cpp` keeps its own printer.** apk's verbs are what a changeset
+reads as, and `plan.cpp` holds them, but `test/unit/test_solve.cpp`'s
+`render()` is left alone rather than rewired through the product: the fixture
+format is a fixture format, and coupling 72 cases to a command's output would
+make improving one of them break the other. `plan_verb` returning an empty
+verb doubles as the test for whether a change is work, so the plan that is
+printed and the work that is done come off one function and cannot drift.
+
+**The installed set has to come out of `/pkg/db`, and that is not tidiness.**
+`solve()` keys package identity on the digest, so stanzas synthesised from a
+generation's name-and-version lines would all carry the same thirty-two zero
+bytes and collapse into one package. A generation line with no readable record
+is therefore a refusal naming the file — a store the database does not
+describe is broken, and P21 is where that gets diagnosed.
+
+**Four of P26's tools arrived early, because a signed happy path needs them.**
+`test/unit/index.data`'s keys were destroyed when it was signed, so no package
+could be added to it and no fixture could be signed under it. Rather than
+regenerate that file — which would have meant re-deriving its eight attack
+variants and every literal digest asserted over them — `tools/mkrepo.py`
+writes a second fixture, `test/unit/repo.data`: its own anchor, one signed
+index and two small packages, over throwaway keys generated in a temporary
+directory and destroyed before it returns. §9 stays true, and `index.data` and
+every refusal tested against it keep the bytes they always had.
+`tools/ed25519.py` is the only thing in the tree that imports `cryptography`,
+and only signing needs it — what is checked in was signed once, and verifying
+is `Sys::Verify`.
+
+**The packages are shell scripts, so the fixture is two kilobytes.** A `#!`
+file is a program here, which `exec_resolve` chases, so `hello`'s `bin/hi` is
+three lines and the smoke test can prove the whole of activation by typing
+`hi` at a prompt: `/pkg/bin` is the second component of the default search
+list, and nothing had to be told a generation appeared.
+
+**`test/fakesvc.mjs` learns to answer with bytes.** A route body was
+`TextEncoder`-ed, and a zip does not survive that. One line, in the shared
+fake, so a package can be served at all.
+
+**`/bin/pkg` is 171 KB, from 86.** `solve.cpp` and the newly reachable bodies
+of `zip.cpp`, `unzip.cpp` and `db.cpp` are most of it. The staging tree is
+973,441 bytes against `tools/size_budget.txt`'s 1 MiB, so it fits — but P19 to
+P22 all land on this one binary, and that is 75 KB of room. Raising the number
+is a deliberate act; this is the entry that says when the trend started.
+
 ## A solver with no way back, and 72 fixtures that say so
 
 P17 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `solve.cpp` is apk's

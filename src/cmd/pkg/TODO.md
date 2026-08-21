@@ -19,18 +19,24 @@ Package_Format.md, and the two host operations are in System_Calls.md. Phase C
 went with them, P5 to P12: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
-`version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp`, `db.cpp`, `trust.cpp` and
-`index.cpp` are the digest, the two encodings, apk's version grammar, the
-dependency token, the stanza grammar with its records, the zip's directory,
-`/pkg`'s layout, the anchor's checks and §7's pipeline, compiled into
-`tests.wasm` as well — the last two because they take a `PkgHost` rather than
-calling a syscall. `unzip.cpp` inflates an entry, `store.cpp` performs the steps
-`db.cpp` computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`
-and `query.cpp` are the subcommands there are; those five are the pieces that
-stay out, and `solve.cpp` is in with the first list, being pure. Phase D is
-done, and of Phase E `pkg update` writes `/pkg/index`, `pkg search`, `pkg info`
-and `pkg list` read it and the generation beside it, and the solver computes a
-changeset nothing yet performs. So this starts at P18.
+`version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp`, `db.cpp`, `trust.cpp`,
+`index.cpp` and `plan.cpp` are the digest, the two encodings, apk's version
+grammar, the dependency token, the stanza grammar with its records, the zip's
+directory, `/pkg`'s layout, the anchor's checks, §7's pipeline and what a
+changeset means, compiled into `tests.wasm` as well — `trust.cpp` and
+`index.cpp` because they take a `PkgHost` rather than calling a syscall.
+`unzip.cpp` inflates an entry, `store.cpp` performs the steps `db.cpp`
+computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`,
+`query.cpp` and `install.cpp` are the subcommands there are; those six are the
+pieces that stay out, and `solve.cpp` is in with the first list, being pure.
+Phase D is done, and of Phase E `pkg update` writes `/pkg/index`, `pkg search`,
+`pkg info` and `pkg list` read it and the generation beside it, and
+`pkg install` performs the solver's changeset. So this starts at P19.
+
+Four of P26's tools came early with P18, which needed a signed repository to
+install from: `tools/ed25519.py`, `signindex.py`, `mkanchor.py`, `mkpkg.py`,
+`mkindex.py` and the fixture driver `mkrepo.py`, which writes
+`test/unit/repo.data` under keys it destroys.
 
 ## The shape being built
 
@@ -111,27 +117,6 @@ large crosses the ABI. That is P6.
 
 ## Phase E — the commands
 
-### P18. `pkg install <package>...`
-
-§7's steps 8 to 10, then activation.
-
-1. Fetch each package **capped at the exact size the index gave**.
-2. Stream it through SHA-256 while writing it to `/pkg/cache/`.
-3. Compare hash **and** size against the index.
-4. Only now unzip, into `/pkg/store/<name>-<version>/`.
-5. Write `/pkg/gen/<N+1>/packages`, and materialise its `bin/` link farm.
-6. Write `/pkg/active.new` and `Sys::Rename` it over `/pkg/active`.
-
-Step 3 to step 4 is the rule's only crossing point, and it should read that way
-in the code.
-
-Record the index version that vouched for each package (§7's last paragraph), so
-a reinstall re-checks rather than believing the disk.
-
-Done when: an install works, a hash mismatch leaves nothing behind, and killing
-the tab between steps 5 and 6 leaves the old generation active — the link never
-having moved.
-
 ### P19. `pkg remove` / `pkg autoremove`
 
 `/pkg/world` is the explicitly-installed set. `remove` takes a name out of it
@@ -203,16 +188,13 @@ glob matches a directory the transaction modified.
 
 ### P26. Publisher tools
 
-- `tools/mkpkg.py` — a package zip, reproducible: reuse `pack.py`'s `stamp()`
-  and `MODE` rather than restating them.
-- `tools/mkindex.py` — the index, including the `cmd:` auto-provides scanned
-  out of each package.
-- `tools/signindex.py` — Ed25519, and the `Y:` block Package_Format.md §2
-  defines. It must compute the signed region the way `pkg` does, which is the
-  one place a publisher and a client can disagree in silence.
-- `tools/mkanchor.py` — the anchor, signed by a threshold of root keys, and
-  what replaces the placeholder `rootfs/share/pkg/anchor` P13 shipped, whose
-  private halves were destroyed the moment it was signed.
+The five that build and sign came early, with P18. What is left:
+
+- `tools/mkindex.py` — the `cmd:` auto-provides scanned out of each package,
+  which is P23's grammar and not yet written down.
+- A real `rootfs/share/pkg/anchor`, signed by keys somebody holds, replacing
+  the placeholder P13 shipped, whose private halves were destroyed the moment
+  it was signed. `tools/mkanchor.py` is what signs it.
 
 §9 is absolute and this is where it is at risk. **No private key** may be in the
 git tree, in anything built from it, inside `rootfs.zip`, or anywhere a browser

@@ -256,7 +256,12 @@ the new version, and on an upgrade the old one after it.
   uppercase rule applied to an entry name.
 - **`.PKGINFO` authorises nothing**; the index does. It exists so `/pkg/db` can
   be written without keeping the index, and one that disagrees with the index
-  stanza that vouched for the package is a refusal.
+  stanza that vouched for the package is a refusal. It is **required**, and it
+  carries §3.2's letters **less `C` and `S`**, which name the archive and
+  cannot be inside it — so it is not a whole §3.2 stanza and a reader takes it
+  field by field. **`P` and `V` are what must agree**: they choose the store
+  directory and the generation's line, and a list field differing by a space
+  would refuse a package that is not wrong.
 
 ### 5.2 What the reader accepts
 
@@ -362,17 +367,22 @@ digit{.digit}...{letter}{_suf{#}}...{~hash}{-r#}
 Under `/pkg`, which the archive does not carry (Concept.md §5.1).
 
 ```
-/pkg/repositories              one URL per line; today, one line
-/pkg/index                     the last checked index, signature block and all
-/pkg/store/<name>-<version>/   unpacked, checked, immutable once written
-/pkg/db/<name>-<version>       what was installed, and what vouched for it
-/pkg/gen/<N>/packages          a generation: the installed set
-/pkg/gen/<N>/bin/<cmd>         a symlink into /pkg/store
-/pkg/active                    a symlink to gen/<N> — the commit point
-/pkg/bin                       a symlink to active/bin — what PATH names
-/pkg/world                     the explicitly-installed set
-/pkg/cache/                    downloaded zips; `pkg clean` empties this
+/pkg/repositories                one URL per line; today, one line
+/pkg/index                       the last checked index, signature and all
+/pkg/store/<name>-<version>/     unpacked, checked, immutable once written
+/pkg/db/<name>-<version>         what was installed, and what vouched for it
+/pkg/gen/<N>/packages            a generation: the installed set
+/pkg/gen/<N>/bin/<cmd>           a symlink into /pkg/store
+/pkg/active                      a symlink to gen/<N> — the commit point
+/pkg/bin                         a symlink to active/bin — what PATH names
+/pkg/world                       the explicitly-installed set
+/pkg/cache/<name>-<version>.zip  a downloaded zip; `pkg clean` empties this
 ```
+
+The cache leaf is §3.3's URL leaf, so a cached archive is named by what it is
+rather than by where it came from. It is **re-hashed against the index every
+time it is used** and never believed for being on disk, which is what lets it
+skip a download without skipping a check.
 
 **A generation is a directory**, holding the text and the links together, so one
 `Sys::Rename` of `/pkg/active` commits both.

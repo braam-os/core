@@ -28,14 +28,6 @@ Task<Result<void>> sayln(Str text)
     co_return co_await put(SYS_STDOUT, "\n");
 }
 
-// <repo>/index would otherwise be //index, which nothing answers.
-Str trimmed(Str repo)
-{
-    while (repo.size() > 1 && repo[repo.size() - 1] == '/')
-        repo = repo.substr(0, repo.size() - 1);
-    return repo;
-}
-
 Task<Result<void>> record(const CheckedIndex &c)
 {
     Vec<StoreOp> ops;
@@ -83,7 +75,7 @@ Task<i32> pkg_update(Args args)
         co_return 1;
     }
 
-    Str repo = trimmed(repos[0]);
+    Str repo = repo_trim(repos[0]);
     if (Task<Result<void>> t = sayln(repo))
         co_await t;
 

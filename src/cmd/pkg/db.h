@@ -4,6 +4,7 @@
 // Syscall-free. Every Str views the text the caller holds.
 #pragma once
 
+#include "dep.h"
 #include "kernel/span.h"
 #include "kernel/str.h"
 #include "kernel/string.h"
@@ -36,6 +37,9 @@ bool pkg_gen_dir(u32 n, Str leaf, String &out);
 // The generation a /pkg/active target names, or 0. Absolute or relative.
 u32 gen_of(Str target);
 
+// A generation directory's own name as a number, or 0. At most nine digits.
+u32 gen_number(Str name);
+
 // ------------------------------------------------------- §8.2, the two files
 
 // One line of /pkg/gen/<N>/packages: two fields, positional, both required.
@@ -52,8 +56,19 @@ bool packages_read(Str text, Vec<Installed> &out);
 bool world_write(Span<const Str> deps, String &out);
 bool world_read(Str text, Vec<Str> &out);
 
+// A §6 token folded in: a name already there is replaced where it stands, a
+// new one appended.
+bool world_push(Vec<Str> &specs, Str spec, bool &changed);
+
+// The lines as dependencies. One that does not parse is dropped.
+bool world_deps(Span<const Str> specs, Vec<Dep> &out);
+
 // One URL per line; a blank line is skipped.
 bool repos_read(Str text, Vec<Str> &out);
+
+// A zip entry name split for §8.1's F and R: "bin/hi" is "bin" and "hi",
+// "README" is "" and "README". path_dirname answers "/" for the second.
+void db_split(Str entry, Str &dir, Str &name);
 
 // ------------------------------------------------------------------ the steps
 

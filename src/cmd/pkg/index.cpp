@@ -1,7 +1,9 @@
 #include "index.h"
 
 #include "db.h"
+#include "dep.h"
 #include "kernel/traits.h"
+#include "sha256.h"
 #include "trust.h"
 #include "zip.h"
 
@@ -73,8 +75,8 @@ Task<Result<u64>> floor_of(PkgHost &h)
     co_return head.version;
 }
 
-// The body, refused past INDEX_MAX rather than truncated (§3's endless data).
-Task<Result<String>> fetch_capped(PkgHost &h, Str url)
+// The body, refused past the cap rather than truncated (§3's endless data).
+Task<Result<String>> fetch_capped(PkgHost &h, Str url, u64 cap)
 {
     u32 status     = 0;
     Result<i32> fd = Err(Error::NoMemory);
@@ -83,7 +85,7 @@ Task<Result<String>> fetch_capped(PkgHost &h, Str url)
     if (fd.is_err())
         co_return Err(fd.error());
 
-    ZipSink sink(INDEX_MAX);
+    ZipSink sink(cap);
     Error failure = Error::Invalid;
     bool ok       = false;
     if (status == 200) {
@@ -114,6 +116,13 @@ Task<Result<String>> fetch_capped(PkgHost &h, Str url)
 
 } // namespace
 
+Str repo_trim(Str url)
+{
+    while (url.size() > 1 && url[url.size() - 1] == '/')
+        url = url.substr(0, url.size() - 1);
+    return url;
+}
+
 Str index_step_name(IndexStep s)
 {
     switch (s) {
@@ -133,6 +142,10 @@ Str index_step_name(IndexStep s)
         return "expiry";
     case IndexStep::Read:
         return "read";
+    case IndexStep::Package:
+        return "package";
+    case IndexStep::Digest:
+        return "digest";
     }
     return "?";
 }
@@ -167,7 +180,7 @@ Task<Result<void>> index_check(PkgHost &h, Str repo, CheckedIndex &out, IndexSte
     if (!url.append(repo) || !url.append(INDEX_LEAF))
         co_return Err(Error::NoMemory);
     Result<String> text = Err(Error::NoMemory);
-    if (Task<Result<String>> t = fetch_capped(h, url.str()))
+    if (Task<Result<String>> t = fetch_capped(h, url.str(), INDEX_MAX))
         text = co_await t;
     if (text.is_err())
         co_return Err(text.error());
@@ -242,4 +255,64 @@ const PackageStanza *index_find(const CheckedIndex &c, Str name)
         if (p.name == name)
             return &p;
     return nullptr;
+}
+
+const PackageStanza *index_provides(const CheckedIndex &c, Str name)
+{
+    if (const PackageStanza *p = index_find(c, name))
+        return p;
+    for (const PackageStanza &p : c.packages) {
+        Str rest = p.provides, spec;
+        while (dep_next(rest, spec)) {
+            Dep d;
+            if (dep_parse(spec, d) != DepParse::Malformed && d.name == name)
+                return &p;
+        }
+    }
+    return nullptr;
+}
+
+bool package_check(const PackageStanza &p, Str bytes)
+{
+    if (bytes.size() != p.size)
+        return false;
+
+    u8 got[SHA256_SIZE];
+    sha256(Bytes(reinterpret_cast<const u8 *>(bytes.data()), bytes.size()), got);
+    for (usize i = 0; i < SHA256_SIZE; i++)
+        if (got[i] != p.digest[i])
+            return false;
+    return true;
+}
+
+Task<Result<void>> index_fetch(PkgHost &h, const CheckedIndex &c, const PackageStanza &p,
+                               String &out, IndexStep &step)
+{
+    // §3.3: the URL is derived from the header's N, never carried by a record.
+    step     = IndexStep::Package;
+    Str repo = repo_trim(c.head.url);
+    if (repo.empty())
+        co_return Err(Error::Invalid);
+    if (p.size == 0 || p.size > PACKAGE_MAX)
+        co_return Err(Error::Unsupported);
+
+    String stem, url;
+    if (!pkg_stem(p.name, p.version, stem))
+        co_return Err(Error::NoMemory);
+    if (!url.assign(repo) || !url.push('/') || !url.append(stem.str()) || !url.append(".zip"))
+        co_return Err(Error::NoMemory);
+
+    Result<String> text = Err(Error::NoMemory);
+    if (Task<Result<String>> t = fetch_capped(h, url.str(), p.size))
+        text = co_await t;
+    if (text.is_err())
+        co_return Err(text.error());
+
+    // ------------------------------ §7 step 9, and nothing has been written.
+    step = IndexStep::Digest;
+    if (!package_check(p, text.value().str()))
+        co_return Err(Error::Perm);
+
+    out = move(text.value());
+    co_return Result<void>();
 }

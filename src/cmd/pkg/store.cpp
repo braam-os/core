@@ -4,7 +4,19 @@
 
 namespace {
 
-Task<Result<void>> write_file(Str path, Str bytes)
+// ln -sf: what stands there goes, unfollowed, and nothing to remove is fine.
+Task<Result<void>> relink(Str target, Str path)
+{
+    if (Task<Result<void>> t = remove_path(path, false))
+        (void)co_await t;
+    if (Task<Result<void>> t = make_link(target, path))
+        co_return co_await t;
+    co_return Err(Error::NoMemory);
+}
+
+} // namespace
+
+Task<Result<void>> store_write(Str path, Str bytes)
 {
     Task<Result<i32>> op = open_at(path, SYS_O_WRITE | SYS_O_CREATE | SYS_O_TRUNC);
     if (!op)
@@ -21,18 +33,6 @@ Task<Result<void>> write_file(Str path, Str bytes)
     co_return w;
 }
 
-// ln -sf: what stands there goes, unfollowed, and nothing to remove is fine.
-Task<Result<void>> relink(Str target, Str path)
-{
-    if (Task<Result<void>> t = remove_path(path, false))
-        (void)co_await t;
-    if (Task<Result<void>> t = make_link(target, path))
-        co_return co_await t;
-    co_return Err(Error::NoMemory);
-}
-
-} // namespace
-
 Task<Result<void>> store_perform(Span<const StoreOp> ops)
 {
     for (const StoreOp &op : ops) {
@@ -43,7 +43,7 @@ Task<Result<void>> store_perform(Span<const StoreOp> ops)
                 r = co_await t;
             break;
         case StoreOpKind::Write:
-            if (Task<Result<void>> t = write_file(op.path.str(), op.data.str()))
+            if (Task<Result<void>> t = store_write(op.path.str(), op.data.str()))
                 r = co_await t;
             break;
         case StoreOpKind::Link:
@@ -119,7 +119,7 @@ Task<Result<void>> store_db_put(const DbRecord &r)
     String path, text;
     if (!pkg_db_file(r.pkg.name, r.pkg.version, path) || !db_write(r, text))
         co_return Err(Error::NoMemory);
-    if (Task<Result<void>> t = write_file(path.str(), text.str()))
+    if (Task<Result<void>> t = store_write(path.str(), text.str()))
         co_return co_await t;
     co_return Err(Error::NoMemory);
 }

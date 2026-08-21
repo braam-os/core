@@ -25,6 +25,7 @@ add_executable(tests
     unit/test_sched.cpp
     unit/test_screen.cpp
     unit/test_sha256.cpp
+    unit/test_plan.cpp
     unit/test_solve.cpp
     unit/test_stanza.cpp
     unit/test_expand.cpp
@@ -70,11 +71,12 @@ add_executable(tests
     # trust.cpp and index.cpp take a PkgHost, so the suite hands them the
     # kernel's own services where /bin/pkg hands them syscalls. unzip.cpp is
     # the half that inflates, store.cpp the half that writes and host.cpp the
-    # half that performs; all three stay out.
+    # half that performs; those three and install.cpp stay out.
     ../src/cmd/pkg/db.cpp
     ../src/cmd/pkg/dep.cpp
     ../src/cmd/pkg/encode.cpp
     ../src/cmd/pkg/index.cpp
+    ../src/cmd/pkg/plan.cpp
     ../src/cmd/pkg/sha256.cpp
     ../src/cmd/pkg/solve.cpp
     ../src/cmd/pkg/stanza.cpp

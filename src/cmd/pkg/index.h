@@ -14,10 +14,16 @@
 // Well below SYS_STAGE_MAX, which Sys::Verify stages whole.
 constexpr usize INDEX_MAX = 1u << 19;
 
+// The most a package archive may be, whatever S says: it is held whole.
+constexpr u64 PACKAGE_MAX = 4u << 20;
+
 constexpr u32 INDEX_GRAMMAR = 1;
 
 // The index is at <N>/index (Package_Format.md §3.3).
 constexpr Str INDEX_LEAF = "/index";
+
+// A repository URL without its trailing slashes: <N>/index would be //index.
+Str repo_trim(Str url);
 
 // §7's order, and the step a refusal stopped at.
 enum class IndexStep {
@@ -29,6 +35,8 @@ enum class IndexStep {
     Version,   // 5
     Expiry,    // 6
     Read,      // 7
+    Package,   // 8, and the cap
+    Digest,    // 9
 };
 
 Str index_step_name(IndexStep s);
@@ -57,3 +65,15 @@ Result<void> index_read(String text, CheckedIndex &out);
 // A name the index does not list does not exist, and is not looked for
 // anywhere else (§7 step 7).
 const PackageStanza *index_find(const CheckedIndex &c, Str name);
+
+// The same under P or under p: a name the index offers. `cmd:awk` is one.
+const PackageStanza *index_provides(const CheckedIndex &c, Str name);
+
+// §7 step 9: the size and the digest the index gave, against what arrived.
+bool package_check(const PackageStanza &p, Str bytes);
+
+// §7 step 8: <N>/<name>-<version>.zip (§3.3), capped at the exact size the
+// index gave, then step 9. Nothing under /pkg is touched until this is Ok —
+// the rule's only crossing point.
+Task<Result<void>> index_fetch(PkgHost &h, const CheckedIndex &c, const PackageStanza &p,
+                               String &out, IndexStep &step);

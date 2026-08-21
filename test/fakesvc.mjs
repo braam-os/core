@@ -138,7 +138,10 @@ export function makeFakeSvc(mem, net, kernel) {
                 body = {
                     status: route.status,
                     headers: utf8.encode(route.headers),
-                    left: utf8.encode(route.body),
+                    // A package is a zip, and a zip does not survive a
+                    // TextEncoder, so a route may answer with bytes.
+                    left: typeof route.body === "string"
+                        ? utf8.encode(route.body) : route.body,
                 };
                 kernel().ref(r.get("ref"), body);
             }

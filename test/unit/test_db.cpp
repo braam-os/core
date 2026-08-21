@@ -1,4 +1,5 @@
 #include "cmd/pkg/db.h"
+#include "cmd/pkg/stanza.h"
 #include "harness.h"
 
 namespace {
@@ -176,5 +177,68 @@ void test_db()
         CHECK(ops[2].path.str() == "/pkg/gen/1/packages" && ops[2].data.empty());
         CHECK(ops[5].kind == StoreOpKind::Rename);
         CHECK(ops[5].path.str() == "/pkg/active.new" && ops[5].data.str() == "/pkg/active");
+    }
+
+    // An operand joins world by name: a token already there is replaced where
+    // it stands, and one that says the same thing changes nothing.
+    {
+        Vec<Str> specs;
+        bool changed = false;
+        CHECK(world_read("awk\nless>=1.6\n", specs));
+        CHECK(world_push(specs, "less", changed) && changed);
+        CHECK_EQ(specs.size(), 2);
+        CHECK(specs[0] == "awk" && specs[1] == "less");
+
+        CHECK(world_push(specs, "less", changed) && !changed);
+        CHECK(world_push(specs, "hello", changed) && changed);
+        CHECK_EQ(specs.size(), 3);
+        CHECK(specs[2] == "hello");
+
+        String out;
+        CHECK(world_write(specs, out));
+        CHECK(out.str() == "awk\nless\nhello\n");
+    }
+
+    // The lines as dependencies, and one that is not a token at all is not.
+    {
+        Vec<Str> specs;
+        Vec<Dep> deps;
+        CHECK(world_read("awk\n<broken\nless>=1.6\n", specs));
+        CHECK(world_deps(specs, deps));
+        CHECK_EQ(deps.size(), 2);
+        CHECK(deps[0].name == "awk" && deps[1].name == "less" && deps[1].version == "1.6");
+    }
+
+    // §8.1's F and R. A file at the top of a package has an empty F, which is
+    // one character from being unwritable and is what this pins.
+    {
+        Str dir, name;
+        db_split("bin/hi", dir, name);
+        CHECK(dir == "bin" && name == "hi");
+        db_split("share/a/b", dir, name);
+        CHECK(dir == "share/a" && name == "b");
+        db_split("README", dir, name);
+        CHECK(dir.empty() && name == "README");
+    }
+    {
+        DbRecord r;
+        r.pkg.name    = "awk";
+        r.pkg.version = "1.2-r0";
+        r.pkg.size    = 7;
+        CHECK(r.files.push(DbFile{ "", "README", {} }));
+        CHECK(r.files.push(DbFile{ "bin", "awk", {} }));
+
+        String text;
+        CHECK(db_write(r, text));
+        CHECK(text.str().find("F:\nR:README\n") != Str::npos);
+        CHECK(text.str().find("F:bin\nR:awk\n") != Str::npos);
+
+        Vec<StanzaField> f;
+        DbRecord back;
+        CHECK(StanzaReader::one(text.str(), STANZA_DB, f));
+        CHECK(db_read(f, back) == StanzaRead::Ok);
+        CHECK_EQ(back.files.size(), 2);
+        CHECK(back.files[0].dir.empty() && back.files[0].name == "README");
+        CHECK(back.files[1].dir == "bin" && back.files[1].name == "awk");
     }
 }

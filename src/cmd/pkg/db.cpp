@@ -75,11 +75,16 @@ u32 gen_of(Str target)
         dir = num;
         num = rest.split('/', rest);
     }
-    if (dir != "gen" || num.empty() || num.size() > 9)
+    return dir == "gen" ? gen_number(num) : 0;
+}
+
+u32 gen_number(Str name)
+{
+    if (name.empty() || name.size() > 9)
         return 0;
 
     u32 n = 0;
-    for (char c : num) {
+    for (char c : name) {
         if (c < '0' || c > '9')
             return 0;
         n = n * 10 + u32(c - '0');
@@ -150,9 +155,56 @@ bool world_read(Str text, Vec<Str> &out)
     return true;
 }
 
+bool world_push(Vec<Str> &specs, Str spec, bool &changed)
+{
+    changed = false;
+
+    Dep want;
+    if (dep_parse(spec, want) == DepParse::Malformed)
+        return true;
+
+    for (Str &had : specs) {
+        Dep d;
+        if (dep_parse(had, d) == DepParse::Malformed || d.name != want.name)
+            continue;
+        changed = !(had == spec);
+        had     = spec;
+        return true;
+    }
+    changed = true;
+    return specs.push(spec);
+}
+
+bool world_deps(Span<const Str> specs, Vec<Dep> &out)
+{
+    for (Str spec : specs) {
+        Dep d;
+        if (dep_parse(spec, d) == DepParse::Malformed)
+            continue;
+        if (!out.push(d))
+            return false;
+    }
+    return true;
+}
+
 bool repos_read(Str text, Vec<Str> &out)
 {
     return world_read(text, out);
+}
+
+void db_split(Str entry, Str &dir, Str &name)
+{
+    usize at = Str::npos;
+    for (usize i = 0; i < entry.size(); i++)
+        if (entry[i] == '/')
+            at = i;
+    if (at == Str::npos) {
+        dir  = Str();
+        name = entry;
+        return;
+    }
+    dir  = entry.substr(0, at);
+    name = entry.substr(at + 1);
 }
 
 bool pkg_tree_ops(Vec<StoreOp> &out)

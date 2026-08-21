@@ -76,6 +76,31 @@ bool ready(FakeHost &h, Str index)
            h.route(URL, index);
 }
 
+// §7 steps 8 and 9. No zip is needed: what is being driven is the loop that
+// caps a body and the comparison that follows it.
+Task<i32> ask_fetch(FakeHost *h, const CheckedIndex *c, const PackageStanza *p, String *out)
+{
+    Task<Result<void>> t = index_fetch(*h, *c, *p, *out, step);
+    if (!t)
+        co_return 1;
+    Result<void> r = co_await t;
+    answered       = true;
+    failure        = r.is_err() ? r.error() : Error::Closed;
+    co_return r.is_err() ? 1 : 0;
+}
+
+bool run_fetch(FakeHost &h, const CheckedIndex &c, const PackageStanza &p, String &out)
+{
+    sched_reset();
+    answered = false;
+    step     = IndexStep::Read;
+    failure  = Error::Invalid;
+    if (sched_spawn(ask_fetch(&h, &c, &p, &out)) == 0)
+        return false;
+    sched_tick(0);
+    return answered && failure == Error::Closed;
+}
+
 // index_read takes the text, since every record views it.
 Result<void> read_stored(Str text, CheckedIndex &out)
 {
@@ -378,9 +403,90 @@ void test_index()
         CHECK_EQ(c.packages.size(), 1);
     }
 
+    // §7 steps 8 and 9, over a body of five bytes: the URL is derived from N,
+    // the cap is S, and the digest is C.
+    {
+        CheckedIndex c;
+        CHECK(read_stored("\nX:1\nN:https://packages.example/braam\nG:1\nE:1\n\n"
+                          "C:Q2LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=\n"
+                          "P:demo\nV:1-r0\nS:5\np:cmd:demo\n",
+                          c)
+                  .is_ok());
+        CHECK_EQ(c.packages.size(), 1);
+
+        // A name under p is offered even though no P names it.
+        CHECK(index_find(c, "cmd:demo") == nullptr);
+        CHECK(index_provides(c, "cmd:demo") == &c.packages[0]);
+        CHECK(index_provides(c, "demo") == &c.packages[0]);
+        CHECK(index_provides(c, "nonesuch") == nullptr);
+
+        constexpr Str ZIP      = "https://packages.example/braam/demo-1-r0.zip";
+        const PackageStanza &p = c.packages[0];
+
+        {
+            FakeHost h;
+            String out;
+            CHECK(h.route(ZIP, "hello"));
+            CHECK(run_fetch(h, c, p, out));
+            CHECK(out.str() == "hello");
+            CHECK_EQ(h.opened, h.closed);
+        }
+        // One byte of five, changed after signing.
+        {
+            FakeHost h;
+            String out;
+            CHECK(h.route(ZIP, "hellp"));
+            CHECK(!run_fetch(h, c, p, out));
+            CHECK(step == IndexStep::Digest && failure == Error::Perm);
+            CHECK_EQ(h.opened, h.closed);
+        }
+        // Shorter than S is caught by the same comparison; longer never
+        // finishes arriving, and neither is a truncation.
+        {
+            FakeHost h;
+            String out;
+            CHECK(h.route(ZIP, "hell"));
+            CHECK(!run_fetch(h, c, p, out));
+            CHECK(step == IndexStep::Digest && failure == Error::Perm);
+        }
+        {
+            FakeHost h;
+            String out;
+            CHECK(h.route(ZIP, "hello!"));
+            CHECK(!run_fetch(h, c, p, out));
+            CHECK(step == IndexStep::Package && failure == Error::Invalid);
+            CHECK_EQ(h.opened, h.closed);
+        }
+        // A repository that answers something other than 200 answers nothing.
+        {
+            FakeHost h;
+            String out;
+            CHECK(h.route(ZIP, "hello", 404));
+            CHECK(!run_fetch(h, c, p, out));
+            CHECK(step == IndexStep::Package && failure == Error::NotFound);
+            CHECK_EQ(h.opened, h.closed);
+        }
+        // Past PACKAGE_MAX nothing is opened at all.
+        {
+            FakeHost h;
+            String out;
+            PackageStanza big = p;
+            big.size          = PACKAGE_MAX + 1;
+            CHECK(h.route(ZIP, "hello"));
+            CHECK(!run_fetch(h, c, big, out));
+            CHECK(failure == Error::Unsupported);
+            CHECK_EQ(h.opened, 0);
+        }
+
+        CHECK(package_check(p, "hello"));
+        CHECK(!package_check(p, "hell"));
+        CHECK(!package_check(p, "hellp"));
+    }
+
     // Every step names itself.
     CHECK(index_step_name(IndexStep::Clock) == "clock");
     CHECK(index_step_name(IndexStep::Read) == "read");
+    CHECK(index_step_name(IndexStep::Digest) == "digest");
 
     CHECK_EQ(host_orphans(), 0);
 }

@@ -10,6 +10,10 @@
 // Performs a list db.h computed, stopping at the first failure.
 Task<Result<void>> store_perform(Span<const StoreOp> ops);
 
+// A whole file, replacing what is there. An unpack writes an entry and frees
+// it; a StoreOp per entry would hold the whole package.
+Task<Result<void>> store_write(Str path, Str bytes);
+
 // The live generation, or 0. /pkg/active is a symlink, so read_link.
 Task<Result<u32>> store_active();
 
