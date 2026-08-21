@@ -3,9 +3,11 @@
 How software that did not ship with the system is fetched, checked and
 installed, and how the signing keys are looked after.
 
-**`/bin/pkg` does not exist yet.** This is policy written before the code,
-because these decisions cannot be taken back later. A key made on a networked
-machine is never afterwards an offline key.
+**This was written before `/bin/pkg` existed**, because these decisions cannot
+be taken back later: a key made on a networked machine is never afterwards an
+offline key. The code now satisfies it, and
+[Package_Format.md](Package_Format.md) is the grammar it satisfies it in — but
+the order still matters, and this document is where a disagreement is settled.
 
 [Concept.md](Concept.md) is the specification and this does not replace it.
 Where the two disagree, Concept.md wins. [Release_Notes.md](Release_Notes.md)

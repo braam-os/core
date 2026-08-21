@@ -25,6 +25,55 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Four documents, and the one sentence that was wrong in three of them
+
+P28, and the end of `src/cmd/pkg/TODO.md` — which is deleted with it, the plan
+having run from P1 to P28. What P28 asked for was `rootfs/README` and
+`rootfs/share/help`; what auditing the four documents found was worth more than
+what it wrote.
+
+**The two user-facing documents had drifted in opposite directions.**
+`rootfs/share/help` was current — a `Packages` section with all eleven
+subcommands, written as each landed, and its two checked lists naming every one
+of the forty `/bin` entries and all twenty-six builtins. `rootfs/README` was
+untouched since before `pkg` existed and said *"Nothing is sent anywhere unless
+you ask for it. **Two commands** do"*, which three now do. The difference is
+that help has a test and README has almost none: `test/smoke/help.mjs` fails on
+a builtin or a binary that is not named, in both directions, so help cannot go
+stale in the one way anybody checked. Nothing checks whether a sentence is true.
+
+**One wrong sentence had been copied into three files.** `README.md`,
+`rootfs/share/help` and `CLAUDE.md` all said that `test`, `[`, `:`, `echo`,
+`true` and `false` keep a file in `/bin` because their whole cost is the spawn.
+Four of them do. `[` and `:` are punctuation nothing spawns and have never been
+in `BRAAM_BIN_LIST`. The claim is right about *why* — a builtin shadows the name
+at a prompt and not everywhere — and wrong about *which*, and it propagated
+because each document was written by reading the last one.
+
+**`README.md`'s filesystem paragraph was wrong three times in five lines.** It
+said `/` lives in memory (it is `OpfsFs`), that `/home` is the only place files
+survive a reload (everything does but `/tmp`), and that without OPFS the system
+boots with memory only and says so — it says so and *stops*, since there is
+nowhere to run. All three predate the package manager. A front page is the
+document nobody re-reads while working, which is exactly why it rots.
+
+**Two specifications still called `/bin/pkg` unbuilt.** Concept.md in two
+places, and Package_Management.md in a bolded opening line. The rule is that the
+spec is amended in the same commit as the code, and P26 and P27 both missed
+these. Package_Management.md's line was worth keeping in substance rather than
+deleting: that the policy was written before the code is the interesting fact
+about it, and the sentence now says that instead of saying the code is absent.
+
+**A `wc` in an unrelated test is what makes help's length somebody's problem.**
+`test/smoke/subst.mjs` reads three concatenated copies of `/share/help` through
+a command substitution and asserts `wc` over the result, because the size is
+what makes it a many-writes case — forty-six chunks against an eight-slot pipe,
+which hangs rather than fails without drain-before-wait. So editing the document
+moves three numbers in a test about pipes, and it also outgrew the 120-row grid
+`test/smoke/term.mjs` pages it on. Both are real couplings and both are
+commented where they bite; a test that generated its own long file instead would
+lose the property that the file is one a person maintains.
+
 ## One session, told in thirty-nine cases
 
 `test/run.mjs` had reached 4,651 lines: 535 assertions driven through 427 shell

@@ -16,16 +16,22 @@ redirection, background jobs and ^C all work:
 edit is a full-screen editor: type to insert, ^S saves, ^Q quits.
 less pages through a long file, and q quits it.
 
-Nothing is sent anywhere unless you ask for it. Two commands do:
+Nothing is sent anywhere unless you ask for it. Three commands do:
 
     curl https://example.com          fetch a URL, like the real thing
     chat wss://some.server/room nick  talk to whoever else is in the room
+    pkg update                        fetch a package repository's index
 
 Files move in and out through the browser, since the page cannot reach your
 disk on its own:
 
     fimport                pick files; they land in /import
     fexport notes          download notes out of the browser
+
+pkg installs programs that did not ship with the system. It reads a signed
+index, checks every package against it, and unpacks into /pkg. /pkg/bin comes
+after /bin on PATH, so nothing installed can shadow a system command. A URL
+of public repo should be put in /pkg/repositories.
 
 help pages every command, and q quits it. uname -a says what this is and what
 it is running on, and df shows how much room the browser gave it. ps lists

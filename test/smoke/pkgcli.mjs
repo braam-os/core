@@ -6,7 +6,7 @@ import { fail, prompt, row, rows, screen, submit } from "./harness.mjs";
 
 export function check() {
     let s = screen();
-    // /bin/pkg's table (src/cmd/pkg/TODO.md). A bare `pkg` is a usage error
+    // /bin/pkg's table (src/cmd/pkg/pkg.cpp). A bare `pkg` is a usage error
     // and 2, and a name no table row carries is the same. Every row is a
     // command now, so `is not built yet` has nothing left to say.
     s = submit("clear", 1184.7);

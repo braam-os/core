@@ -37,8 +37,8 @@ the three passing CTest cases.
   **[doc/Package_Management.md](doc/Package_Management.md)** the policy a
   package manager must satisfy, with
   **[doc/Package_Format.md](doc/Package_Format.md)** the grammars written to
-  satisfy it (`/bin/pkg` is a skeleton — a subcommand table and nothing behind
-  it; the rest is [src/cmd/pkg/TODO.md](src/cmd/pkg/TODO.md)).
+  satisfy it, whose §10 is the publisher's tutorial over `tools/`. `/bin/pkg` is
+  complete: eleven subcommands, and eight smoke cases over them.
 
 ## Build
 
@@ -67,6 +67,13 @@ make clean
 - Version = `BRAAM_VERSION_BASE` ([src/kernel/version.h](src/kernel/version.h),
   hand-edited) + commit count + short hash. `tools/version.py` is the one
   implementation and runs at *build* time; `tools/release.py` imports it.
+- **The six publisher tools in `tools/` are hand-run and no build step calls
+  them**: `ed25519.py` (the one place a key is read, and the only thing needing
+  `cryptography`), `signindex.py`, `mkanchor.py`, `mkpkg.py`, `mkindex.py`, and
+  `mkrepo.py`, which regenerates `test/unit/repo.data` under keys it destroys.
+  `mkindex.py` derives Package_Format.md §6.1's `cmd:` names from each package's
+  `bin/`, so no publisher writes one down. **No private key** goes in the tree,
+  in anything built from it, or inside `rootfs.zip`.
 - `braam_add_program(NAME … SOURCES … [LIBS])` in
   [cmake/BraamProgram.cmake](cmake/BraamProgram.cmake) is shared by `src/cmd/`
   and the installed SDK, so an out-of-tree program is built exactly as these
@@ -94,40 +101,49 @@ make clean
 
 ### Verification
 
-- `smoke` — [test/run.mjs](test/run.mjs) under Node: asserts the kernel's exact
-  imports (`host.fs`, `host.fs_sync`, `host.log`, `host.now`, `host.present`,
-  `host.svc`) and exports (`init`, `key`, `memory`, `ref`, `resize`, `sys`,
-  `sys_async`, `tick`, `wake`), every binary's surface and `braam` section, that
-  the kernel boots to a prompt, and that `rootfs/share/help` matches the builtin
-  table and the archive's `bin/`. `run.mjs` is the ordered `CASES` table and
-  nothing else: a case is one file in [test/smoke/](test/smoke/) exporting
-  `check()`, over the driver in
+- `smoke` — `test/run.mjs --kernel` under Node, and it is the ordered `CASES`
+  table and nothing else: a case is one file in [test/smoke/](test/smoke/)
+  exporting `check()`, over the driver in
   [test/smoke/harness.mjs](test/smoke/harness.mjs). **The order is
   load-bearing** — it is one cumulative session, so state crosses cases and an
-  entry that depends on an earlier one says so beside it.
-- `unit` — `tests.wasm` under Node, with `rootfs.zip` alongside so that
-  `src/cmd/pkg/zip.cpp` and `web/fs.js` are compared over the same bytes rather
-  than each trusted against its own reading of the format. New core code gets a
-  case in [test/unit/](test/unit/) and a line in
-  [test/CMakeLists.txt](test/CMakeLists.txt).
+  entry that depends on an earlier one says so beside it. The kernel's exact
+  imports (`host.fs`, `host.fs_sync`, `host.log`, `host.now`, `host.present`,
+  `host.svc`), its exports (`init`, `key`, `memory`, `ref`, `resize`, `sys`,
+  `sys_async`, `tick`, `wake`) and every binary's surface and `braam` section
+  are [test/smoke/abi.mjs](test/smoke/abi.mjs); the boot to a prompt is
+  `boot.mjs`; `rootfs/share/help` against the builtin table and the archive's
+  `bin/` is `help.mjs`.
+- `unit` — `test/run.mjs --tests` over `tests.wasm`, with `rootfs.zip` alongside
+  so that `src/cmd/pkg/zip.cpp` and `web/fs.js` are compared over the same bytes
+  rather than each trusted against its own reading of the format. New core code
+  is **three** edits: a case in [test/unit/](test/unit/), a line in
+  [test/CMakeLists.txt](test/CMakeLists.txt), and a declaration and call in
+  [test/unit/main.cpp](test/unit/main.cpp) — miss the third and it compiles,
+  links and never runs. That call order is load-bearing too.
 - `size` — `tools/size_budget.txt`, checked at build time.
 
 Both wasm modules are driven by the in-memory backends
-[test/fakefs.mjs](test/fakefs.mjs) and [test/fakesvc.mjs](test/fakesvc.mjs),
-which answer from inside the import and take their constants, encoders and
-archive unpacker from `web/fs.js`, `web/svc.js`, `web/abi.js` — do not restate
-the format. `tools/wsd.mjs` is a real WebSocket server.
+[test/fakefs.mjs](test/fakefs.mjs), [test/fakesvc.mjs](test/fakesvc.mjs) and
+[test/fakeworker.mjs](test/fakeworker.mjs), which answer from inside the import
+and take their constants, encoders and archive unpacker from `web/fs.js`,
+`web/svc.js`, `web/abi.js` — do not restate the format. `FakeStore` has two
+deliberate hooks: `defer` performs a request and withholds the reply, `stall`
+performs neither, which is a tab that died with one in flight.
+`tools/wsd.mjs` is a real WebSocket server.
 
 **The in-wasm suite cannot run a program**, and the shell is one. `test/unit/`
 reaches everything *below* a program; the pure shell sources (`parse.cpp`,
-`tokenize.cpp`, `expand.cpp`, `match.cpp`, `cond.cpp`) and `proc/opt.cpp`,
-`proc/time.cpp` are compiled straight into the suite rather than linked, so a
-syscall in any of them is a link error. `src/cmd/pkg/trust.cpp` and `index.cpp`
-are in that list by taking a `PkgHost` — syscalls from `/bin/pkg`
-(`src/cmd/pkg/host.cpp`), the kernel's own services from the suite
-(`test/unit/fakehost.h`) — which is how a check that must be tested keeps out of
-the half that cannot be. Anything needing a program to run belongs in
-`test/smoke/`, as a file and a line in `run.mjs`'s table.
+`tokenize.cpp`, `expand.cpp`, `match.cpp`, `cond.cpp`), `proc/opt.cpp`,
+`proc/time.cpp` and the syscall-free half of `src/cmd/pkg/` are compiled
+straight into the suite rather than linked, so a syscall in any of them is a
+link error. `src/cmd/pkg/trust.cpp` and `index.cpp` are in that half by taking a
+`PkgHost` — syscalls from `/bin/pkg` (`src/cmd/pkg/host.cpp`), the kernel's own
+services from the suite (`test/unit/fakehost.h`) — which is how a check that
+must be tested keeps out of the half that cannot be. `pkg/unzip.cpp`,
+`store.cpp`, `host.cpp` and `install.cpp` stay out, and `sh/glob.cpp` and
+`sh/condrun.cpp` with them, because they walk the store. Anything needing a
+program to run belongs in `test/smoke/`, as a file and a line in `run.mjs`'s
+table.
 [doc/Testing.md](doc/Testing.md) is the whole of both suites.
 
 ## Architecture invariants
@@ -229,8 +245,10 @@ interpreter, which `exec_resolve` chases exactly once.
   `table.cpp`, plus shell functions) either touches the shell *process's* own
   state (cwd, jobs, variables, options, traps, loop) — **or its whole cost is
   the spawn**, which is `test`, `[`, `:`, `echo`, `true`, `false` and nothing
-  else. The first kind has no file; the second keeps its file in `/bin`, since a
-  builtin shadows the name at a prompt and not everywhere. A builtin runs **in
+  else. The first kind has no file; of the second, `test`, `echo`, `true` and
+  `false` keep a file in `/bin`, since a builtin shadows the name at a prompt
+  and not everywhere, while `[` and `:` are punctuation nothing spawns and have
+  none. A builtin runs **in
   its turn rather than alongside**, so it must buffer its output and write it
   once or it fills an eight-slot pipe with nobody to drain it.
 - **Everything else is a process in a worker of its own** — address-space,

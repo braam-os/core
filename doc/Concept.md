@@ -621,10 +621,10 @@ packages is materialised as a directory of symbolic links into `/pkg/store/`,
 with `/bin` first, so nothing installed can shadow the system. That list is
 **built**, and it is the whole of the kernel's part: `exec_resolve` gained no
 clause, and a missing `/pkg`, a dangling `/pkg/active` and a link into nothing
-are each an ordinary component that finds nothing. What remains unbuilt is what
-fills the tree — `/bin/pkg` cannot yet install anything. The alternative was a
-clause in `exec_resolve` after the `PATH` search, reading `/pkg`'s own record of
-which generation is active and which command it names — two file formats the
+are each an ordinary component that finds nothing. What fills the tree is
+`/bin/pkg`, and it too is built. The alternative was a clause in `exec_resolve`
+after the `PATH` search, reading `/pkg`'s own record of which generation is
+active and which command it names — two file formats the
 kernel would have to learn, two reads on every failed lookup, and four ways of
 being half-installed that each had to come back as an ordinary "command not
 found" rather than a boot that would not finish. Symbolic links, `PATH` and a
@@ -1031,8 +1031,8 @@ and would take an installed program with it. Its layout is
 [Package_Management.md](Package_Management.md)'s and the kernel knows none of
 it: what reaches an installed program is `/pkg/bin` on the default `PATH` (§4),
 which is a symbolic link and not a mount. Boot does not create it — a system
-that installs nothing never grows one. **Unbuilt**: what writes the tree is
-`/bin/pkg`.
+that installs nothing never grows one. What writes the tree is `/bin/pkg`, and
+[Package_Format.md](Package_Format.md) §8 is the layout it writes.
 
 `/bin`, `/share` and `/README` are put there at boot by unpacking `rootfs.zip`,
 a deflated zip beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js`

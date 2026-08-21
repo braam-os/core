@@ -2,15 +2,16 @@ braam — the commands
 ====================
 
 A command word is a shell function first, then one of the builtins below, then
-a file that PATH names — /bin at boot. Only the last of the three costs a
-process: a program is a wasm binary in a worker of its own, with its own
-address space, its own memory cap and a kill switch behind ^C.
+a file that PATH names — /bin:/pkg/bin at boot. Only the last of the three
+costs a process: a program is a wasm binary in a worker of its own, with its
+own address space, its own memory cap and a kill switch behind ^C.
 
 A builtin lives inside /bin/sh, either because it touches the shell's own
 state — its working directory, its variables, its jobs — or because its whole
-cost would have been the spawn. echo, test, [, true and false are of the
-second kind, so each is a builtin *and* a file in /bin: the builtin is what a
-prompt runs, the file is what anything spawning the name by itself gets.
+cost would have been the spawn. echo, test, true and false are of the second
+kind, so each is a builtin *and* a file in /bin: the builtin is what a prompt
+runs, the file is what anything spawning the name by itself gets. [ and : are
+of that kind too and have no file, being punctuation nothing spawns.
 
 This list is what the boot archive ships, and is a file: /share/help. A
 program installed somewhere else on PATH runs perfectly well and is not named
@@ -99,8 +100,14 @@ Packages
 
   `pkg` installs into /pkg, which the boot archive does not carry — so what it
   installed outlives a release that replaces /bin and /share. /pkg/bin is on
-  PATH after /bin, so nothing installed can shadow a system command. Its
-  commands, each of them spelled `pkg <name>`:
+  PATH after /bin, so nothing installed can shadow a system command.
+
+  Nothing is installed unchecked. The repository's index is signed, the keys
+  it is checked against are in /share/pkg/anchor and come out of the boot
+  archive, and every package is compared against the size and the digest that
+  index gave before a byte of it is unpacked. A check that fails names the
+  step it failed at, and nothing is half-installed. Its commands, each of them
+  spelled `pkg <name>`:
 
   update    fetch the repository index, and check it before storing it
   search    <pattern> — search the index by name and description
@@ -116,8 +123,14 @@ Packages
             digest recorded when it was installed, and report a package whose
             install script failed
   clean     drop the downloaded archives, and what no generation still needs.
-            The generation before the live one is kept: it is what a rollback
-            swings back to
+            The generation before the live one is kept
+
+  An install builds the whole new generation under /pkg/gen and then renames
+  one symbolic link, /pkg/active, over the old one. That rename is the moment
+  it happens: before it nothing has changed, and after it everything has. The
+  generation `clean` keeps is the one before, and going back to it is putting
+  the link back yourself — `ln -sf /pkg/gen/<n> /pkg/active`. There is no
+  `pkg rollback`.
 
   `pkg verify` says a file changed since its install. It is not a guarantee
   that none did. Checking happens once, at install; nothing re-reads the store
@@ -129,6 +142,7 @@ More
 
   /README           what this system is, in a page
   /share/motd       what boot prints
+  /share/pkg/anchor the keys a repository's index is checked against
   /proc             the system describing itself as text — try cat /proc/host
 
   help | grep ls    off a terminal `less` copies, so this list pipes

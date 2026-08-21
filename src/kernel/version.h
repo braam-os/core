@@ -1,6 +1,6 @@
 // One version string, shared by the boot banner and the `version` program. The
 // tail is the commit count and the short hash, in a header tools/version.py
-// generates: 0.2.24-35f6924.
+// generates: 0.3.153-145283e.
 #pragma once
 
 #include "kernel/revision.h"
