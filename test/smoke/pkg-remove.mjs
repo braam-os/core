@@ -99,6 +99,6 @@ export function check() {
         fail("a removal with nothing to remove built /pkg");
     prints("pkg autoremove", "nothing installed");
 
-    prints("pkg remove", "usage: pkg remove <package>...", 2);
-    prints("pkg autoremove please", "usage: pkg autoremove", 2);
+    prints("pkg remove", "Usage: pkg remove <package>...", 2);
+    prints("pkg autoremove please", "Usage: pkg autoremove", 2);
 }

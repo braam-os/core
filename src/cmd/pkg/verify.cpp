@@ -12,8 +12,8 @@
 
 namespace {
 
-constexpr Str USAGE_FILES   = "usage: pkg files <package>\n";
-constexpr Str USAGE_VERIFY  = "usage: pkg verify [<package>]\n";
+constexpr Str USAGE_FILES   = "Usage: pkg files <package>\n";
+constexpr Str USAGE_VERIFY  = "Usage: pkg verify [<package>]\n";
 constexpr Str NOT_INSTALLED = "not installed";
 
 // The report's first column.

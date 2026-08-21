@@ -87,7 +87,7 @@ export function check() {
             "generation 4, 2 packages"].join("|"));
     prints("hi", "hi from hello");
 
-    prints("pkg clean please", "usage: pkg clean", 2);
+    prints("pkg clean please", "Usage: pkg clean", 2);
 
     // Nothing to clean builds no tree to say so, as pkg remove does not.
     submit("rm -r /pkg", at());

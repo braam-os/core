@@ -12,7 +12,7 @@
 
 namespace {
 
-constexpr Str USAGE = "usage: pkg update\n";
+constexpr Str USAGE = "Usage: pkg update\n";
 constexpr Str NONE  = "pkg: no repositories; put one URL in /pkg/repositories\n";
 constexpr Str MANY  = "pkg: /pkg/repositories: one repository, for now\n";
 

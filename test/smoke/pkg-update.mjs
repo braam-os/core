@@ -136,8 +136,8 @@ export function check() {
             "digest        Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI="].join("|"));
 
     // A usage error is 2, the same as any other program's.
-    prints("pkg list please", "usage: pkg list", 2);
-    prints("pkg info", "usage: pkg info <package>", 2);
+    prints("pkg list please", "Usage: pkg list", 2);
+    prints("pkg info", "Usage: pkg info <package>", 2);
 
     regrid(60, 16, "the resize after pkg info failed");
 

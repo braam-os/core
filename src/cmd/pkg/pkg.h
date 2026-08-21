@@ -7,10 +7,13 @@
 #include "kernel/task.h"
 #include "kernel/types.h"
 
-// Every row carries a command; `run` is checked because a null one is a row
-// added without its function, not a state the table is in.
+// Every row carries a command, the operands its own usage line spells and one
+// line of what it is for; `run` is checked because a null one is a row added
+// without its function, not a state the table is in.
 struct PkgCommand {
     Str name;
+    Str args;
+    Str help;
     Task<i32> (*run)(Args args);
 };
 
@@ -35,6 +38,10 @@ Task<i32> pkg_verify(Args args);
 
 // The collector, in clean.cpp.
 Task<i32> pkg_clean(Args args);
+
+// The table printed as itself, in pkg.cpp: it is the table, not a file of its
+// own.
+Task<i32> pkg_help(Args args);
 
 // /pkg/index as an update left it, unchecked (§7's checks are not repeated).
 // 0 is a read index; anything else is the exit status, its refusal printed.

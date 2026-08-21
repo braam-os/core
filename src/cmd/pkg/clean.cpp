@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr Str USAGE   = "usage: pkg clean\n";
+constexpr Str USAGE   = "Usage: pkg clean\n";
 constexpr Str NOTHING = "nothing to clean\n";
 
 struct Job {

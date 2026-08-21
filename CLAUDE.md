@@ -38,7 +38,7 @@ the three passing CTest cases.
   package manager must satisfy, with
   **[doc/Package_Format.md](doc/Package_Format.md)** the grammars written to
   satisfy it, whose §10 is the publisher's tutorial over `tools/`. `/bin/pkg` is
-  complete: eleven subcommands, and eight smoke cases over them.
+  complete: twelve subcommands, and eight smoke cases over them.
 
 ## Build
 

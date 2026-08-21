@@ -15,9 +15,9 @@
 
 namespace {
 
-constexpr Str USAGE_SEARCH = "usage: pkg search <pattern>\n";
-constexpr Str USAGE_INFO   = "usage: pkg info <package>\n";
-constexpr Str USAGE_LIST   = "usage: pkg list\n";
+constexpr Str USAGE_SEARCH = "Usage: pkg search <pattern>\n";
+constexpr Str USAGE_INFO   = "Usage: pkg info <package>\n";
+constexpr Str USAGE_LIST   = "Usage: pkg list\n";
 constexpr Str NO_MEMORY    = "pkg: out of memory\n";
 
 // `info`'s label column, and the gap between the columns of a listing.

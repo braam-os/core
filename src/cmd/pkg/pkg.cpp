@@ -10,21 +10,27 @@ namespace {
 
 constexpr Str NO_INDEX = "pkg: no index; run pkg update\n";
 
-// Sorted, and explicit: --gc-sections never extracts an unreferenced archive
-// member. What each command is for is /share/help's, not a string here.
+// Explicit: --gc-sections never extracts an unreferenced archive member. In
+// /share/help's order, which is what a reader does with them rather than the
+// alphabet; find() is a scan, so nothing here depends on the order.
 constexpr PkgCommand TABLE[] = {
-    { "autoremove", pkg_autoremove }, { "clean", pkg_clean },
-    { "files", pkg_files },           { "info", pkg_info },
-    { "install", pkg_install },       { "list", pkg_list },
-    { "remove", pkg_remove },         { "search", pkg_search },
-    { "update", pkg_update },         { "upgrade", pkg_upgrade },
-    { "verify", pkg_verify },
+    { "update", "", "fetch the repository index", pkg_update },
+    { "search", "<pattern>", "search names and descriptions", pkg_search },
+    { "info", "<package>", "what the index says about one", pkg_info },
+    { "install", "<package>...", "install packages and dependencies", pkg_install },
+    { "remove", "<package>...", "remove packages", pkg_remove },
+    { "autoremove", "", "remove dependencies nothing needs", pkg_autoremove },
+    { "upgrade", "", "upgrade everything installed", pkg_upgrade },
+    { "list", "", "list installed packages", pkg_list },
+    { "files", "<package>", "the files a package installed", pkg_files },
+    { "verify", "[<package>]", "re-check installed files", pkg_verify },
+    { "clean", "", "drop archives nothing needs", pkg_clean },
+    { "help", "", "print this message", pkg_help },
 };
 
-constexpr Str USAGE  = "usage: pkg <command> [<arg>...]\n";
-constexpr Str LEAD   = "commands:";
-constexpr Str INDENT = "         ";
-constexpr usize WRAP = 78;
+constexpr Str HEAD       = "Usage:\n    pkg <command> [<arg>...]\nCommands:\n";
+constexpr Str USAGE_HELP = "Usage: pkg help\n";
+constexpr usize GAP      = 2;
 
 const PkgCommand *find(Str name)
 {
@@ -34,22 +40,39 @@ const PkgCommand *find(Str name)
     return nullptr;
 }
 
-// The command line, built from the table so a row added later cannot drift.
-Task<Result<void>> usage()
+// `name args`, which is the width the descriptions line up past.
+usize spelled(const PkgCommand &c)
 {
-    Buf<256> b;
-    b.put(USAGE).put(LEAD);
-    usize col = LEAD.size();
+    return c.name.size() + (c.args.empty() ? 0 : 1 + c.args.size());
+}
+
+// The block, built from the table so a row added later cannot drift. A row at
+// a time rather than one buffer: the whole of it is past what a coroutine
+// frame may hold, and a heap block would put an allocation on the path that
+// reports a mistake.
+Task<Result<void>> usage(u32 fd)
+{
+    usize w = 0;
+    for (const PkgCommand &c : TABLE)
+        w = max(w, spelled(c));
+
+    Result<void> r = Err(Error::NoMemory);
+    if (Task<Result<void>> t = write_all(fd, HEAD))
+        r = co_await t;
     for (const PkgCommand &c : TABLE) {
-        if (col + 1 + c.name.size() > WRAP) {
-            b.put('\n').put(INDENT);
-            col = INDENT.size();
-        }
-        b.put(' ').put(c.name);
-        col += 1 + c.name.size();
+        if (r.is_err())
+            co_return r;
+        Buf<96> b;
+        b.put("    ").put(c.name);
+        if (!c.args.empty())
+            b.put(' ').put(c.args);
+        for (usize i = spelled(c); i < w + GAP; i++)
+            b.put(' ');
+        b.put(c.help).put('\n');
+        if (Task<Result<void>> t = write_all(fd, b.str()))
+            r = co_await t;
     }
-    b.put('\n');
-    co_return co_await write_all(SYS_STDERR, b.str());
+    co_return r;
 }
 
 Task<Result<void>> complain(Str before, Str name, Str after)
@@ -109,21 +132,38 @@ Task<Result<void>> pkg_generation(String &path, String &text)
     co_return Result<void>();
 }
 
+Task<i32> pkg_help(Args args)
+{
+    if (args.size() != 1) {
+        if (Task<Result<void>> t = write_all(SYS_STDERR, USAGE_HELP))
+            co_await t;
+        co_return 2;
+    }
+    Result<void> r = Err(Error::NoMemory);
+    if (Task<Result<void>> t = usage(SYS_STDOUT))
+        r = co_await t;
+    co_return r.is_ok() ? 0 : 1;
+}
+
 Task<i32> pkg_run(Args args)
 {
     Args rest = args.tail();
     if (rest.size() == 0) {
-        if (Task<Result<void>> t = usage())
+        if (Task<Result<void>> t = usage(SYS_STDERR))
             co_await t;
         co_return 2;
     }
 
-    Str word            = rest[0];
+    // The two spellings of asking, and the whole of pkg's flag handling.
+    Str word = rest[0];
+    if (word == "-h" || word == "--help")
+        word = "help";
+
     const PkgCommand *c = find(word);
     if (!c) {
         if (Task<Result<void>> t = complain("unknown command: ", word, ""))
             co_await t;
-        if (Task<Result<void>> t = usage())
+        if (Task<Result<void>> t = usage(SYS_STDERR))
             co_await t;
         co_return 2;
     }

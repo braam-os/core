@@ -15,8 +15,8 @@ of that kind too and have no file, being punctuation nothing spawns.
 
 This list is what the boot archive ships, and is a file: /share/help. A
 program installed somewhere else on PATH runs perfectly well and is not named
-here. Each program also answers for itself — a usage error prints `usage: …`
-and exits 2.
+here. Each program also answers for itself — a usage error prints how the
+command is spelled and exits 2.
 
 Shell builtins
 --------------
@@ -124,6 +124,8 @@ Packages
             install script failed
   clean     drop the downloaded archives, and what no generation still needs.
             The generation before the live one is kept
+  help      print that list, in short, as `pkg` with no command prints it.
+            `pkg -h` and `pkg --help` are the same command
 
   An install builds the whole new generation under /pkg/gen and then renames
   one symbolic link, /pkg/active, over the old one. That rename is the moment

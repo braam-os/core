@@ -27,8 +27,8 @@ export function check() {
             "/pkg/store/hello-1.0-r0/share/hello/greeting"].join("|"));
     prints("pkg files libz", "/pkg/store/libz-1.0-r0/share/libz/README");
     prints("pkg files nonesuch", "pkg: nonesuch: not installed", 1);
-    prints("pkg files", "usage: pkg files <package>", 2);
-    prints("pkg files hello libz", "usage: pkg files <package>", 2);
+    prints("pkg files", "Usage: pkg files <package>", 2);
+    prints("pkg files hello libz", "Usage: pkg files <package>", 2);
 
     // Nothing wrong is nothing printed. This is the case that says the
     // digests being compared are the ones the install recorded.
@@ -62,7 +62,7 @@ export function check() {
     prints("pkg list", "hello  1.0-r0|libz   1.0-r0");
 
     prints("pkg verify nonesuch", "pkg: nonesuch: not installed", 1);
-    prints("pkg verify hello libz", "usage: pkg verify [<package>]", 2);
+    prints("pkg verify hello libz", "Usage: pkg verify [<package>]", 2);
 
     // Nothing installed is nothing to verify, and not an error.
     submit("rm -r /pkg", at());

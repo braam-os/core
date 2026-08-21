@@ -88,6 +88,6 @@ export function check() {
            ["pkg: cannot upgrade:", "  ghost (no such package)"].join("|"), 1);
     plant("/pkg/world", "");
 
-    prints("pkg upgrade please", "usage: pkg upgrade", 2);
+    prints("pkg upgrade please", "Usage: pkg upgrade", 2);
     net.routes.delete(`${RURL}/hello-1.1-r0.zip`);
 }

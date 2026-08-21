@@ -22,10 +22,10 @@
 
 namespace {
 
-constexpr Str USAGE          = "usage: pkg install <package>...\n";
-constexpr Str USAGE_REMOVE   = "usage: pkg remove <package>...\n";
-constexpr Str USAGE_AUTO     = "usage: pkg autoremove\n";
-constexpr Str USAGE_UPGRADE  = "usage: pkg upgrade\n";
+constexpr Str USAGE          = "Usage: pkg install <package>...\n";
+constexpr Str USAGE_REMOVE   = "Usage: pkg remove <package>...\n";
+constexpr Str USAGE_AUTO     = "Usage: pkg autoremove\n";
+constexpr Str USAGE_UPGRADE  = "Usage: pkg upgrade\n";
 constexpr Str NO_MEMORY      = "pkg: out of memory\n";
 constexpr Str NOTHING        = "nothing installed\n";
 constexpr Str CANNOT_INSTALL = "pkg: cannot install:";

@@ -25,6 +25,85 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A table that says what its rows are for
+
+`pkg` with no command printed its own name and then eleven more, run together
+on one wrapped line. Every one of them was true and none of them was any use:
+`files` and `list` and `verify` are not words that say what they do to a store,
+and nothing in the line said which of them take an operand or what an operand
+is. The descriptions existed — `/share/help`'s `Packages` section has had one
+per command since each landed — but they are a page in another program, reached
+by knowing that `help` exists, and the moment somebody needs them is the moment
+they typed `pkg` and got told off.
+
+**So the descriptions move into the table, which reverses a decision made when
+the table was written.** The old comment said what each command is for belongs
+to `/share/help` and not to a string in the binary, and the fear behind it was
+two lists drifting apart. That fear was right about lists and wrong about
+fields: `args` and `help` are columns of the same row as `run`, so a command
+cannot be added without them, and there is no second array to forget. What
+`/share/help` keeps is what it was always better at — the prose around the
+commands, the store, the anchor, and what a generation is — and the binary
+keeps the one line each that a mistake needs answered.
+
+**The rows are printed in `/share/help`'s order rather than the alphabet.**
+`update`, then the two that ask, then the four that change the store, then the
+three that report, then `clean`: that is the order somebody meets them in, and
+it is the order the manual already uses, so the two lists can be compared by
+eye. Nothing depended on the sorting — `find()` is a linear scan over twelve
+rows — and the "explicit" half of the old comment, which is about
+`--gc-sections` never extracting an unreferenced archive member, is untouched.
+
+**The column width is computed from the table, not written down.** A row whose
+name and operands are longer than `install <package>...` moves every
+description right; a shorter one costs nothing. This is the same reason the old
+code built its line from the table rather than holding a second string, kept
+through a change of shape.
+
+**The block is written a row at a time.** It is around seven hundred bytes,
+which is past what a coroutine frame may hold — a frame over 512 bytes costs a
+whole 64 KiB span — and the alternative, a heap `String` the way `pkg list`
+builds its output, would put an allocation failure on the path whose entire job
+is to report a mistake. Twelve writes of a `Buf<96>` cost twelve syscalls,
+which is twelve more than before and only ever on a path where somebody is
+already reading the screen. The loop stops at the first write that fails, so a
+`pkg | head -n 1` that closes the pipe ends the block rather than fighting it.
+
+**`help` is a row, and `-h` and `--help` are that row's other spellings.** A
+program that lists its commands should list the one that does the listing, and
+a row is the only way it stays listed. The two flags are handled by rewriting
+the first word before the table is searched, not by an `Opts` parse: `pkg` has
+no options and this does not give it any — the first word is a command, and
+these are two more ways of writing one of them. Being asked is not a mistake,
+so `pkg help` prints to stdout and exits 0, while a bare `pkg` and an unknown
+command keep stderr and 2.
+
+**`Usage:` is a heading now, and `pkg` alone in the tree capitalises it.** The
+block has two of them — `Usage:` over the command line, `Commands:` over the
+rows — because it is a page rather than a sentence, and a page wants headings
+its eye can find. The eleven single-line usages the subcommands print followed:
+`Usage: pkg install <package>...` and the ten beside it, so that whichever of
+the twelve messages a mistake produces, it is recognisably the same program
+talking. Every other program in `/bin` still prints a lowercase `usage:`, which
+is the older and more Unix spelling, and the divergence is deliberate rather
+than a migration half-done — `pkg` is the one program here with a surface big
+enough to need a table of contents. What it cost is one sentence in
+`/share/help`, which quoted `usage: …` as what a usage error prints and now
+says what it prints instead of spelling it, since the two spellings differ.
+
+**The smoke case had to stop reading the screen.** The block is fifteen lines
+on a sixteen-row grid, so the usage line and the first commands have scrolled
+off by the time the prompt is back, and an assertion on what is visible would
+have been an assertion about the grid. The case now pipes — `head -n 2` for the
+command line under the `Usage:` heading, `grep "install <package>"` for a row in
+full — and reads the status from the unpiped form, since a pipeline's status is
+its last stage's. That is length-independent, which the old assertion was not:
+it named `autoremove` as the first command, and the order has just changed.
+
+`subst.mjs`'s byte counts moved too, because they are three copies of
+`/share/help` and it gained two commands' worth of lines. They are meant to
+move; the comment beside them says so.
+
 ## Four documents, and the one sentence that was wrong in three of them
 
 P28, and the end of `src/cmd/pkg/TODO.md` — which is deleted with it, the plan
