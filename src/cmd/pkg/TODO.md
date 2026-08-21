@@ -130,27 +130,22 @@ large crosses the ABI. That is P6.
 
 ### P26. Publisher tools
 
-The five that build and sign came early, with P18. What is left:
+The tools are done. `tools/mkindex.py` derives §6.1's `cmd:` names out of each
+package's `bin/`, `tools/mkrepo.py` has given up its hand-written `p:cmd:hi` so
+`test/unit/repo.data` proves the derivation, `test/run.mjs` installs `cmd:hi`,
+`tools/ed25519.py` makes a key from a command line, and Package_Format.md §10 is
+the tutorial. What is left:
 
-- `tools/mkindex.py` — Package_Format.md §6.1's `cmd:` names, scanned out of
-  each package's `bin/` rather than copied from its `.PKGINFO`. The rule is
-  written; nothing produces it. `tools/mkrepo.py` gives up its hand-written
-  `p:cmd:hi` in the same change, so `test/unit/repo.data` proves the derivation
-  instead of restating it, and `test/run.mjs` gains the case §6.1's version
-  clause exists for: `pkg install cmd:hi` selects a provider.
 - A real `rootfs/share/pkg/anchor`, signed by keys somebody holds, replacing
   the placeholder P13 shipped, whose private halves were destroyed the moment
-  it was signed. `tools/mkanchor.py` is what signs it.
+  it was signed. `tools/mkanchor.py` is what signs it, §10's step 2 is the
+  command, and its `G` must be above the placeholder's 1.
 
 §9 is absolute and this is where it is at risk. **No private key** may be in the
 git tree, in anything built from it, inside `rootfs.zip`, or anywhere a browser
 can reach. The signer reads a key from a path given on its command line, keeps
 nothing, and writes nothing but the signature. `pkg` itself never signs and
 holds no code to make a key.
-
-Create a section in doc/Package_Format.md where explain for unsophisticated
-reader, in a tutorial style, how to use the publisher tools to build and
-maintain a file server with binary packages.
 
 ### P27. End to end
 

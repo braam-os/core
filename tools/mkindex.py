@@ -4,9 +4,10 @@
     mkindex.py --out <file> --url <N> --version <G> --expiry <ms>
                [--description <T>] [--sign <key>]... <package.zip>...
 
-`C` and `S` are taken from the bytes; the rest of a stanza is read out of the
-package's own `.PKGINFO`. Package_Management.md §7: a URL proves nothing, so
-no record names one — a package is at `<N>/<name>-<version>.zip`.
+`C` and `S` are taken from the bytes, §6.1's `cmd:` names from the zip's `bin/`,
+and the rest of a stanza is read out of the package's own `.PKGINFO`.
+Package_Management.md §7: a URL proves nothing, so no record names one — a
+package is at `<N>/<name>-<version>.zip`.
 """
 
 import sys
@@ -18,6 +19,25 @@ import signindex
 
 # §3.3's canonical order.
 ORDER = "CPVSITotkgDpi"
+
+# §6's operator characters, and the separators §6's lists are split on. A `bin/`
+# entry carrying one of these cannot be written as a dependency token.
+UNTOKENISABLE = set("<>=~ \t\n")
+
+
+def commands(z, path):
+    """§6.1's names: every flat entry of `bin/`, directories skipped."""
+    names = []
+    for entry in z.namelist():
+        if not entry.startswith("bin/"):
+            continue
+        cmd = entry[4:]
+        if not cmd or "/" in cmd:
+            continue
+        if UNTOKENISABLE & set(cmd):
+            sys.exit(f"mkindex.py: {path}: bin/{cmd} is not a dependency name")
+        names.append(cmd)
+    return sorted(names)
 
 
 def parse(argv):
@@ -55,6 +75,7 @@ def stanza(path):
     raw = Path(path).read_bytes()
     with zipfile.ZipFile(path) as z:
         info = z.read(".PKGINFO").decode()
+        cmds = commands(z, path)
 
     fields = {"C": ed25519.digest(raw), "S": str(len(raw))}
     for line in info.splitlines():
@@ -63,6 +84,12 @@ def stanza(path):
     for want in ("P", "V"):
         if want not in fields:
             sys.exit(f"mkindex.py: {path}: .PKGINFO carries no {want}")
+
+    # §6.1: a hand-written `p:` is an ordinary provide and merges with them.
+    provides = [fields["p"]] if fields.get("p") else []
+    provides += [f"cmd:{c}={fields['V']}" for c in cmds]
+    if provides:
+        fields["p"] = " ".join(provides)
     return "".join(f"{k}:{fields[k]}\n" for k in ORDER if k in fields)
 
 

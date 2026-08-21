@@ -41,7 +41,7 @@ def hello(version, greeting):
     return {
         "name": "hello",
         "version": version,
-        "fields": {"T": "a greeting", "D": "libz", "p": "cmd:hi"},
+        "fields": {"T": "a greeting", "D": "libz"},
         "files": {
             "bin/hi": f"#!/bin/sh\necho {greeting}\n",
             "share/hello/greeting": greeting + "\n",

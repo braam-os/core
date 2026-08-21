@@ -25,6 +25,58 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A name the publisher does not get to write down
+
+P26 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), less the anchor. §6.1 of
+Package_Format.md had been true since it was written and produced by nothing:
+`tools/mkindex.py` read `.PKGINFO` and copied `p:` through, and the fixture
+made up the difference with a hand-written `p:cmd:hi`.
+
+**The derivation belongs to the publisher, not to `pkg` and not to `mkpkg`.**
+Three places could compute a `cmd:` name. `pkg` is wrong because the index
+stanza is what `/pkg/db` is written from (§8.1), so a name derived at install
+time would exist in a solve against the index and not in one against the
+installed set. `mkpkg` is wrong because `.PKGINFO` is the package's own claim
+about itself, and §6.1's whole point is that a package *cannot get these
+wrong*. `mkindex` opens every zip already, to hash it; the directory it needs
+is beside the entry it was reading.
+
+**A hand-written `p:` merges rather than losing.** `p` is one §6 list and §1
+makes a repeated lowercase letter malformed, so the merge is a join, not a
+second line — the declared value first, the derived names sorted after it. The
+tool's field dictionary is one entry per letter, and that is the one place it
+had to stop being one.
+
+**An entry that cannot be written as a dependency token stops the index.** A
+`bin/` name carrying a space or one of `< > = ~` would produce a `p:` line that
+§6's reader splits somewhere else, and a silently wrong provide is worse than a
+package that will not publish. It is the same refusal a `.PKGINFO` with no `P`
+already gets.
+
+**Dropping `p:cmd:hi` from the fixture is what made the test possible.** It was
+unversioned, and §6.1's version clause is exactly that an unversioned provide
+is never selected on its own — `is_provider_auto_selectable`. So `pkg install
+cmd:hi` failed with `cmd:hi (virtual)` for as long as the fixture wrote the
+name by hand, and a clause the solver had implemented all along had no case
+over it. Now the name arrives with `=1.0-r0` on it and the install picks
+`hello`, which pulls `libz`. No C++ moved: `dep_parse` never knew about the
+prefix, `index_provides` walks provides already, and the solver compares the
+provide's version. §6.1's last paragraph asked for exactly that, and the way to
+confirm it was to add nothing.
+
+**The key generator went into `ed25519.py` rather than beside it.** §10's first
+step is "make a key" and nothing could be typed to do it: `generate()` was a
+library call `mkrepo.py` reached into, and `openssl genpkey` writes PKCS#8
+where `load()` wants thirty-two raw bytes. A `main()` in the file that already
+holds every key operation keeps the count at one; a `tools/mkkey.py` would have
+been a second file whose whole content is an import. It refuses to write over a
+path that exists, since the failure mode of a key generator is a key replaced.
+
+**§10 is a tutorial in a grammar document, deliberately.** The rest of the file
+says what `pkg` reads; §10 is the only part addressed to a person, and it is
+appended rather than inserted so that §9's number — cited from that document's
+own preamble and from this file — stays where it is.
+
 ## What a transaction touched, and who wanted to know
 
 P25, the last of Phase F. P24 left `.trigger` almost nothing to build — it was

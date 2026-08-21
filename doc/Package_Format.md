@@ -110,7 +110,7 @@ S:18244
 I:41984
 T:pattern-directed scanning and processing language
 D:cmd:sh
-p:cmd:awk
+p:cmd:awk=1.2-r0
 
 C:Q2...
 P:less
@@ -573,3 +573,176 @@ that impossible is the solver's, not this layer's.
 | metadata is a dot-entry | an ordered prefix of the tar | a zip's directory has no order to rely on |
 | an unknown dot-entry refuses it | unknown control files ignored | unreadable instructions must not half-install |
 | `A`, `U`, `L` dropped | uppercase, and required | one architecture; and §1's lowercase rule |
+
+---
+
+## 10. Building a package repository
+
+A tutorial, and the only part of this document addressed to you. Everything
+above is what `pkg` reads; this is how to write it.
+
+A repository is **a directory of static files behind any web server**. There is
+no server-side code, no database and no upload API: you build the files on your
+own machine, sign two of them, and copy the directory up. Given
+`N = https://packages.example/braam`, the server holds
+
+```
+braam/index                     the signed index
+braam/hello-1.0-r0.zip          one file per package
+braam/libz-1.0-r0.zip
+```
+
+and nothing else. §3.3 derives both URLs from `N`, so a package moves by being
+renamed and by nothing else.
+
+The six tools are in `tools/`. All are Python 3; the ones that sign need
+`pip3 install cryptography` and nothing else does.
+
+### Step 1 — make four keys
+
+```
+python3 tools/ed25519.py root1.key root2.key root3.key index.key
+```
+
+Each line printed is a path, the public key and the key's `Q2…` id. **Three
+root keys and one index key**, because they do different jobs
+(Package_Management.md §5):
+
+- a **root key** signs anchors and nothing else. Make it on a machine that has
+  never served the repository, encrypt it with a passphrase kept somewhere else,
+  back it up, and copy its key id onto paper. Three of them held by three
+  people, two needed, so no single machine can move trust.
+- the **index key** signs the index and nothing else. It lives on the machine
+  that publishes, unattended, on purpose — and it is cheap to revoke, because
+  the root keys were kept expensive.
+
+`ed25519.py` refuses to write over a key that exists. Nothing else in the tree
+reads a key, and `pkg` itself never signs.
+
+### Step 2 — sign an anchor
+
+The anchor (§4) names those public keys and the thresholds over them. It is the
+one file that is **not** downloaded: it ships inside `rootfs.zip`, so a client
+trusts your repository by running your build.
+
+```
+python3 tools/mkanchor.py --out anchor --version 1 --expiry 1861920000000 \
+    --threshold root=2 --threshold index=1 \
+    --key root=root1.key --key root=root2.key --key root=root3.key \
+    --key index=index.key \
+    --sign root1.key --sign root2.key
+```
+
+`--key` names private halves and writes down their public ones; `--sign` names
+the private halves that sign. Two signatures because `--threshold root=2` says
+so — an anchor must meet its own root threshold. `--expiry` is milliseconds
+since the epoch:
+
+```
+python3 -c 'import datetime as d; print(int(d.datetime(2029,1,1,
+    tzinfo=d.timezone.utc).timestamp()) * 1000)'
+```
+
+Copy the result to `rootfs/share/pkg/anchor` and rebuild. Then put `root1.key`,
+`root2.key` and `root3.key` back where they came from; publishing does not need
+them again until you rotate a key or the anchor's expiry comes round, and each
+new anchor carries a higher `--version` than the last.
+
+### Step 3 — build packages
+
+A package is a zip (§5): payload entries, and a `.PKGINFO` written for you.
+
+```
+python3 tools/mkpkg.py --out hello-1.0-r0.zip --name hello --version 1.0-r0 \
+    --field T='a greeting' --field D=libz \
+    build/bin/hi=bin/hi \
+    greeting.txt=share/hello/greeting
+```
+
+Each trailing `<src>=<entry>` puts a local file at that path inside the package.
+Only `--name` and `--version` are required; `--field <L>=<value>` sets any other
+letter of §3.2, `D` (depends) and `T` (description) being the two worth setting.
+Versions are apk's grammar (§7), so `-r0` is the release number and `1.0-r1`
+supersedes `1.0-r0`.
+
+Three conventions do work for you:
+
+- **`bin/` is what lands on `PATH`.** Every flat entry becomes a link in the
+  installed generation's `bin/` (§8.3) and a `cmd:<name>` provide (§6.1). You
+  write neither down.
+- **A dot-entry is metadata.** `.pre-install`, `.post-install` and the four
+  others are `/bin/sh` scripts run around the commit; `.trigger` runs when a
+  directory your `g:` globs name changes (§5.1).
+- **The zip is reproducible.** Same inputs, same bytes, so a rebuild that
+  changes the digest changed something.
+
+### Step 4 — sign an index
+
+One index over every package the repository offers, in one command:
+
+```
+python3 tools/mkindex.py --out index --url https://packages.example/braam \
+    --version 41 --expiry 1790000000000 \
+    --description 'Example packages' --sign index.key \
+    hello-1.0-r0.zip libz-1.0-r0.zip
+```
+
+It reads each zip: `C` and `S` from the bytes, the rest from `.PKGINFO`, and
+§6.1's `cmd:` names from `bin/`. **`--version` must increase** at every
+publication — a client refuses an index older than the one it holds (§3.1) — and
+`--expiry` is a promise to re-sign before that moment. Pick a period you can
+actually keep; a month is normal. An index that has expired stops working, which
+is the freeze protection doing its job rather than a fault.
+
+Every package listed must be in the same directory as `index` on the server, and
+a package the index does not list cannot be installed however it got there.
+
+### Step 5 — copy it up, and try it
+
+Upload `index` and the zips together — nothing serves an index whose packages
+are not beside it. On the client:
+
+```
+echo https://packages.example/braam > /pkg/repositories
+pkg update
+pkg install hello
+```
+
+`pkg update` checks, in this order (Package_Management.md §7): the anchor's
+expiry, the index's signature against the anchor's index keys, the index's
+expiry, and its `G` against the one already held. `pkg install` then checks each
+package's size and digest against the index stanza that vouched for it. So a
+refusal names the step it stopped at, and the common mistakes map to it:
+
+| It says | You |
+| --- | --- |
+| the anchor is refused | shipped an anchor that expired, or edited one by hand |
+| the signature does not verify | signed with a key the anchor does not name |
+| the index is older | forgot to raise `--version` |
+| not in the index | rebuilt a package without rebuilding the index |
+| the digest does not match | uploaded a zip and an index from different builds |
+
+### Keeping it
+
+- **Adding or updating a package**: build the zip, re-run `mkindex.py` over the
+  whole set with `--version` raised, upload both. There is no incremental
+  update; the index is one signed file.
+- **Before the expiry**: re-run the same command with a later `--expiry`. That
+  is the routine, and it needs only the index key.
+- **Rotating the index key**: make a new one, sign a new anchor naming it with a
+  higher `--version`, and ship that anchor in a release. The old index key stops
+  being trusted the moment clients take the new anchor.
+- **A stolen root key**: below the threshold, sign a new anchor without it. At
+  or above it, the anchor has to be replaced out of band — which is a release,
+  and the key ids on paper are what let anyone check the new one.
+
+`tools/mkrepo.py` does all five steps in forty lines to build the test fixture,
+under keys it destroys afterwards. It is the shortest complete example there is.
+
+### What never leaves your machine
+
+Package_Management.md §9, restated because it is the mistake this whole
+document exists to prevent. **No private key** goes into the git tree, into
+anything built from it, or inside `rootfs.zip`. The signing tools read a key
+from a path, keep nothing, and write nothing but the signature. If a key is ever
+in a place a browser could fetch it, it is not a key any more.

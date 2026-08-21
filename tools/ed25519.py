@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Ed25519, and the two encodings the formats use.
 
+    ed25519.py <path>...
+
+A fresh private key at each path, and its public half and key id on stdout.
+
 The one place a key is read. Package_Management.md §9: no private key belongs
 in the tree, in anything built from it, or inside rootfs.zip — so a signer
 reads one from a path, keeps nothing, and writes nothing but the signature.
@@ -12,6 +16,7 @@ kernel's Sys::Verify, not this.
 
 import base64
 import hashlib
+import os
 import sys
 
 try:
@@ -71,3 +76,19 @@ def digest(raw):
 def key_name(public):
     """trust_key_name: the digest of "<algorithm> <base64 key>"."""
     return digest(("ed25519 " + b64(public)).encode())
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.exit("usage: ed25519.py <path>...")
+    for path in argv[1:]:
+        if os.path.exists(path):
+            sys.exit(f"ed25519.py: {path} exists; a key written over is a key lost")
+    for path in argv[1:]:
+        public = generate(path)
+        print(f"{path} ed25519 {b64(public)} {key_name(public)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

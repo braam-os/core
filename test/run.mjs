@@ -2240,6 +2240,34 @@ if (mode === "--kernel") {
                        { status: 200, headers: "content-type: text/plain\n",
                          body: repo("index") });
 
+        // P26. §6.1's names, derived by tools/mkindex.py out of each package's
+        // bin/ — nothing in the fixture writes cmd:hi down. Its own /pkg, and
+        // index 1 again.
+        submit("rm -r /pkg", (ut += 0.005));
+        store.dirs.add("/pkg");
+        plant("/pkg/repositories", RURL + "\n");
+        serve("libz-1.0-r0", good);
+        serve("hello-1.0-r0", archive("hello-1.0-r0"));
+        prints("pkg update", `${RURL}|index 1, 2 packages`);
+
+        // The prefix is a name like any other, so a name nothing provides is
+        // the same refusal a package name gets.
+        prints("pkg install cmd:nosuch", "pkg: cmd:nosuch: not in the index", 1);
+
+        // §6.1's version clause: cmd:hi=1.0-r0 is selectable, so this picks
+        // hello, which names libz. Unversioned it would be `cmd:hi (virtual)`.
+        prints("pkg install cmd:hi",
+               ["Installing libz (1.0-r0)", "Installing hello (1.0-r0)",
+                "generation 1, 2 packages"].join("|"));
+        if (text("/pkg/world") !== "cmd:hi\n")
+            fail(`/pkg/world holds ${JSON.stringify(text("/pkg/world"))}`);
+        // §8.1 is written from the index stanza, so the derived name is
+        // installed with the package and a solve against either set sees it.
+        if (!text("/pkg/db/hello-1.0-r0").includes("p:cmd:hi=1.0-r0\n"))
+            fail("the record carries no derived provide");
+        // The name and the farm entry are the same set (§8.3).
+        prints("hi", "hi from hello");
+
         // Put the release's anchor back and leave no /pkg, so what follows
         // starts where it did.
         store.files.set("/share/pkg/anchor", shipped);
