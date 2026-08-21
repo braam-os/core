@@ -137,6 +137,16 @@ void test_db()
         test_check(!packages_read(text, v), text, __FILE_NAME__, __LINE__);
     }
 
+    // A name the generation carries, one it does not, and a file that does not
+    // read — which has no version in it either.
+    {
+        CHECK(installed_version(TWO_TEXT, "less") == "1.6-r1");
+        CHECK(installed_version(TWO_TEXT, "awk") == "1.2-r0");
+        CHECK(installed_version(TWO_TEXT, "nonesuch").empty());
+        CHECK(installed_version("", "awk").empty());
+        CHECK(installed_version("awk\n", "awk").empty());
+    }
+
     // world is §6 tokens, one per line, kept as written.
     {
         constexpr Str DEPS[] = { "awk", "!foo", "less>=1.2", "cmd:awk" };
@@ -243,6 +253,18 @@ void test_db()
         CHECK(dir == "share/a" && name == "b");
         db_split("README", dir, name);
         CHECK(dir.empty() && name == "README");
+    }
+
+    // And back: db_join is db_split's inverse, empty F and all.
+    {
+        constexpr Str ENTRIES[] = { "bin/hi", "share/a/b", "README" };
+        for (Str entry : ENTRIES) {
+            Str dir, name;
+            String back;
+            db_split(entry, dir, name);
+            test_check(db_join(dir, name, back) && back.str() == entry, entry, __FILE_NAME__,
+                       __LINE__);
+        }
     }
     {
         DbRecord r;

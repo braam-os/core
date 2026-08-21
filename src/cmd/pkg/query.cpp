@@ -40,20 +40,6 @@ bool pad_to(String &out, Str s, usize w)
     return true;
 }
 
-// ------------------------------------------------------------ the two files
-
-// The version the generation carries for `name`. A view into `text`.
-Str installed_of(Str text, Str name)
-{
-    Vec<Installed> pkgs;
-    if (!packages_read(text, pkgs))
-        return Str();
-    for (const Installed &p : pkgs)
-        if (p.name == name)
-            return p.version;
-    return Str();
-}
-
 // ---------------------------------------------------------------- search
 
 char fold(char c)
@@ -267,7 +253,7 @@ Task<i32> pkg_info(Args args)
     }
 
     String out;
-    if (!describe(out, *p, installed_of(text.str(), p->name))) {
+    if (!describe(out, *p, installed_version(text.str(), p->name))) {
         if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
             co_await t;
         co_return 1;

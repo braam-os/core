@@ -28,6 +28,10 @@ Task<i32> pkg_search(Args args);
 Task<i32> pkg_info(Args args);
 Task<i32> pkg_list(Args args);
 
+// The two that read §8.1's record, in verify.cpp.
+Task<i32> pkg_files(Args args);
+Task<i32> pkg_verify(Args args);
+
 // /pkg/index as an update left it, unchecked (§7's checks are not repeated).
 // 0 is a read index; anything else is the exit status, its refusal printed.
 Task<i32> pkg_load_index(CheckedIndex &c);

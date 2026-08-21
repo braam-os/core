@@ -134,6 +134,17 @@ bool packages_read(Str text, Vec<Installed> &out)
     return true;
 }
 
+Str installed_version(Str text, Str name)
+{
+    Vec<Installed> pkgs;
+    if (!packages_read(text, pkgs))
+        return Str();
+    for (const Installed &p : pkgs)
+        if (p.name == name)
+            return p.version;
+    return Str();
+}
+
 bool world_write(Span<const Str> deps, String &out)
 {
     for (Str d : deps) {
@@ -220,6 +231,11 @@ void db_split(Str entry, Str &dir, Str &name)
     }
     dir  = entry.substr(0, at);
     name = entry.substr(at + 1);
+}
+
+bool db_join(Str dir, Str name, String &out)
+{
+    return dir.empty() ? out.assign(name) : join(out, dir, name);
 }
 
 bool pkg_tree_ops(Vec<StoreOp> &out)

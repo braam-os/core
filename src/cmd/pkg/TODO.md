@@ -27,13 +27,13 @@ changeset means, compiled into `tests.wasm` as well — `trust.cpp` and
 `index.cpp` because they take a `PkgHost` rather than calling a syscall.
 `unzip.cpp` inflates an entry, `store.cpp` performs the steps `db.cpp`
 computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`,
-`query.cpp` and `install.cpp` are the subcommands there are — the last holding
-the four that change the installed set; those six are the pieces that stay
-out, and `solve.cpp` is in with the first list, being pure. Phase D is done,
-and of Phase E `pkg update` writes `/pkg/index`, `pkg search`, `pkg info` and
-`pkg list` read it and the generation beside it, and `pkg install`,
-`pkg remove`, `pkg autoremove` and `pkg upgrade` perform the solver's
-changeset. So this starts at P21.
+`query.cpp`, `verify.cpp` and `install.cpp` are the subcommands there are — the
+last holding the four that change the installed set; those seven are the pieces
+that stay out, and `solve.cpp` is in with the first list, being pure. Phase D is
+done, and of Phase E `pkg update` writes `/pkg/index`, `pkg search`, `pkg info`
+and `pkg list` read it and the generation beside it, `pkg install`,
+`pkg remove`, `pkg autoremove` and `pkg upgrade` perform the solver's changeset,
+and `pkg files` and `pkg verify` read §8.1's record back. So this starts at P22.
 
 Four of P26's tools came early with P18, which needed a signed repository to
 install from: `tools/ed25519.py`, `signindex.py`, `mkanchor.py`, `mkpkg.py`,
@@ -119,22 +119,15 @@ large crosses the ABI. That is P6.
 
 ## Phase E — the commands
 
-### P21. `pkg files` / `pkg verify`
-
-`files` prints the paths from the installed-db stanza. `verify` re-hashes each
-recorded file against its stored digest and reports missing, modified and extra;
-with no argument it does every installed package.
-
-Say plainly in the help text what this does not mean. §11: checking happens
-once, at install, nothing re-reads the store afterwards, and anything can
-overwrite anything — including `/bin/pkg`. `verify` tells you a file changed.
-It does not make the store tamper-evident.
-
 ### P22. `pkg clean`
 
 The download cache, store directories no generation names, and superseded
 generations. **Keep at least the previous generation**: it is what rollback
 needs, and a clean that removes it removes the property P18 was built for.
+
+`/share/help`'s Packages section names every subcommand but this one, since a
+listed command that answers "not built yet" is a lie in the manual; the row
+goes in with the code.
 
 ---
 

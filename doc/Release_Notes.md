@@ -25,6 +25,69 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A digest read back, and what it still does not prove
+
+P21 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). Every install since P18
+has written a SHA-256 per file into `/pkg/db/<name>-<version>` — §8.1's `Z`
+beside its `R` — and nothing had ever read one. `pkg files` prints the paths
+that record names and `pkg verify` hashes the bytes behind them again,
+reporting **missing**, **modified** and **extra**. `src/cmd/pkg/verify.cpp` is
+both, and it is a file of its own because `query.cpp` says at the top that
+nothing in it fetches, checks or writes. Re-hashing the store is a check.
+
+**A clean `verify` prints nothing.** Output means trouble, which is `dpkg -V`'s
+shape and `rpm -V`'s, and it is what makes the command usable from a script
+without a parser: the status is the answer and the lines are the detail. `pkg
+search` with no match already behaved this way, so this is the existing rule
+rather than a new one.
+
+**The paths are absolute.** apk prints a package's files relative to a root,
+because on apk's system that root is `/` and the relative form is the useful
+one. Here a package's files live under `/pkg/store/<name>-<version>/` and are
+reached through a symlink farm; `bin/hi` would name nothing a reader could
+open. So `files` prints what exists, which is also what `verify` names in its
+own report, so a line from one can be pasted into the other.
+
+**Extras come from a walk, not from a second record.** There is nothing to
+compare a directory listing against except the record itself — which is exactly
+the point, since a file that the record does not name is by construction one
+nothing accounted for. Only files are reported: an unrecorded empty directory
+is not evidence of anything. The walk is iterative, over a worklist of
+directories rather than a coroutine per level, because a coroutine per level is
+a frame per level and §2's rule about frames does not stop applying because the
+recursion is shallow in practice. `file_matches` streams the file a chunk at a
+time into the running `Sha256` for the same reason P6 put SHA-256 in wasm at
+all: nothing large has to exist anywhere at once.
+
+**The disclaimer had to reach the help text.** Package_Management.md §11 has
+said from the start that the store is not tamper-evident: checking happens once,
+at install, there are no file permissions here, every mount but `/proc` is the
+one read-write store, and `rm /bin/pkg` already works. A command named `verify`
+invites precisely the reading §11 denies, and a caveat that lives only in a
+design document is not a caveat anybody reads. So `/share/help` gained a
+`Packages` section — `pkg`'s subcommands, which
+[pkg.cpp](../src/cmd/pkg/pkg.cpp)'s table comment had been promising to that
+file for six tasks — and the sentence sits under the command it is about.
+
+What `verify` is worth, stated positively: it answers *did what I installed
+change*, over an interrupted write, a store a `#!` script scribbled on, or a
+generation someone edited by hand. It does not answer *can I trust what is
+there*. The first question has an answer here and the second needs a privilege
+boundary this system does not have.
+
+`clean` is the one row of the table `/share/help` does not list, since a manual
+that names a command answering "not built yet" is worse than one that waits.
+P22 adds the line with the code.
+
+Two functions moved down into `db.cpp` on the way: `installed_version`, which
+was a file-local in `query.cpp` and is now what both readers of a generation
+call, and `db_join`, `db_split`'s inverse. The rule that placed them is the one
+that placed everything else in `src/cmd/pkg/`: pure goes down where
+`tests.wasm` can reach it, and both have cases in
+[test/unit/test_db.cpp](../test/unit/test_db.cpp) — `db_join` tested by round
+trip, since an inverse that is asserted rather than exercised is two chances to
+be wrong instead of one.
+
 ## One transaction, because the signature covers one file
 
 P20 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last of Phase E's

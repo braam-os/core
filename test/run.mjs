@@ -1960,6 +1960,68 @@ if (mode === "--kernel") {
         prints("pkg upgrade please", "usage: pkg upgrade", 2);
         net.routes.delete(`${RURL}/hello-1.1-r0.zip`);
 
+        // P21. §8.1's record read back: the paths it names, and the bytes
+        // behind them hashed again. A tree of its own, since what is checked
+        // is what an install has just written.
+        submit("rm -r /pkg", (ut += 0.005));
+        store.dirs.add("/pkg");
+        plant("/pkg/repositories", RURL + "\n");
+        net.routes.set(RURL + "/index",
+                       { status: 200, headers: "content-type: text/plain\n", body: repo("index") });
+        prints("pkg update", `${RURL}|index 1, 2 packages`);
+        prints("pkg install hello",
+               ["Installing libz (1.0-r0)", "Installing hello (1.0-r0)",
+                "generation 1, 2 packages"].join("|"));
+
+        // The F groups in the order the unpack wrote them, as absolute store
+        // paths: what `verify` names, and what `cat` takes.
+        prints("pkg files hello",
+               ["/pkg/store/hello-1.0-r0/bin/hi",
+                "/pkg/store/hello-1.0-r0/share/hello/greeting"].join("|"));
+        prints("pkg files libz", "/pkg/store/libz-1.0-r0/share/libz/README");
+        prints("pkg files nonesuch", "pkg: nonesuch: not installed", 1);
+        prints("pkg files", "usage: pkg files <package>", 2);
+        prints("pkg files hello libz", "usage: pkg files <package>", 2);
+
+        // Nothing wrong is nothing printed. This is the case that says the
+        // digests being compared are the ones the install recorded.
+        prints("pkg verify", "");
+
+        // A file the store still has, at other bytes. The walk is recursive,
+        // so a nested F is reached too.
+        submit("echo tampered >> /pkg/store/hello-1.0-r0/bin/hi", (ut += 0.005));
+        submit("echo tampered > /pkg/store/hello-1.0-r0/share/hello/greeting", (ut += 0.005));
+        prints("pkg verify",
+               ["modified  /pkg/store/hello-1.0-r0/bin/hi",
+                "modified  /pkg/store/hello-1.0-r0/share/hello/greeting"].join("|"), 1);
+
+        // An operand scopes it, and libz was never touched.
+        prints("pkg verify libz", "");
+        prints("pkg verify hello",
+               ["modified  /pkg/store/hello-1.0-r0/bin/hi",
+                "modified  /pkg/store/hello-1.0-r0/share/hello/greeting"].join("|"), 1);
+
+        // Gone, and one the record does not name.
+        submit("rm /pkg/store/hello-1.0-r0/bin/hi", (ut += 0.005));
+        submit("echo x > /pkg/store/hello-1.0-r0/bin/spare", (ut += 0.005));
+        prints("pkg verify hello",
+               ["missing   /pkg/store/hello-1.0-r0/bin/hi",
+                "modified  /pkg/store/hello-1.0-r0/share/hello/greeting",
+                "extra     /pkg/store/hello-1.0-r0/bin/spare"].join("|"), 1);
+
+        // §11: it says a file changed, and it changes nothing back.
+        if (!store.files.has("/pkg/store/hello-1.0-r0/bin/spare"))
+            fail("pkg verify removed a file it only reported");
+        prints("pkg list", "hello  1.0-r0|libz   1.0-r0");
+
+        prints("pkg verify nonesuch", "pkg: nonesuch: not installed", 1);
+        prints("pkg verify hello libz", "usage: pkg verify [<package>]", 2);
+
+        // Nothing installed is nothing to verify, and not an error.
+        submit("rm -r /pkg", (ut += 0.005));
+        prints("pkg verify", "");
+        prints("pkg files hello", "pkg: hello: not installed", 1);
+
         // Put the release's anchor back and leave no /pkg, so what follows
         // starts where it did.
         store.files.set("/share/pkg/anchor", shipped);
@@ -3751,7 +3813,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 5,439-byte file: more than the eight writes a pipe
+    // Three copies of a 6,669-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -3780,11 +3842,11 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 16,317 bytes is thirty-two chunks against eight
+    // The many-writes case: 20,007 bytes is forty chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
     // The counts are three copies of /share/help, so a line added there moves
     // them.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "312 2580 16317");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "390 3111 20007");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

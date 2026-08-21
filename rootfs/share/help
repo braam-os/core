@@ -94,6 +94,32 @@ Programs in /bin
   watch     [-m] [-n <secs>] <command> [<arg>...] — run a command repeatedly
   wc        [<file>...] — count lines, words and bytes
 
+Packages
+--------
+
+  `pkg` installs into /pkg, which the boot archive does not carry — so what it
+  installed outlives a release that replaces /bin and /share. /pkg/bin is on
+  PATH after /bin, so nothing installed can shadow a system command. Its
+  commands, each of them spelled `pkg <name>`:
+
+  update    fetch the repository index, and check it before storing it
+  search    <pattern> — search the index by name and description
+  info      <package> — what the index says about one package
+  install   <package>... — install packages, and what they depend on
+  remove    <package>... — remove packages
+  autoremove
+            remove dependencies nothing explicit needs any more
+  upgrade   upgrade everything installed
+  list      list installed packages
+  files     <package> — the files an installed package placed
+  verify    [<package>] — re-read those files, and compare each against the
+            digest recorded when it was installed
+
+  `pkg verify` says a file changed since its install. It is not a guarantee
+  that none did. Checking happens once, at install; nothing re-reads the store
+  afterwards, there are no file permissions here, and anything may overwrite
+  anything — /bin/pkg included.
+
 More
 ----
 

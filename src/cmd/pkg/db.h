@@ -52,6 +52,10 @@ struct Installed {
 bool packages_write(Span<const Installed> v, String &out);
 bool packages_read(Str text, Vec<Installed> &out);
 
+// The version those lines carry for `name`, or an empty Str. A view into
+// `text`; a file that does not read has no version in it either.
+Str installed_version(Str text, Str name);
+
 // One §6 dependency per line.
 bool world_write(Span<const Str> deps, String &out);
 bool world_read(Str text, Vec<Str> &out);
@@ -73,6 +77,10 @@ bool repos_read(Str text, Vec<Str> &out);
 // A zip entry name split for §8.1's F and R: "bin/hi" is "bin" and "hi",
 // "README" is "" and "README". path_dirname answers "/" for the second.
 void db_split(Str entry, Str &dir, Str &name);
+
+// The same the other way: an F and one of its Rs as the path under the store
+// directory that db_split was given.
+bool db_join(Str dir, Str name, String &out);
 
 // ------------------------------------------------------------------ the steps
 
