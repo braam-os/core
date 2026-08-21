@@ -25,6 +25,69 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## One transaction, because the signature covers one file
+
+P20 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last of Phase E's
+commands that change the installed set. `pkg upgrade` is fifteen lines:
+`begin`, `SOLVE_UPGRADE`, `decide`, `settle`. The work was the fixture.
+
+**It is one solve and one generation, and that is a requirement rather than a
+convenience.** §6's "the whole package set, signed as one file" is what stops
+an attacker combining packages that never went together, and a loop of installs
+would re-solve between each one and hand back exactly what the signed set was
+protecting. The shape P18 built happens to be the shape that preserves it: one
+`solve()` over all of world, one `store_perform`, one rename.
+
+**`SOLVE_UPGRADE` and nothing else.** apk's upgrade branch sets the run-wide
+flag and, given operands, clears it again and flags the named packages instead.
+There are no operands here — TODO's table says `pkg upgrade` with no argument,
+and "commit one generation for the lot" reads that way — so an argument is a
+usage error. `-a/--available`, `-l/--latest` and `--prune` are not built
+either. The flag rides on the `Txn` now and `decide` passes it, which is the
+whole of the plumbing.
+
+**An upgrade's changes are installs, so nothing new performs them.** They carry
+a `new_pkg` and a real verb, so `settle`'s `realise` loop fetches, checks the
+digest and unpacks each one, and a provider swap that arrives as a `Purging`
+beside an `Installing` in the same changeset needs no case of its own. The new
+version unpacks into a **new** store directory — `<name>-<new version>` — so
+nothing the running generation is executing out of is touched while the
+transaction is still able to fail.
+
+**The version it came from stays.** Its store directory and its `/pkg/db`
+record are what the previous generation names, and that generation is what a
+rollback swings back to; `pkg clean` collects them at P22. Same rule as a
+removal's, and the smoke test asserts both are still there after an upgrade.
+
+**P18's different-digest refusal stays out of reach.** A bare upgrade sets no
+`SOLVE_AVAILABLE`, so a repository that republishes an installed version under
+new bytes loses: `compare_providers` skips its early `ipkg` rung under
+`SOLVE_UPGRADE`, but the late one at
+[solve.cpp:791](../src/cmd/pkg/solve.cpp#L791) still fires once the versions
+compare equal, and the installed package wins. No `Replacing`, so `stem_state`
+is never asked. That is exactly what apk's `-a` exists to override, and not
+building it is what keeps the store's immutability from ever being tested here.
+
+**Nor does `pkg upgrade` fetch an index first**, for the reason `pkg install`
+does not: §7's checks belong to the command that fetches one, and a command
+that quietly refreshed the index would choose what to install from bytes nobody
+asked for.
+
+**The fixture gained a second index rather than a second version of
+everything.** `tools/mkrepo.py` now signs `@index` (G:1, `libz-1.0-r0` and
+`hello-1.0-r0`) and `@index2` (G:2, the same libz and `hello-1.1-r0`), so the
+smoke test can watch an upgrade move one package and leave the other exactly
+where it was — a set-wide bump would have proved less. `hello-1.1-r0`'s
+`bin/hi` prints different text, so the link farm is checked by *running* it:
+`hi` says the new thing without anything having been told a generation changed.
+
+One line of that suite is worth more than it looks: **`pkg install hello`
+against the new index does nothing.** Without `SOLVE_UPGRADE` the solver keeps
+what is installed whatever the index now offers, which is the difference
+between the two commands stated as a test.
+
+`/bin/pkg` is 181,883 bytes, from 180,174; the staging tree 983,973 of 2 MiB.
+
 ## The purge was already written
 
 P19 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `pkg remove` takes a name

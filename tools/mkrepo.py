@@ -29,22 +29,33 @@ ANCHOR_EXPIRY = 3000000000000
 INDEX_EXPIRY = 2000000000000
 
 # A `#!` file is a program here, so a fixture needs no binary.
-PACKAGES = [
-    {
-        "name": "libz",
-        "version": "1.0-r0",
-        "fields": {"T": "a compression library, as far as anyone knows"},
-        "files": {"share/libz/README": "nothing is compressed here\n"},
-    },
-    {
+LIBZ = {
+    "name": "libz",
+    "version": "1.0-r0",
+    "fields": {"T": "a compression library, as far as anyone knows"},
+    "files": {"share/libz/README": "nothing is compressed here\n"},
+}
+
+
+def hello(version, greeting):
+    return {
         "name": "hello",
-        "version": "1.0-r0",
+        "version": version,
         "fields": {"T": "a greeting", "D": "libz", "p": "cmd:hi"},
         "files": {
-            "bin/hi": "#!/bin/sh\necho hi from hello\n",
-            "share/hello/greeting": "hello\n",
+            "bin/hi": f"#!/bin/sh\necho {greeting}\n",
+            "share/hello/greeting": greeting + "\n",
         },
-    },
+    }
+
+
+PACKAGES = [LIBZ, hello("1.0-r0", "hi from hello"), hello("1.1-r0", "hi from hello 1.1")]
+
+# One index per generation of the repository: the second moves hello and
+# leaves libz where it is, so an upgrade can be seen touching only what moved.
+INDEXES = [
+    (1, ["libz-1.0-r0", "hello-1.0-r0"]),
+    (2, ["libz-1.0-r0", "hello-1.1-r0"]),
 ]
 
 
@@ -66,25 +77,28 @@ def build(tmp: Path):
 
     zips = []
     for p in PACKAGES:
-        argv = ["mkpkg.py", "--out", str(tmp / f"{p['name']}-{p['version']}.zip"),
+        stem = f"{p['name']}-{p['version']}"
+        argv = ["mkpkg.py", "--out", str(tmp / f"{stem}.zip"),
                 "--name", p["name"], "--version", p["version"]]
         for letter, value in p["fields"].items():
             argv += ["--field", f"{letter}={value}"]
         for entry, text in p["files"].items():
-            src = tmp / entry.replace("/", "_")
+            src = tmp / f"{stem}_{entry.replace('/', '_')}"
             src.write_text(text)
             argv.append(f"{src}={entry}")
         mkpkg.main(argv)
-        zips.append(tmp / f"{p['name']}-{p['version']}.zip")
+        zips.append(tmp / f"{stem}.zip")
 
-    index = tmp / "index"
-    mkindex.main([
-        "mkindex.py", "--out", str(index), "--url", URL, "--version", "1",
-        "--expiry", str(INDEX_EXPIRY), "--description", "Braam test packages",
-        "--sign", str(keys["index"]),
-    ] + [str(z) for z in zips])
+    blocks = [("anchor", anchor.read_text())]
+    for version, stems in INDEXES:
+        index = tmp / f"index{version}"
+        mkindex.main([
+            "mkindex.py", "--out", str(index), "--url", URL,
+            "--version", str(version), "--expiry", str(INDEX_EXPIRY),
+            "--description", "Braam test packages", "--sign", str(keys["index"]),
+        ] + [str(tmp / f"{stem}.zip") for stem in stems])
+        blocks.append(("index" if version == 1 else f"index{version}", index.read_text()))
 
-    blocks = [("anchor", anchor.read_text()), ("index", index.read_text())]
     for z in zips:
         wrapped = base64.b64encode(z.read_bytes()).decode()
         rows = "\n".join(wrapped[i:i + 76] for i in range(0, len(wrapped), 76))

@@ -13,15 +13,17 @@
 #include "unzip.h"
 #include "zip.h"
 
-// The three commands that change the installed set. `install` is §7's steps 8
-// to 10, and the crossing between 9 and 10 is one line in `realise`; `remove`
-// and `autoremove` are the same transaction with nothing to fetch.
+// The four commands that change the installed set. `install` is §7's steps 8
+// to 10, the crossing between 9 and 10 being one line in `realise`; `remove`
+// and `autoremove` are the same transaction with nothing to fetch, and
+// `upgrade` is it once more with the solver told to prefer what is new.
 
 namespace {
 
 constexpr Str USAGE          = "usage: pkg install <package>...\n";
 constexpr Str USAGE_REMOVE   = "usage: pkg remove <package>...\n";
 constexpr Str USAGE_AUTO     = "usage: pkg autoremove\n";
+constexpr Str USAGE_UPGRADE  = "usage: pkg upgrade\n";
 constexpr Str NO_MEMORY      = "pkg: out of memory\n";
 constexpr Str NOTHING        = "nothing installed\n";
 constexpr Str CANNOT_INSTALL = "pkg: cannot install:";
@@ -36,6 +38,7 @@ struct Txn {
     Vec<Str> specs;    // its lines, the operands merged in
     Vec<Dep> world;
     Vec<SolveRequest> named;
+    u32 flags          = 0; // the run's own, which is SOLVE_UPGRADE or none
     bool world_changed = false;
 
     Vec<String> db_texts;         // the records the generation names
@@ -556,6 +559,7 @@ Task<i32> decide(Txn &in, Str lead)
     si.installed = in.installed;
     si.world     = in.world;
     si.named     = in.named;
+    si.flags     = in.flags;
     if (solve(si, in.cset).is_err())
         co_return 1;
 
@@ -861,6 +865,40 @@ Task<i32> pkg_remove(Args args)
     if (Task<i32> t = settle(in))
         bad = co_await t;
     co_return bad != 0 ? bad : kept;
+}
+
+Task<i32> pkg_upgrade(Args args)
+{
+    if (args.size() != 1) {
+        if (Task<Result<void>> t = put(SYS_STDERR, USAGE_UPGRADE))
+            co_await t;
+        co_return 2;
+    }
+
+    Held held{ heap_new<Txn>() };
+    if (!held.p) {
+        if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
+            co_await t;
+        co_return 1;
+    }
+    Txn &in = *held.p;
+
+    // §6's set signed as one file: one solve and one generation, never a
+    // loop of installs.
+    i32 bad = 1;
+    if (Task<i32> t = begin(in, true))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+
+    in.flags = SOLVE_UPGRADE;
+    if (Task<i32> t = decide(in, CANNOT_INSTALL))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+    if (Task<i32> t = settle(in))
+        co_return co_await t;
+    co_return 1;
 }
 
 Task<i32> pkg_autoremove(Args args)

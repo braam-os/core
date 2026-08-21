@@ -22,7 +22,7 @@ constexpr PkgCommand TABLE[] = {
     { "remove", pkg_remove },
     { "search", pkg_search },
     { "update", pkg_update },
-    { "upgrade", nullptr },
+    { "upgrade", pkg_upgrade },
     { "verify", nullptr },
 };
 

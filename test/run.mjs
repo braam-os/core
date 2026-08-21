@@ -1470,11 +1470,11 @@ if (mode === "--kernel") {
         fail(`pkg nonesuch left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
 
     s = submit("clear", 1184.74);
-    s = submit("pkg upgrade", 1184.75);
-    if (!rows(s).includes("pkg: upgrade is not built yet"))
-        fail(`pkg upgrade printed ${JSON.stringify(rows(s))}`);
+    s = submit("pkg clean", 1184.75);
+    if (!rows(s).includes("pkg: clean is not built yet"))
+        fail(`pkg clean printed ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes(prompt(1)))
-        fail(`pkg upgrade left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
+        fail(`pkg clean left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
 
     // An operand is required, and one that is not a §6 token is the same
     // usage error rather than a name nothing provides.
@@ -1878,6 +1878,56 @@ if (mode === "--kernel") {
 
         prints("pkg remove", "usage: pkg remove <package>...", 2);
         prints("pkg autoremove please", "usage: pkg autoremove", 2);
+
+        // P20. An upgrade with no index is the same refusal an install is.
+        prints("pkg upgrade", "pkg: no index; run pkg update", 1);
+
+        store.dirs.add("/pkg");
+        plant("/pkg/repositories", RURL + "\n");
+        serve("libz-1.0-r0", good);
+        serve("hello-1.0-r0", archive("hello-1.0-r0"));
+        serve("hello-1.1-r0", archive("hello-1.1-r0"));
+        prints("pkg update", `${RURL}|index 1, 2 packages`);
+        prints("pkg install hello",
+               ["Installing libz (1.0-r0)", "Installing hello (1.0-r0)",
+                "generation 1, 2 packages"].join("|"));
+
+        // The second index moves hello and leaves libz where it was.
+        net.routes.set(RURL + "/index",
+                       { status: 200, headers: "content-type: text/plain\n", body: repo("index2") });
+        prints("pkg update", `${RURL}|index 2, 2 packages`);
+
+        // Installing is not upgrading: without SOLVE_UPGRADE the solver keeps
+        // what is installed, whatever the index now offers.
+        prints("pkg install hello", "generation 1, unchanged");
+
+        prints("pkg upgrade",
+               ["Upgrading hello (1.0-r0 -> 1.1-r0)", "generation 2, 2 packages"].join("|"));
+        if (text("/pkg/gen/2/packages") !== "hello 1.1-r0\nlibz 1.0-r0\n")
+            fail(`the upgraded generation holds ${JSON.stringify(text("/pkg/gen/2/packages"))}`);
+        prints("pkg list", "hello  1.1-r0|libz   1.0-r0");
+
+        // The farm was rebuilt, and nothing was told a generation changed.
+        prints("hi", "hi from hello 1.1");
+        if (linkTarget(bytes("/pkg/gen/2/bin/hi")) !== "/pkg/store/hello-1.1-r0/bin/hi")
+            fail(`the farm names ${linkTarget(bytes("/pkg/gen/2/bin/hi"))}`);
+
+        // The version it came from is still on disk, and so is the generation
+        // that names it: an upgrade is rolled back the way anything else is.
+        if (!store.dirs.has("/pkg/store/hello-1.0-r0") || !store.files.has("/pkg/db/hello-1.0-r0"))
+            fail("an upgrade took the old version with it");
+        if (!store.dirs.has("/pkg/gen/1"))
+            fail("an upgrade took the generation to roll back to");
+        if (text("/pkg/world") !== "hello\n")
+            fail(`an upgrade touched world: ${JSON.stringify(text("/pkg/world"))}`);
+
+        // Newest already: nothing to do, and no generation for it.
+        prints("pkg upgrade", "generation 2, unchanged");
+        if (store.dirs.has("/pkg/gen/3"))
+            fail("an upgrade with nothing to do built a generation");
+
+        prints("pkg upgrade please", "usage: pkg upgrade", 2);
+        net.routes.delete(`${RURL}/hello-1.1-r0.zip`);
 
         // Put the release's anchor back and leave no /pkg, so what follows
         // starts where it did.

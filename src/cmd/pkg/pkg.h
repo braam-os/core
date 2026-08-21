@@ -21,6 +21,7 @@ Task<i32> pkg_update(Args args);
 Task<i32> pkg_install(Args args);
 Task<i32> pkg_remove(Args args);
 Task<i32> pkg_autoremove(Args args);
+Task<i32> pkg_upgrade(Args args);
 
 // The three that only read, in query.cpp.
 Task<i32> pkg_search(Args args);
