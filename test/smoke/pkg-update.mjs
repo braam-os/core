@@ -19,7 +19,7 @@ export function check() {
 
     // Nothing to update from: /pkg does not exist, and the release's own
     // /etc/repositories is emptied first, since a file that is not there and
-    // one with nothing in it read alike (Package_Format.md §8.2).
+    // one with nothing in it read alike (Package_Formats.md §8.2).
     plant("/etc/repositories", "");
     s = update();
     if (!rows(s).some((line) => line.startsWith("pkg: no repositories")))

@@ -1,4 +1,4 @@
-// Dependencies (Package_Format.md §6): [!]name[[op]ver], in a space- or
+// Dependencies (Package_Formats.md §6): [!]name[[op]ver], in a space- or
 // newline-separated list. The operator is a mask of acceptable results, so the
 // nine spellings are version.h's bitfield and not nine cases.
 #pragma once

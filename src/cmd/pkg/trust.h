@@ -1,4 +1,4 @@
-// The anchor, checked (Package_Format.md §4, Package_Management.md §7 step 4
+// The anchor, checked (Package_Formats.md §4, Package_Management.md §7 step 4
 // and §10). The host is a parameter, so nothing here needs a syscall.
 //
 // A refusal is false, a fault an Err.

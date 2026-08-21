@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The anchor (Package_Format.md §4), signed by a threshold of its own roots.
+"""The anchor (Package_Formats.md §4), signed by a threshold of its own roots.
 
     mkanchor.py --out <file> --version <G> --expiry <ms>
                 --threshold <use>=<n>... --key <use>=<path>...

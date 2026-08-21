@@ -3,7 +3,7 @@
 
 namespace {
 
-// Package_Format.md §3's example, and §4's.
+// Package_Formats.md §3's example, and §4's.
 constexpr Str INDEX =
     "Y:ed25519 Q2key sig\n"
     "\n"

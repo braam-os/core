@@ -19,7 +19,7 @@ constexpr u64 PACKAGE_MAX = 4u << 20;
 
 constexpr u32 INDEX_GRAMMAR = 1;
 
-// The index is at <N>/index (Package_Format.md §3.3).
+// The index is at <N>/index (Package_Formats.md §3.3).
 constexpr Str INDEX_LEAF = "/index";
 
 // A repository URL without its trailing slashes: <N>/index would be //index.

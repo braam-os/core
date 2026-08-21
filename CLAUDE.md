@@ -36,7 +36,7 @@ the three passing CTest cases.
   **[doc/Programming_Manual.md](doc/Programming_Manual.md)** the SDK guide, and
   **[doc/Package_Management.md](doc/Package_Management.md)** the policy a
   package manager must satisfy, with
-  **[doc/Package_Format.md](doc/Package_Format.md)** the grammars written to
+  **[doc/Package_Formats.md](doc/Package_Formats.md)** the grammars written to
   satisfy it, whose §10 is the publisher's tutorial over `tools/`. `/bin/pkg` is
   complete: twelve subcommands, and eight smoke cases over them.
 
@@ -71,7 +71,7 @@ make clean
   them**: `ed25519.py` (the one place a key is read, and the only thing needing
   `cryptography`), `signindex.py`, `mkanchor.py`, `mkpkg.py`, `mkindex.py`, and
   `mkrepo.py`, which regenerates `test/unit/repo.data` under keys it destroys.
-  `mkindex.py` derives Package_Format.md §6.1's `cmd:` names from each package's
+  `mkindex.py` derives Package_Formats.md §6.1's `cmd:` names from each package's
   `bin/`, so no publisher writes one down. **No private key** goes in the tree,
   in anything built from it, or inside `rootfs.zip`.
 - `braam_add_program(NAME … SOURCES … [LIBS])` in

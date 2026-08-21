@@ -55,7 +55,7 @@ export function check() {
     }
 
     // The trust anchor ships in the archive and stops working when it expires
-    // (Package_Format.md §4). This is the only place a real clock sees it, so
+    // (Package_Formats.md §4). This is the only place a real clock sees it, so
     // it is what says so before a release goes out with a stale one.
     if (hasRootfs) {
         const a = store.entries.find((e) => e.name === "etc/anchor");

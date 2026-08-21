@@ -3,7 +3,7 @@
 The security specification for `/bin/pkg`: what is trusted, what is checked,
 in which order, and what the publisher must do with the keys.
 
-[Package_Format.md](Package_Format.md) is the grammar of the files named here.
+[Package_Formats.md](Package_Formats.md) is the grammar of the files named here.
 [Concept.md](Concept.md) is the system specification; where the two disagree,
 Concept.md wins. [Release_Notes.md](Release_Notes.md) holds the reasoning.
 
@@ -115,7 +115,7 @@ is needed for them.
 
 Checking stops at the **anchor**: the file naming the root public keys, the
 thresholds, and the index keys the root role currently vouches for. Its grammar
-is Package_Format.md §4.
+is Package_Formats.md §4.
 
 - The anchor is **`/etc/anchor`**, shipped inside `rootfs.zip`, served from the
   same origin as `kernel.wasm`.
@@ -157,7 +157,7 @@ index and no key operation. The set is signed, not each entry.
 > a digest from a signed index.**
 
 A zip is not self-checking here: both readers step past the CRC-32
-(Package_Format.md §5.2).
+(Package_Formats.md §5.2).
 
 ### The order
 
@@ -202,7 +202,7 @@ reply; a cross-origin refusal (`Err(Perm)`) and a dead network (`Err(Io)`) are
 reported apart.
 
 `/pkg/db/<name>-<version>` records the index version `G` that vouched for each
-installed package (Package_Format.md §8.1), so a reinstall re-checks rather than
+installed package (Package_Formats.md §8.1), so a reinstall re-checks rather than
 believing the disk.
 
 ---
@@ -247,7 +247,7 @@ has no code to make one.
 - **Sign anchors only.** A setup that lets a root key sign an index is a setup
   where the offline key is online.
 - *n* holders, *t* needed, **`t` > 1**. Record who holds what. The stock
-  arrangement is three keys, two needed (Package_Format.md §10).
+  arrangement is three keys, two needed (Package_Formats.md §10).
 
 ### The index key
 
@@ -343,14 +343,14 @@ published the bytes, not what they were built from.
 **Install scripts run, and a signature authorises execution.** A package may
 carry `.pre-install`, `.post-install` and their four relatives plus `.trigger`,
 and `pkg` spawns each as `/bin/sh <file>` through `Sys::Spawn`
-(Package_Format.md §5.1). A script may touch **everything the person who typed
+(Package_Formats.md §5.1). A script may touch **everything the person who typed
 `pkg install` may touch** — the whole store. §7's rule is unchanged: a script
 runs only after its package's digest matched a digest from a signed index, so
 the code that runs is the publisher's and never the network's. A repository that
 can rewrite a package still cannot make one run.
 
 Two rules follow. A failing script marks its package broken (`b` in
-Package_Format.md §8.1) and the transaction carries on, which is what gives
+Package_Formats.md §8.1) and the transaction carries on, which is what gives
 `pkg verify` something to find. And a script is not how a package installs its
 files: `pkg` unpacks those itself, so a package that only places files runs no
 code at all.

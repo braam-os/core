@@ -119,7 +119,7 @@ Task<Result<void>> stems_of(Job &in)
 }
 
 // The cache, whole: an archive is re-hashed every time it is used, so losing
-// one costs a download (Package_Format.md §8).
+// one costs a download (Package_Formats.md §8).
 Task<Result<void>> cache_of(Job &in)
 {
     Result<Vec<DirEntry>> got = Err(Error::NoMemory);

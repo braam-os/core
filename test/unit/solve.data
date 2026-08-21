@@ -4,7 +4,7 @@ R"DATA(
 # apk's Q1 to the Q2 §1.1 defines, hashing the old value so that equal
 # stays equal and distinct stays distinct; and a repeated D:, p: or i:,
 # which apk
-# accumulates and Package_Format.md §1 calls malformed: the lines are
+# accumulates and Package_Formats.md §1 calls malformed: the lines are
 # folded into the one space-separated list §6 defines, which is the same
 # thing said the way this grammar says it. A .test has @EXPECT reduced to
 # the actions apk chose and the order it chose them in, the `(N/M)`

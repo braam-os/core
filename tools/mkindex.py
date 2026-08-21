@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The repository index (Package_Format.md §3), signed.
+"""The repository index (Package_Formats.md §3), signed.
 
     mkindex.py --out <file> --url <N> --version <G> --expiry <ms>
                [--description <T>] [--sign <key>]... <package.zip>...

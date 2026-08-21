@@ -1,4 +1,4 @@
-// The local store (Package_Format.md §8): the paths under /pkg, §8.2's text
+// The local store (Package_Formats.md §8): the paths under /pkg, §8.2's text
 // files, and a generation as a list of steps store.h performs.
 //
 // Syscall-free. Every Str views the text the caller holds.

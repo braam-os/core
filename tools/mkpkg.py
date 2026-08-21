@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A package zip (Package_Format.md §5).
+"""A package zip (Package_Formats.md §5).
 
     mkpkg.py --out <file> --name <n> --version <v> [--field <L>=<value>]...
              <src>=<entry>...

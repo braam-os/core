@@ -1032,7 +1032,7 @@ and would take an installed program with it. Its layout is
 it: what reaches an installed program is `/pkg/bin` on the default `PATH` (§4),
 which is a symbolic link and not a mount. Boot does not create it — a system
 that installs nothing never grows one. What writes the tree is `/bin/pkg`, and
-[Package_Format.md](Package_Format.md) §8 is the layout it writes.
+[Package_Formats.md](Package_Formats.md) §8 is the layout it writes.
 
 `/bin`, `/etc` and `/README` are put there at boot by unpacking `rootfs.zip`, a
 deflated zip beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js`
@@ -1365,7 +1365,7 @@ doc/System_Calls.md     the kernel↔process mechanism, end to end (§4.3)
 doc/Shell.md            the manual for /bin/sh: grammar, expansions, builtins, jobs (§4.5)
 doc/Programming_Manual.md  the SDK's guide
 doc/Package_Management.md  package signing and key-management policy (§6)
-doc/Package_Format.md   the index, the anchor, a package and /pkg, byte by byte
+doc/Package_Formats.md   the index, the anchor, a package and /pkg, byte by byte
 Makefile                wrapper: all, run, serve, install, release, clean
 CMakeLists.txt          the build
 cmake/                  the wasm32-unknown-unknown toolchain file, BraamProgram.cmake

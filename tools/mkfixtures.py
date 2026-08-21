@@ -68,7 +68,7 @@ def expectation(lines):
 def restamp(value):
     """A Q1 digest as a Q2 one.
 
-    apk's C: is SHA-1 and Package_Format.md §1.1 takes SHA-256 alone. The
+    apk's C: is SHA-1 and Package_Formats.md §1.1 takes SHA-256 alone. The
     fixtures use C: only as identity, so hashing keeps equal equal and
     distinct distinct — but it must hash the *decoded* bytes: apk keys its
     package table on them, and installif1.repo spells one digest two ways
@@ -83,7 +83,7 @@ def restamp(value):
 def fold_lists(text):
     """One D:, p: or i: per stanza.
 
-    apk accumulates a repeated list letter; Package_Format.md §1 calls that
+    apk accumulates a repeated list letter; Package_Formats.md §1 calls that
     malformed and §6 makes the list space-separated, so the two spellings mean
     the same thing and this picks the one the grammar defines.
     """
@@ -145,7 +145,7 @@ def main():
         "apk's Q1 to the Q2 §1.1 defines, hashing the old value so that equal",
         "stays equal and distinct stays distinct; and a repeated D:, p: or i:,",
         "which apk",
-        "accumulates and Package_Format.md §1 calls malformed: the lines are",
+        "accumulates and Package_Formats.md §1 calls malformed: the lines are",
         "folded into the one space-separated list §6 defines, which is the same",
         "thing said the way this grammar says it. A .test has @EXPECT reduced to",
         "the actions apk chose and the order it chose them in, the `(N/M)`",

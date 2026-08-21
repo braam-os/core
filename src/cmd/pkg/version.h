@@ -1,4 +1,4 @@
-// apk's version grammar (Package_Format.md §7), unchanged:
+// apk's version grammar (Package_Formats.md §7), unchanged:
 //
 //     digit{.digit}...{letter}{_suf{#}}...{~hash}{-r#}
 //

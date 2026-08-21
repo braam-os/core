@@ -1,5 +1,5 @@
 // A package is a zip: §5.2 is parseZip's rules (web/fs.js) written down once,
-// §5.1 the top-level dot-entry split (Package_Format.md). unzip.h is the half
+// §5.1 the top-level dot-entry split (Package_Formats.md). unzip.h is the half
 // that inflates; nothing here needs a syscall.
 //
 // Every Str views the archive the caller holds.

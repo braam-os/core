@@ -1,5 +1,5 @@
 // Hex and base64, both ways. Base64 is the wire encoding of every digest, key
-// and signature (Package_Format.md §1.1); hex is a fingerprint a person types.
+// and signature (Package_Formats.md §1.1); hex is a fingerprint a person types.
 //
 // Nothing here allocates: the caller owns the buffer, and the largest thing pkg
 // encodes is a 64-byte signature.
@@ -33,5 +33,5 @@ bool base64_encode(Bytes in, Span<char> out);
 // Strict: a length that is a multiple of four, `=` only as the last one or two
 // characters, no character outside the alphabet, and the unused bits of a short
 // final group zero — two spellings must not decode alike, or a key name can be
-// claimed twice (Package_Format.md §2).
+// claimed twice (Package_Formats.md §2).
 Option<usize> base64_decode(Str in, Span<u8> out);

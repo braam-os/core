@@ -122,7 +122,7 @@ first thing that ever collected.
 into `share/braam/examples` and `share/doc/braam` on the developer's real
 machine, where `/usr/local/share` means exactly what it says on a Unix and this
 rename has no jurisdiction. And a *package* may carry a `share/` subtree of its
-own — `/pkg/store/<stem>/share/…`, which Package_Format.md §10's tutorial writes
+own — `/pkg/store/<stem>/share/…`, which Package_Formats.md §10's tutorial writes
 and the `g:` trigger globs in `test/unit/repo.data` match against. That is the
 publisher's layout inside their own zip, not ours; a package built for this
 system is free to call its data directory whatever a package on any other system
@@ -480,7 +480,7 @@ over a date somebody can act on.
 ## A name the publisher does not get to write down
 
 P26 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), less the anchor. §6.1 of
-Package_Format.md had been true since it was written and produced by nothing:
+Package_Formats.md had been true since it was written and produced by nothing:
 `tools/mkindex.py` read `.PKGINFO` and copied `p:` through, and the fixture
 made up the difference with a hand-written `p:cmd:hi`.
 
@@ -586,7 +586,7 @@ nothing.
 
 ## Six scripts, and the moment they run around
 
-P24 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). Package_Format.md §5.1 has
+P24 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). Package_Formats.md §5.1 has
 named `.pre-install` and its five relatives since P14, and `zip_meta` has
 returned a kind for each of them, but `unpack` wrote only `ZipMeta::Payload` —
 so a package carrying scripts installed with them silently dropped on the floor.
@@ -649,7 +649,7 @@ paragraph rather than a patch. `cmd:awk` has worked everywhere it is *read*
 since P14: `dep_parse` takes it as an ordinary name, `index_provides` finds it
 under `p:`, and the solver resolves it through the provider machinery apk's own
 fixtures exercise. What was missing was the rule saying where such a name comes
-from — the whole of it was one clause of Package_Format.md §6, "an ordinary name
+from — the whole of it was one clause of Package_Formats.md §6, "an ordinary name
 whose providers ship an `awk`", which says nothing about which files produce
 one, with what version, or who writes them. §6.1 is now that rule, and the task
 is deleted having added no code at all.
@@ -733,7 +733,7 @@ digest at all. The repository republishes that name-version, and an install
 that should refetch refuses instead, permanently. The two files are one fact
 about one package and they are collected as one.
 
-**The cache goes whole**, which Package_Format.md §8 already required, and §8's
+**The cache goes whole**, which Package_Formats.md §8 already required, and §8's
 own reason is why it costs nothing: a cached archive "is re-hashed against the
 index every time it is used and never believed for being on disk", so what a
 clean throws away is a download and never a check.
@@ -1070,7 +1070,7 @@ since the archive is held whole and a process has sixteen.
 
 **`.PKGINFO` cannot be a §3.2 stanza, and the format now says so.** `C` and `S`
 name the archive and cannot be inside it, so `package_read` — which requires
-both — would refuse every well-formed one. Package_Format.md §5.1 gains the
+both — would refuse every well-formed one. Package_Formats.md §5.1 gains the
 sentence: `.PKGINFO` is required, carries §3.2's letters less those two, is
 read field by field, and `P` and `V` are what must agree with the index, since
 they are what choose the store directory and the generation's line. Comparing
@@ -1181,7 +1181,7 @@ the chosen set at report time instead, which is what makes `error1` one label
 and `error3` two.
 
 **Two re-spellings, and one of them was the whole of the last four failures.**
-apk accumulates a repeated `D:`, `p:` or `i:`; Package_Format.md §1 calls that
+apk accumulates a repeated `D:`, `p:` or `i:`; Package_Formats.md §1 calls that
 malformed and §6 makes the list space-separated, so the converter folds the
 lines into the one spelling this grammar defines. And `C:` is apk's Q1, which
 is SHA-1, where §1.1 takes SHA-256 alone — so it is restamped by hashing the
@@ -1289,7 +1289,7 @@ of that is load-bearing: `/pkg/index` is one file and the rollback floor is one
 number, so a second repository's index would be checked against the first's `G`
 and whichever wrote last would become the floor for both. Taking only the first
 line would hide that; refusing states it. The day there is somewhere to put a
-second index, the refusal is the thing to delete, and Package_Format.md §8 now
+second index, the refusal is the thing to delete, and Package_Formats.md §8 now
 carries the reason so nobody has to rediscover it.
 
 **A trailing slash is stripped, which is the one place normalising wins.** `pkg`
@@ -1374,7 +1374,7 @@ alternative costs the property step 5 exists for.
 **`X` and `N` are checked with the header, between steps 4 and 5.** §3.1 said
 when `G` and `E` are checked and said nothing about the other two, and they
 cannot wait for step 7: the version and the expiry are fields of a header that
-has to be parsed to reach them. Package_Format.md §3.1 now says so.
+has to be parsed to reach them. Package_Formats.md §3.1 now says so.
 
 **The pipeline writes nothing.** §7's steps stop at reading the index; recording
 it is the word "record" in P15's "fetch, check, record". Keeping `index_check`
@@ -1532,7 +1532,7 @@ release replaces the system and leaves what `pkg` installed standing.
 ## A generation, as a list of steps
 
 P11 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `db.cpp` is
-Package_Format.md §8 — the paths under `/pkg`, §8.2's two text files, and what
+Package_Formats.md §8 — the paths under `/pkg`, §8.2's two text files, and what
 committing a generation *is*. `store.cpp` is the half that goes and does it.
 
 **The split is the only way any of it could be tested.** `tests.wasm` cannot
@@ -1596,7 +1596,7 @@ installed.
 ## A second reader of one format, and the ceiling only it can see
 
 P10 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last Phase C
-primitive. `zip.cpp` is Package_Format.md §5.2 — the end record found behind its
+primitive. `zip.cpp` is Package_Formats.md §5.2 — the end record found behind its
 comment, the central directory walked, each entry's data found by re-reading its
 *local* header — and §5.1's dot-entry split. `unzip.cpp` is the twenty lines
 that put an entry through `Sys::Inflate`.
@@ -1717,7 +1717,7 @@ which is what this file is for.
 ## One reader, five files — and a `Field` that was already taken
 
 P9 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the end of Phase C.
-`stanza.cpp` is Package_Format.md §1: a line is a letter, a colon and a value;
+`stanza.cpp` is Package_Formats.md §1: a line is a letter, a colon and a value;
 an empty line or end of file ends a stanza. Over it sit the typed records §2,
 §3, §4 and §8.1 define, and the writer that puts a `/pkg/db` record back
 byte-identically.
@@ -1815,7 +1815,7 @@ syscall in the case that did no work at all.
 ## A dependency is a name and a bitfield
 
 P8 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), and the last Phase C
-primitive. `dep.cpp` is Package_Format.md §6: `[!]name[[op]ver]`, and the
+primitive. `dep.cpp` is Package_Formats.md §6: `[!]name[[op]ver]`, and the
 space- or newline-separated list of them that `D:`, `p:`, `i:` and `/pkg/world`
 carry. It is `apk_dep_parse` and `apk_blob_pull_dep` with the database interning
 taken out — a name here is a `Str` into whoever owns the text, the way `Args`
@@ -1864,7 +1864,7 @@ inversion applies to; without that, `!foo` would have matched everything.
 ## Versions, ported rather than designed
 
 P7 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `version.cpp` is apk's
-`src/version.c` — the token grammar of Package_Format.md §7, the suffix table
+`src/version.c` — the token grammar of Package_Formats.md §7, the suffix table
 with `none` as its pivot, and a comparison that answers a bit rather than a
 sign. `test/unit/version.data` is apk's fixture file and
 `test/unit/test_version.cpp` is its loop; all 785 cases pass.
@@ -1876,7 +1876,7 @@ dots, compare numbers — and every such attempt is wrong in the same places.
 *string* even when the other side has no leading zero. `1.1_alpha1 < 1.1`
 because a pre-release suffix makes the longer version the smaller one, which no
 lexicographic or field-wise rule produces. `2.3.0b` orders after `2.3.0` but
-before `2.3.1`. Package_Format.md §9 already froze the grammar for the sake of
+before `2.3.1`. Package_Formats.md §9 already froze the grammar for the sake of
 this file and `test/solver/`'s fixtures; P7 is what that freeze was for.
 
 **The token-type ordering is the whole algorithm.** The nine token kinds are an
@@ -1942,14 +1942,14 @@ compared.
 **Both decoders refuse rather than normalise, and the tail-bit rule is the
 point.** A base64 group that yields fewer than three bytes has bits no byte
 carries. A decoder that ignores them accepts `Zg==` and `Zh==` as the same
-byte — and Package_Format.md §2 matches a key's name by *recomputing* it, so
+byte — and Package_Formats.md §2 matches a key's name by *recomputing* it, so
 two spellings of one name is two ways to be the key the anchor trusts. The
 check is one mask and it is the difference between a name and a label.
 Whitespace is not skipped and `=` is not tolerated anywhere but the end for the
 same reason: every relaxation is another spelling. Nothing partial comes back —
 a rejection is `None`, never a count with garbage behind it.
 
-**Hex is here although no format uses it.** Package_Format.md is base64
+**Hex is here although no format uses it.** Package_Formats.md is base64
 throughout. Hex is what a person types when they pin a key by fingerprint
 (Package_Management.md §6), and what a test vector is written in — which is
 immediately its second job: `test_svc.cpp` had a private `unhex` for the RFC
@@ -2118,7 +2118,7 @@ said so for some time. `kernel.wasm` grew 1,402 bytes, to 173,743 of 262,144.
 
 ## Five formats, frozen before a parser exists
 
-[Package_Format.md](Package_Format.md) defines one stanza grammar and the five
+[Package_Formats.md](Package_Formats.md) defines one stanza grammar and the five
 files over it. It is a reference and reads like one; this is what it leaves out.
 
 **A document of its own, not a section of the policy.** Package_Management.md's

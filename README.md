@@ -68,7 +68,7 @@ system. A repository is just files on a web server: an index and one zip per
 package. The index is signed, and the keys it is checked against ship inside the
 archive. An install is committed by renaming a single symbolic link, so a tab
 that dies partway has installed nothing. There is no public repository yet;
-[doc/Package_Format.md](doc/Package_Format.md) §10 explains running one.
+[doc/Package_Formats.md](doc/Package_Formats.md) §10 explains running one.
 
 **An embedding API.** `web/braam.js` puts a terminal on any web page with
 `mount({ canvas })`, and `web/embed.html` is a working example.
@@ -145,7 +145,7 @@ is the guide and [examples/hello/](examples/hello/) is the worked example.
 - [doc/Programming_Manual.md](doc/Programming_Manual.md) — writing a program of
   your own.
 - [doc/Package_Management.md](doc/Package_Management.md) and
-  [doc/Package_Format.md](doc/Package_Format.md) — packages: the policy, the
+  [doc/Package_Formats.md](doc/Package_Formats.md) — packages: the policy, the
   formats, and how to run a repository.
 - [doc/Testing.md](doc/Testing.md) — how the two test suites are organised.
 

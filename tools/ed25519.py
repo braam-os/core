@@ -69,7 +69,7 @@ def b64(raw):
 
 
 def digest(raw):
-    """Package_Format.md §1.1's Q2: SHA-256, base64, one algorithm character."""
+    """Package_Formats.md §1.1's Q2: SHA-256, base64, one algorithm character."""
     return "Q2" + b64(hashlib.sha256(raw).digest())
 
 

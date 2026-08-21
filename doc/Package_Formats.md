@@ -7,12 +7,24 @@ a package, and the local state under `/pkg`.
 the index must *contain*; this is the grammar. Where they disagree the policy
 wins, and where either disagrees with [Concept.md](Concept.md) the specification
 wins. A bare `§N` is a section of this document.
-[Release_Notes.md](Release_Notes.md) holds the arguments.
+[Release_Notes.md](Release_Notes.md) holds the reasoning.
 
-Alpine's `apk` is the model, and `src/cmd/tmp/apk-tools/` (gitignored scratch)
-is the reference. Its field letters and version grammar are kept unchanged
-because `test/unit/version.data`'s 788 cases and `test/solver/`'s 119 fixtures
-port as *data* only while they are. §9 lists every departure.
+Alpine's `apk` is the model. Its field letters and version grammar are kept
+unchanged, so `test/unit/version.data`'s 788 cases and `test/solver/`'s 119
+fixtures port as data. §9 lists every departure.
+
+Where each part lives:
+
+| Part | Code |
+| --- | --- |
+| §1, §1.1, the records | [src/cmd/pkg/stanza.h](../src/cmd/pkg/stanza.h), `stanza.cpp` |
+| §1.1's encodings | [src/cmd/pkg/encode.h](../src/cmd/pkg/encode.h) |
+| §2, §3, §4 | `index.cpp`, [src/cmd/pkg/trust.cpp](../src/cmd/pkg/trust.cpp) |
+| §5, §5.2 | [src/cmd/pkg/zip.h](../src/cmd/pkg/zip.h), `unzip.cpp`, and `parseZip` in [web/fs.js](../web/fs.js) |
+| §5.1, §5.1.1 | [src/cmd/pkg/install.cpp](../src/cmd/pkg/install.cpp), `script.cpp`, `trigger.cpp` |
+| §6, §7 | [src/cmd/pkg/dep.cpp](../src/cmd/pkg/dep.cpp), `version.cpp`, `solve.cpp` |
+| §8 | [src/cmd/pkg/db.h](../src/cmd/pkg/db.h), `store.cpp` |
+| §10's tools | `tools/ed25519.py`, `mkanchor.py`, `mkpkg.py`, `mkindex.py` |
 
 ---
 
@@ -32,21 +44,21 @@ stanzas.
 
 - **An unknown uppercase letter makes the record unusable** — that record, not
   the file.
-- **An unknown lowercase letter is ignored.** This asymmetry is the whole of
-  forward compatibility. Its corollary: a field that is merely informational
-  must be lowercase from the day it is added.
+- **An unknown lowercase letter is ignored.** A field that is merely
+  informational must therefore be lowercase from the day it is added.
 - **A repeated letter is malformed**, except `Y`, `K`, `H`, `F`, `R` and `Z`,
-  which accumulate. Nothing silently overwrites.
+  which accumulate.
 - **A letter means one thing in every file.** `G` is the version of a signed
   document, `E` an expiry, `T` a description, wherever they appear.
 - **A known letter whose value does not parse, or a required field that is
   absent, makes the record unusable** — the same scope as an unknown uppercase
-  letter, because the consequence is the same and the file still reads.
+  letter.
 
 ### 1.1 Numbers, digests and keys
 
-A number is decimal, unsigned, unpadded. A time is **milliseconds since the
-epoch** — what `Sys::Clock` reports and `Sys::Stat` returns.
+A number is decimal, unsigned, unpadded: `007`, `+1`, `1a` and an overflow are
+all refused. A time is **milliseconds since the epoch** — what `Sys::Clock`
+reports and `Sys::Stat` returns.
 
 A digest is apk's `<encoding><algorithm><payload>`:
 
@@ -57,12 +69,14 @@ Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI=
 └────────────────── encoding: Q = base64
 ```
 
-**`Q2` is the only accepted form** (Package_Management.md §8). The `2` is the
-algorithm name §8 requires, in one character.
+**`Q2` is the only accepted form** (Package_Management.md §8).
+
+Base64 decoding is **strict**: a length that is a multiple of four, `=` only as
+the last one or two characters, no character outside the alphabet, and the
+unused bits of a short final group zero. Two spellings must not decode alike.
 
 A **public key** is `<algorithm> <base64 key>`. A **key's name** is the `Q2`
-digest of its public key, and is never stored beside the key it names — a
-derivable name cannot disagree with what it names.
+digest of its public key, and is never stored beside the key it names.
 
 ---
 
@@ -78,13 +92,11 @@ Algorithm, the signing key's name, the signature.
 
 > **The signed bytes are every byte of the file after the first empty line.**
 
-One rule, computed identically by signer and checker.
-
 - **A key's name is matched by recomputing it**, never trusted as a label.
 - A `Y:` naming a key the anchor does not carry counts for nothing; it is not an
   error.
 - **Threshold counting takes at most one signature per key** —
-  Package_Management.md §7 step 4, and the easiest thing here to get wrong.
+  Package_Management.md §7 step 4.
 
 ---
 
@@ -130,13 +142,10 @@ P:less
 - `X` names *this grammar*, not the index. **A higher `X` refuses the whole
   file** — the one place fail-closed applies to a file rather than a record.
 - **`N` must equal the URL the index was fetched from**, or the index is
-  refused. It is what binds a signed index to one repository.
+  refused.
 - `G` and `E` are checked at Package_Management.md §7's steps 5 and 6, after the
-  signatures and never before.
-- **`X` and `N` are checked when the header is read**, which is between those
-  steps and step 4: the version and the expiry are fields of a header that has
-  to be parsed first, and a header from the wrong repository or an unknown
-  grammar has nothing worth comparing in it.
+  signatures and never before. **`X` and `N` are checked when the header is
+  read**, between step 4 and step 5.
 
 ### 3.2 A package stanza
 
@@ -146,7 +155,7 @@ P:less
 | `P` | name | required |
 | `V` | version (§7) | required |
 | `S` | the zip's exact size in bytes | required |
-| `I` | unpacked size, for a human | optional |
+| `I` | unpacked size; caps the unpack when below 16 MiB (§5.1) | optional |
 | `T` | description | optional |
 | `D` | depends — a dependency list (§6) | optional |
 | `p` | provides — a dependency list, and §6.1's generated names | optional |
@@ -159,20 +168,17 @@ P:less
 `C` and `S` are what Package_Management.md §7's steps 8 and 9 check against.
 
 apk's `A` (arch) is dropped — there is one architecture. Its `U`, `L`, `m` and
-`c` are undefined here; the two lowercase ones are ignored, and the two
-uppercase ones would make a package unusable, which is §1's rule about
-informational fields stated as a fact.
+`c` are undefined here: the two lowercase ones are ignored, the two uppercase
+ones make a package unusable.
 
 ### 3.3 Canonical order, and the package's URL
 
 A writer emits `C P V S I T o t k g D p i`, omitting what it has not got, so
-that a round trip is byte-identical. **A reader requires no particular order** —
-the canonical one is what makes the round trip defined, not what makes a stanza
-readable.
+that a round trip is byte-identical. **A reader requires no particular order.**
 
 The index is at `<N>/index` and a package at `<N>/<name>-<version>.zip`.
-**Derived, never carried**: Package_Management.md §4 says a URL proves nothing,
-so a field naming one could only be a second place to be wrong.
+**Derived, never carried**: a URL proves nothing (Package_Management.md §4), so
+no field names one.
 
 ---
 
@@ -207,26 +213,21 @@ K:index ed25519 <base64 public key>
 `use` is `root` or `index`; any other is ignored, so a third role needs no
 grammar version.
 
-- **Missing or unreadable is a stop.** There is no fallback, and no prompt
+- **Missing or unreadable is a stop.** There is no fallback and no prompt
   (Package_Management.md §6).
 - **A higher `X` refuses the whole file**, as it does for an index (§3.1).
 - **`E` is checked against the caller's fixed time** (Package_Management.md §7
-  step 1). An anchor that has expired is refused, whatever else it says.
-- **Every anchor meets its own `H:root` over its own `K:root`** — the one in
-  the archive as much as one walked to. It proves nothing on its own, since
-  whoever edits the file edits the keys with it; what it buys is one check
-  rather than two, and an anchor amended by hand after signing is refused.
-- **An `H` comes once per use and a `K` once.** Two thresholds for one use is a
-  threshold nobody can read, and a key listed twice is a key counted twice.
+  step 1). An expired anchor is refused whatever else it says.
+- **Every anchor meets its own `H:root` over its own `K:root`** — the one in the
+  archive as much as one walked to. An anchor amended by hand after signing is
+  refused.
+- **An `H` comes once per use and a `K` once.**
 - **A `K` of another algorithm is left alone**; an `ed25519` one whose key is
-  not 32 bytes makes the anchor unusable. That asymmetry is what the algorithm
-  name is for (Package_Management.md §8).
+  not 32 bytes makes the anchor unusable.
 - **The chain walk is `G`.** A client at anchor 1 reaches anchor 3 by checking 2
-  against 1 and 3 against 2 (Package_Management.md §10). Withholding 2 stops the
-  walk; it does not let 3 through. `G` must increase and need not increase by
-  one: the numbering orders the chain and stops a rollback, and the signatures
-  are what carry the trust, so a withheld anchor stops the walk by the signature
-  that is missing rather than by the number that is.
+  against 1 and 3 against 2 (Package_Management.md §10). `G` must increase and
+  need not increase by one. Withholding 2 stops the walk; it does not let 3
+  through.
 
 ---
 
@@ -248,44 +249,44 @@ can be metadata, so `bin/.keep` is an ordinary file.
 | `.pre-upgrade` `.post-upgrade` | `/bin/sh` scripts |
 | `.trigger` | a `/bin/sh` script, for the globs `g:` names (§5.1.1) |
 
+- **An unknown top-level dot-entry makes the package uninstallable** — §1's
+  uppercase rule applied to an entry name.
+- **`.PKGINFO` is required and authorises nothing**; the index does. It carries
+  §3.2's letters **less `C` and `S`**, which name the archive and cannot be
+  inside it, so a reader takes it field by field rather than as a whole §3.2
+  stanza. **`P` and `V` must agree with the index stanza** that vouched for the
+  package, and nothing else is compared.
+- **A dot-entry other than `.PKGINFO` is kept**, written into
+  `/pkg/store/<name>-<version>/` under its own name and recorded in §8.1's file
+  list like any payload file — `.pre-deinstall` runs at a removal, when the
+  archive is gone. `.PKGINFO` is not kept; the record supersedes it.
+- **The unpack is capped** at `I` when it is set and below 16 MiB, otherwise at
+  16 MiB, summed over the kept entries and applied to each one.
+
 Scripts run as Package_Management.md §11 describes, with apk's argv convention:
 the new version, and on an upgrade the old one after it. A removal passes the
 version leaving and nothing after it. Each is spawned as `/bin/sh <file>`, so
-the file itself need carry no `#!`.
-
-**A dot-entry other than `.PKGINFO` is kept**, written into
-`/pkg/store/<name>-<version>/` under its own name and recorded in §8.1's file
-list like any payload file. It has to be: `pre-deinstall` runs at a removal,
-when the archive is long gone. Keeping it there rather than beside the record
-means `pkg verify` re-hashes it, `pkg files` lists it, and `pkg clean` collects
-it with the package, none of which needed a rule of its own. `.PKGINFO` is the
-exception because the record supersedes it.
+the file need carry no `#!`.
 
 **The commit is the line between `pre-` and `post-`.** Every `pre-` script runs
 after each package is fetched, checked and unpacked and before §8.3's rename;
-every `post-` script runs after it. So a `post-` script can run what was just
-installed and a `pre-` script cannot. apk draws the line at extraction instead;
-here nothing is extracted *into place* — the rename is the only moment anything
-else can see — so that boundary has no analogue and would mark a moment at which
-nothing happens.
+every `post-` script runs after it. A `post-` script can run what was just
+installed and a `pre-` script cannot.
 
-A script that fails is recorded (§8.1's `b`) and the transaction carries on.
-Package_Management.md §11 says why, and a trigger is a script like the six.
+A script that fails is recorded (§8.1's `b`) and the transaction carries on
+(Package_Management.md §11). A trigger is a script like the six.
 
 ### 5.1.1 `.trigger`, and what wakes it
 
 `.trigger` takes **directories** as argv rather than versions, and runs **once
 per package, after the whole transaction** — after the `post-` scripts, which
-are themselves after the commit. apk's rule, ported whole.
+are themselves after the commit.
 
 A transaction has a view of two sets of directories. The **modified** set is
 what it wrote: each unpacked package's store directory and each of its `F`s,
-plus **`/pkg/bin`**. `/pkg/bin` is there because a removal writes nothing to the
-store — the bytes stay for a rollback — but §8.3's farm is rebuilt and
-`/pkg/bin` resolves to new contents; it is the equivalent of apk marking a
-directory modified when it deletes files from it, and without it a removal could
-never wake anything. The rest is every directory of every package the
-transaction leaves installed.
+plus **`/pkg/bin`**, whose contents change even when a removal writes nothing to
+the store. The rest is every directory of every package the transaction leaves
+installed.
 
 For each installed package carrying `g:`, and each directory:
 
@@ -300,21 +301,10 @@ For each installed package carrying `g:`, and each directory:
   fire, and the directory joins argv unless only-changed and the directory was
   not modified.
 
-Two consequences, both easy to read backwards. A `+` glob matching an unmodified
-directory **still wakes the trigger** — it only withholds that directory, so a
-fresh package whose globs are all `+` runs with an empty argv. And a package
-whose globs match nothing does not run its trigger at all.
-
-- **An unknown top-level dot-entry makes the package uninstallable** — §1's
-  uppercase rule applied to an entry name.
-- **`.PKGINFO` authorises nothing**; the index does. It exists so `/pkg/db` can
-  be written without keeping the index, and one that disagrees with the index
-  stanza that vouched for the package is a refusal. It is **required**, and it
-  carries §3.2's letters **less `C` and `S`**, which name the archive and
-  cannot be inside it — so it is not a whole §3.2 stanza and a reader takes it
-  field by field. **`P` and `V` are what must agree**: they choose the store
-  directory and the generation's line, and a list field differing by a space
-  would refuse a package that is not wrong.
+Two consequences. A `+` glob matching an unmodified directory **still wakes the
+trigger** — it only withholds that directory, so a fresh package whose globs are
+all `+` runs with an empty argv. And a package whose globs match nothing does
+not run its trigger at all.
 
 ### 5.2 What the reader accepts
 
@@ -329,30 +319,27 @@ checked against each other.
 - Skip a name ending in `/`; the paths imply their directories.
 - **Refuse a name** that is empty, absolute, holds a backslash, begins with a
   drive letter, or has a `.` or `..` component.
-- **Re-read the local header to find where the data begins.** Taking the central
-  directory's offset is the classic way to get this wrong.
+- **Re-read the local header to find where the data begins**, never the central
+  directory's offset.
 - Methods **0 (store) and 8 (deflate)** only.
 - **Step past the CRC-32** (Package_Management.md §7). The digest from the
   signed index is the check, taken over the whole zip before an entry is read.
 
-**The order above is normative**, not a list. The `/` test runs before the name
-test, so `../` is *skipped* and not refused; the method is judged after the
-local header has been found. A reader that reorders them refuses archives the
-other accepts, which is the disagreement this section exists to prevent.
+**The order above is normative.** The `/` test runs before the name test, so
+`../` is *skipped* and not refused; the method is judged after the local header
+has been found. A reader that reorders them refuses archives the other accepts.
 
 Two rules a reader given a stream needs and one given a buffer does not:
 
 - **Stop at the entry's declared uncompressed size**, and refuse a stream that
   ends before it or runs past it. The declared size is inside the digested
-  archive and is therefore as trusted as the archive; the inflated bytes are
-  not, because a megabyte of deflate is a gigabyte of output.
+  archive and is as trusted as the archive; the inflated bytes are not.
 - **An entry compressed larger than `SYS_STAGE_MAX`** cannot be read at all:
-  `Sys::Inflate` stages its input (System_Calls.md §8). Nothing `tools/pack.py`
-  writes comes near it — `rootfs.zip`'s largest entry is 75 KB compressed.
+  `Sys::Inflate` stages its input (System_Calls.md §8). `rootfs.zip`'s largest
+  entry is 75 KB compressed.
 
-`parseZip` checks neither, and does not need to: `DecompressionStream` hands
-back a buffer, so a size check there would run after the bomb had been
-materialised, and the one archive it reads is the release's own.
+`parseZip` checks neither: `DecompressionStream` hands back a buffer, and the
+one archive it reads is the release's own.
 
 ---
 
@@ -383,12 +370,12 @@ A list is **space- or newline-separated**, runs of separators collapsing.
 name whose providers ship an `awk` (§6.1). apk's `so:` is dropped.
 
 **An unparseable version marks the dependency broken, not the file** — the
-stanza becomes an uninstallable package and every other stanza still reads.
+stanza becomes an uninstallable package and every other stanza still reads. A
+broken dependency names something and is satisfied by nothing.
 
 **A token with no name, or an operator with nothing after it, is malformed** —
-`=1.2`, `foo>=`, a bare `!`. That is not a broken dependency but a field that is
-not a dependency list, and it is the reader's to refuse the record over. A
-broken dependency names something and is simply satisfied by nothing.
+`=1.2`, `foo>=`, a bare `!`. That is a field which is not a dependency list, and
+the reader refuses the record over it.
 
 ### 6.1 `cmd:` names
 
@@ -396,39 +383,27 @@ The one generated namespace. A package provides **`cmd:<command>=<V>` for every
 entry of its `bin/`**, `<V>` being the package's own version: `hello-1.0-r0`
 shipping `bin/hi` provides `cmd:hi=1.0-r0`.
 
-**`bin/`, and flat.** That is exactly the set §8.3's link farm carries — one
-link per entry, directories skipped — so `cmd:x` holds precisely when `x` on
-`PATH` runs this package's file. `bin/sub/tool` yields nothing, because the farm
-never reaches it. A rule naming more would promise a command nobody could type;
-one naming less would leave a typeable command unnamed.
-
-**Whether the entry is a program (Concept.md §4) is not asked.** The farm does
-not ask either — it links what is there — so a `bin/` entry that is not one is
-already on `PATH` and already answers 126. Asking here would make the two sets
-differ, and the point of the rule is that they do not.
-
-**The version is what makes the name selectable**, not decoration. A name whose
-providers are all unversioned can be depended on but never installed: there is
-nothing for a solver to choose between, and the name is virtual. With one,
-`pkg install cmd:awk` picks a provider and `cmd:awk>=1.2` compares the providing
-package's version.
-
-**The publisher generates them, into the index stanza.** A package need not
-declare them and cannot get them wrong; `.PKGINFO` need carry none, since §5.1
-requires only `P` and `V` to agree. A `p:` line written by hand is an ordinary
-provide and merges with them. `/pkg/db` is written from the index stanza (§8.1),
-so an installed package provides these names too, and a solve against the
-installed set sees what a solve against the index saw.
-
-**Two packages shipping one command both provide one name, and that is not a
-conflict.** Both may be installed, and §8.3's "whichever the farm wrote last"
-still decides which runs. What the name adds is that a *dependency* on `cmd:x`
-is satisfied by either, with `k` (§3.2) choosing. Making co-installation
-impossible is a package's own `!` conflict to declare.
-
-**Nothing special-cases the prefix.** §6's reader, the index lookup and the
-solver see a name that happens to contain a colon; there is no clause for
-`cmd:` in any of them, and adding one would be the regression.
+- **`bin/`, and flat.** That is exactly the set §8.3's link farm carries — one
+  link per entry, directories skipped — so `cmd:x` holds precisely when `x` on
+  `PATH` runs this package's file. `bin/sub/tool` yields nothing.
+- **Whether the entry is a program (Concept.md §4) is not asked.** The farm does
+  not ask either.
+- **The version is what makes the name selectable.** A name whose providers are
+  all unversioned can be depended on but never installed: it is virtual. With
+  one, `pkg install cmd:awk` picks a provider and `cmd:awk>=1.2` compares the
+  providing package's version.
+- **The publisher generates them, into the index stanza.** A package need not
+  declare them; `.PKGINFO` need carry none. A `p:` line written by hand is an
+  ordinary provide and merges with them. `/pkg/db` is written from the index
+  stanza (§8.1), so a solve against the installed set sees what a solve against
+  the index saw.
+- **Two packages shipping one command both provide one name, and that is not a
+  conflict.** Both may be installed, and §8.3's "whichever the farm wrote last"
+  decides which runs. A dependency on `cmd:x` is satisfied by either, with `k`
+  (§3.2) choosing. Making co-installation impossible is a package's own `!`
+  conflict to declare.
+- **Nothing special-cases the prefix.** §6's reader, the index lookup and the
+  solver see a name that happens to contain a colon.
 
 ---
 
@@ -457,9 +432,9 @@ digit{.digit}...{letter}{_suf{#}}...{~hash}{-r#}
 
 ## 8. The local state
 
-Under `/pkg`, which the archive does not carry (Concept.md §5.1) — bar the
-one line of configuration, which sits with the anchor in `/etc` and is
-re-pinned by a release like it (Package_Management.md §6).
+Under `/pkg`, which the archive does not carry (Concept.md §5.1) — bar the one
+line of configuration, which sits with the anchor in `/etc` and is re-pinned by
+a release like it (Package_Management.md §6).
 
 ```
 /etc/repositories                one URL per line; today, one line
@@ -476,8 +451,7 @@ re-pinned by a release like it (Package_Management.md §6).
 
 The cache leaf is §3.3's URL leaf, so a cached archive is named by what it is
 rather than by where it came from. It is **re-hashed against the index every
-time it is used** and never believed for being on disk, which is what lets it
-skip a download without skipping a check.
+time it is used** and never believed for being on disk.
 
 **A generation is a directory**, holding the text and the links together, so one
 `Sys::Rename` of `/pkg/active` commits both.
@@ -497,14 +471,11 @@ skip a download without skipping a check.
 A writer emits §3.3's order, then `G`, then `b`, then each `F` followed by its
 `R` and `Z` pairs, so the round trip is defined here too.
 
-The file list covers §5.1's kept dot-entries as well as the payload — they are
-written into the store directory and hashed like anything else — so a script at
-the top of the package is an `F` of `""` and an `R` of `.post-install`.
+The file list covers §5.1's kept dot-entries as well as the payload, so a script
+at the top of the package is an `F` of `""` and an `R` of `.post-install`.
 
-`b` is **lowercase on purpose**. §1: a reader that does not know it ignores it
-and loses a warning; one that refused the record over it would lose `pkg list`,
-`pkg files` and the installed set the solver is handed. Losing the warning is
-the safer failure.
+`b` is **lowercase on purpose**: a reader that does not know it ignores it and
+loses a warning rather than the record (§1).
 
 `G` is what makes a reinstall re-check rather than believe the disk
 (Package_Management.md §7). apk's `M:` and `a:` are dropped: they carry uid, gid
@@ -525,32 +496,30 @@ less 1.6-r1
 ```
 
 `/pkg/world` is one dependency (§6) per line: what the user asked for, as
-distinct from what was pulled in to satisfy it. `/etc/repositories` is one URL
-per line — and **`pkg` refuses a second line rather than ignoring it**, since
-`/pkg/index` is one file and Package_Management.md §7 step 5's floor is one
-number, so a second repository would be checked against the first's `G`. A
-trailing slash is stripped, `<N>/index` being `//index` otherwise.
+distinct from what was pulled in to satisfy it.
+
+`/etc/repositories` is one URL per line, and **`pkg` refuses a second line
+rather than ignoring it**: `/pkg/index` is one file and
+Package_Management.md §7 step 5's floor is one number. A trailing slash is
+stripped, `<N>/index` being `//index` otherwise.
 
 In all three a blank line is skipped and a last line without a newline is still
 a line; **a file that is not there reads as an empty one**, so a `/pkg` that has
-never been written to needs no seeding, and emptying `/etc/repositories` is how
-a system is pointed at nothing. Nothing else is a comment: a `#` line would be a
-URL nobody could name.
+never been written to needs no seeding, and emptying `/etc/repositories` points
+the system at nothing. There are no comments.
 
 ### 8.3 Committing a generation
 
 Building generation `N` is, in order: remove `/pkg/gen/<N>` and make it again,
 write its `packages`, make its `bin/` and fill it, write `/pkg/active.new` as a
 symlink to `/pkg/gen/<N>`, and **rename that over `/pkg/active`**. Only the last
-step is visible to anything else, which is what makes it the commit; a tab that
-dies before it leaves a generation directory nothing names.
+step is visible to anything else, which makes it the commit; a tab that dies
+before it leaves a generation directory nothing names.
 
 Every link is written as an absolute path — `/pkg/bin` to `/pkg/active/bin`,
 `/pkg/active` to `/pkg/gen/<N>`, and each farm entry to
-`/pkg/store/<name>-<version>/bin/<cmd>`. `/pkg` is a fixed top-level name
-(Concept.md §5.1) and there is nowhere else for the tree to be. A *reader* of
-`/pkg/active` takes the target as written and accepts either spelling, since a
-link put there by hand is a link.
+`/pkg/store/<name>-<version>/bin/<cmd>`. A *reader* of `/pkg/active` takes the
+target as written and accepts either spelling.
 
 Two packages shipping one command leaves whichever the farm wrote last. Making
 that impossible is the solver's, not this layer's.
@@ -559,33 +528,27 @@ that impossible is the solver's, not this layer's.
 
 ## 9. What is deliberately not apk's
 
-| Here | apk | Why |
+| Here | apk | |
 | --- | --- | --- |
 | `Q2` digests only | `Q1`, `X1`, `X2`, a promoted `Q1` | one algorithm, no negotiation |
-| the index is text | `APKINDEX.tar.gz` | a tar reader for one member |
+| the index is text | `APKINDEX.tar.gz` | no tar reader for one member |
 | a header stanza with `G` and `E` | neither; a client-side mtime | the policy requires both |
-| end of file commits a stanza | a last stanza with no blank line is dropped | silent loss where a file is hand-edited |
+| end of file commits a stanza | a last stanza with no blank line is dropped | no silent loss |
 | an empty line ends a stanza | any line under two bytes does | a one-character line is malformed |
 | a letter means one thing | letters are reused between files | one reader, five files |
 | no `><` | a checksum comparison operator | the index names a package by hash |
 | no `@tag` | repository pinning | there is one repository |
 | no `so:` | an ELF shared-library namespace | every binary here is static |
-| no `M:`, no `a:` | uid, gid, mode, xattr digest | there is no permission model |
-| a package is a zip | gzip streams forming a tar | `parseZip` exists; a tar reader does not |
-| metadata is a dot-entry | an ordered prefix of the tar | a zip's directory has no order to rely on |
-| an unknown dot-entry refuses it | unknown control files ignored | unreadable instructions must not half-install |
-| `A`, `U`, `L` dropped | uppercase, and required | one architecture; and §1's lowercase rule |
 
 ---
 
 ## 10. Building a package repository
 
-A tutorial, and the only part of this document addressed to you. Everything
-above is what `pkg` reads; this is how to write it.
+The publisher's procedure. Everything above is what `pkg` reads; this is how to
+write it.
 
-A repository is **a directory of static files behind any web server**. There is
-no server-side code, no database and no upload API: you build the files on your
-own machine, sign two of them, and copy the directory up. Given
+A repository is **a directory of static files behind any web server** — no
+server-side code, no database, no upload API. Given
 `N = https://packages.example/braam`, the server holds
 
 ```
@@ -594,11 +557,10 @@ braam/hello-1.0-r0.zip          one file per package
 braam/libz-1.0-r0.zip
 ```
 
-and nothing else. §3.3 derives both URLs from `N`, so a package moves by being
-renamed and by nothing else.
+and nothing else. §3.3 derives both URLs from `N`.
 
-The six tools are in `tools/`. All are Python 3; the ones that sign need
-`pip3 install cryptography` and nothing else does.
+The six tools are in `tools/`, all Python 3. The ones that sign need
+`pip3 install cryptography`; nothing else does.
 
 ### Step 1 — make four keys
 
@@ -606,26 +568,22 @@ The six tools are in `tools/`. All are Python 3; the ones that sign need
 python3 tools/ed25519.py root1.key root2.key root3.key index.key
 ```
 
-Each line printed is a path, the public key and the key's `Q2…` id. **Three
-root keys and one index key**, because they do different jobs
-(Package_Management.md §5):
+Each line printed is a path, the public key and the key's `Q2…` id. **Three root
+keys and one index key** (Package_Management.md §5):
 
 - a **root key** signs anchors and nothing else. Make it on a machine that has
-  never served the repository, encrypt it with a passphrase kept somewhere else,
-  back it up, and copy its key id onto paper. Three of them held by three
-  people, two needed, so no single machine can move trust.
-- the **index key** signs the index and nothing else. It lives on the machine
-  that publishes, unattended, on purpose — and it is cheap to revoke, because
-  the root keys were kept expensive.
+  never served the repository, encrypt it with a passphrase kept elsewhere, back
+  it up, and copy its key id onto paper. Three keys, three holders, two needed.
+- the **index key** signs the index and nothing else, and lives on the machine
+  that publishes.
 
 `ed25519.py` refuses to write over a key that exists. Nothing else in the tree
-reads a key, and `pkg` itself never signs.
+reads a key, and `pkg` never signs.
 
 ### Step 2 — sign an anchor
 
 The anchor (§4) names those public keys and the thresholds over them. It is the
-one file that is **not** downloaded: it ships inside `rootfs.zip`, so a client
-trusts your repository by running your build.
+one file that is **not** downloaded: it ships inside `rootfs.zip`.
 
 ```
 python3 tools/mkanchor.py --out anchor --version 1 --expiry 1861920000000 \
@@ -636,7 +594,7 @@ python3 tools/mkanchor.py --out anchor --version 1 --expiry 1861920000000 \
 ```
 
 `--key` names private halves and writes down their public ones; `--sign` names
-the private halves that sign. Two signatures because `--threshold root=2` says
+the private halves that sign. Two signatures, because `--threshold root=2` says
 so — an anchor must meet its own root threshold. `--expiry` is milliseconds
 since the epoch:
 
@@ -646,10 +604,10 @@ python3 -c 'import datetime as d; print(int(d.datetime(2029,1,1,
 ```
 
 Copy the result to `rootfs/etc/anchor`, put your repository's URL in
-`rootfs/etc/repositories` beside it, and rebuild. Then put `root1.key`,
-`root2.key` and `root3.key` back where they came from; publishing does not need
-them again until you rotate a key or the anchor's expiry comes round, and each
-new anchor carries a higher `--version` than the last.
+`rootfs/etc/repositories` beside it, and rebuild. Then put the root keys back
+where they came from; publishing does not need them again until a key is rotated
+or the anchor's expiry comes round, and each new anchor carries a higher
+`--version`.
 
 ### Step 3 — build packages
 
@@ -664,24 +622,21 @@ python3 tools/mkpkg.py --out hello-1.0-r0.zip --name hello --version 1.0-r0 \
 
 Each trailing `<src>=<entry>` puts a local file at that path inside the package.
 Only `--name` and `--version` are required; `--field <L>=<value>` sets any other
-letter of §3.2, `D` (depends) and `T` (description) being the two worth setting.
-Versions are apk's grammar (§7), so `-r0` is the release number and `1.0-r1`
-supersedes `1.0-r0`.
+letter of §3.2, `D` and `T` being the two worth setting. Versions are apk's
+grammar (§7), so `-r0` is the release number and `1.0-r1` supersedes `1.0-r0`.
 
 Three conventions do work for you:
 
 - **`bin/` is what lands on `PATH`.** Every flat entry becomes a link in the
-  installed generation's `bin/` (§8.3) and a `cmd:<name>` provide (§6.1). You
-  write neither down.
+  installed generation's `bin/` (§8.3) and a `cmd:<name>` provide (§6.1).
 - **A dot-entry is metadata.** `.pre-install`, `.post-install` and the four
   others are `/bin/sh` scripts run around the commit; `.trigger` runs when a
   directory your `g:` globs name changes (§5.1).
-- **The zip is reproducible.** Same inputs, same bytes, so a rebuild that
-  changes the digest changed something.
+- **The zip is reproducible.** Same inputs, same bytes.
 
 ### Step 4 — sign an index
 
-One index over every package the repository offers, in one command:
+One index over every package the repository offers:
 
 ```
 python3 tools/mkindex.py --out index --url https://packages.example/braam \
@@ -693,17 +648,14 @@ python3 tools/mkindex.py --out index --url https://packages.example/braam \
 It reads each zip: `C` and `S` from the bytes, the rest from `.PKGINFO`, and
 §6.1's `cmd:` names from `bin/`. **`--version` must increase** at every
 publication — a client refuses an index older than the one it holds (§3.1) — and
-`--expiry` is a promise to re-sign before that moment. Pick a period you can
-actually keep; a month is normal. An index that has expired stops working, which
-is the freeze protection doing its job rather than a fault.
+`--expiry` is a promise to re-sign before that moment. A month is normal.
 
-Every package listed must be in the same directory as `index` on the server, and
-a package the index does not list cannot be installed however it got there.
+Every package listed must sit in the same directory as `index` on the server,
+and a package the index does not list cannot be installed however it got there.
 
 ### Step 5 — copy it up, and try it
 
-Upload `index` and the zips together — nothing serves an index whose packages
-are not beside it. On the client:
+Upload `index` and the zips together. On the client:
 
 ```
 echo https://packages.example/braam > /etc/repositories
@@ -714,8 +666,8 @@ pkg install hello
 `pkg update` checks, in this order (Package_Management.md §7): the anchor's
 expiry, the index's signature against the anchor's index keys, the index's
 expiry, and its `G` against the one already held. `pkg install` then checks each
-package's size and digest against the index stanza that vouched for it. So a
-refusal names the step it stopped at, and the common mistakes map to it:
+package's size and digest against the index stanza that vouched for it. A
+refusal names the step it stopped at:
 
 | It says | You |
 | --- | --- |
@@ -731,7 +683,7 @@ refusal names the step it stopped at, and the common mistakes map to it:
   whole set with `--version` raised, upload both. There is no incremental
   update; the index is one signed file.
 - **Before the expiry**: re-run the same command with a later `--expiry`. That
-  is the routine, and it needs only the index key.
+  needs only the index key.
 - **Rotating the index key**: make a new one, sign a new anchor naming it with a
   higher `--version`, and ship that anchor in a release. The old index key stops
   being trusted the moment clients take the new anchor.
@@ -740,12 +692,10 @@ refusal names the step it stopped at, and the common mistakes map to it:
   and the key ids on paper are what let anyone check the new one.
 
 `tools/mkrepo.py` does all five steps in forty lines to build the test fixture,
-under keys it destroys afterwards. It is the shortest complete example there is.
+under keys it destroys afterwards.
 
 ### What never leaves your machine
 
-Package_Management.md §9, restated because it is the mistake this whole
-document exists to prevent. **No private key** goes into the git tree, into
+Package_Management.md §9. **No private key** goes into the git tree, into
 anything built from it, or inside `rootfs.zip`. The signing tools read a key
-from a path, keep nothing, and write nothing but the signature. If a key is ever
-in a place a browser could fetch it, it is not a key any more.
+from a path, keep nothing, and write nothing but the signature.

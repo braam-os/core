@@ -1,4 +1,4 @@
-// The stanza grammar (Package_Format.md §1) and the records §3, §4 and §8.1
+// The stanza grammar (Package_Formats.md §1) and the records §3, §4 and §8.1
 // define over it. One reader for all five files.
 //
 // Every Str views the text the caller holds; nothing here copies a value.
