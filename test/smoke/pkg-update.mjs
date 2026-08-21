@@ -3,6 +3,7 @@
 // Part of the smoke suite; test/run.mjs runs the cases in order, the eight
 // pkg cases share test/smoke/pkgfix.mjs, and doc/Testing.md has the rules.
 
+import { E } from "../../web/abi.js";
 import {
     fail, net, output, prompt, regrid, resize, row, rows, run, screen, store, submit,
 } from "./harness.mjs";
@@ -92,6 +93,17 @@ export function check() {
     if (!rows(s).includes(prompt()))
         fail(`a second update left ${row(s, s.cursor_y)}, expected ${prompt()}`);
 
+    // -v traces the fetch: `>` what was asked for, `<` what came back. Read
+    // through a pipe, so a line the grid would wrap cannot make this brittle,
+    // and the flag is taken wherever it was typed.
+    prints("pkg update -v 2>&1 | grep '> GET'", `> GET ${IDX}`);
+    prints("pkg -v update 2>&1 | grep '> GET'", `> GET ${IDX}`);
+    prints("pkg update -v 2>&1 | grep '< 200'", "< 200");
+    prints("pkg update -v 2>&1 | grep content-type", "< content-type: text/plain");
+    // The body's size is counted as it is read, so the fixture's own length
+    // is the number.
+    prints("pkg update -v 2>&1 | grep bytes", `< ${fixture("good").length} bytes`);
+
     // P16: the index read back, and the generation beside it. A listing is
     // wider than this grid, so it goes wide the way help and ps do.
     regrid(100, 24, "the resize before pkg search failed");
@@ -146,6 +158,24 @@ export function check() {
     refuses("an index whose version went backwards", "pkg: version:");
     if (new TextDecoder().decode(store.files.get("/pkg/index")) !== fixture("good"))
         fail("a rollback overwrote the stored index");
+
+    // The two ways a browser refuses a fetch, which the Error byte cannot
+    // tell apart: the hint does, in curl's words (net.mjs asserts the pair
+    // for curl). -v says the same thing on the `<` side.
+    net.routes.set(IDX, { fail: E.PERM });
+    s = update();
+    if (!rows(s).some((line) => line.startsWith("pkg: fetch: permission denied")))
+        fail(`a refused origin printed ${JSON.stringify(output(s))}`);
+    if (!rows(s).some((line) => line.includes("cross-origin")))
+        fail(`a refused origin said nothing about CORS: ${JSON.stringify(output(s))}`);
+    // The status here is grep's, the refusal having gone down the pipe.
+    prints("pkg update -v 2>&1 | grep '< no response'", "< no response: permission denied");
+
+    net.routes.set(IDX, { fail: E.IO });
+    s = update();
+    if (!rows(s).some((line) => line.startsWith("pkg: no answer")))
+        fail(`a dead network printed ${JSON.stringify(output(s))}`);
+    route(fixture("good"));
 
     // One repository, for now: /pkg/index is one file and the floor is one
     // number, so a second line is refused rather than ignored.

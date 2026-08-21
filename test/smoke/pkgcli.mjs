@@ -6,7 +6,7 @@ import { fail, prompt, row, rows, submit } from "./harness.mjs";
 
 // The second line of the block: `Usage:` is a heading and the command line is
 // indented under it.
-const USAGE = "    pkg <command> [<arg>...]";
+const USAGE = "    pkg [-v] <command> [<arg>...]";
 
 // The block is taller than this grid, so what it printed is read through a
 // pipe rather than off the screen; the status is read from the unpiped form,
@@ -53,6 +53,18 @@ export function check() {
     // help takes no operand, and says so the way every other command does.
     piped("pkg help x 2>&1 | head -n 1", 1184.79, "Usage: pkg help");
     status("pkg help x", 1184.8, 2);
+
+    // -v is pkg's own, taken out of the words wherever it was typed, so it
+    // reaches no command's operand check. The block names it.
+    piped("pkg | grep 'v, --verbose'", 1184.83,
+        "    -v, --verbose         trace each HTTP request and reply");
+    status("pkg -v", 1184.84, 0);
+    status("pkg -v list", 1184.85, 0);
+    status("pkg list -v", 1184.86, 0);
+    // A flag that is none of them is an option, not a command: `pkg -x` used
+    // to say `unknown command`.
+    piped("pkg -x update 2>&1 | head -n 1", 1184.87, "pkg: unknown option: -x");
+    status("pkg -x update", 1184.88, 2);
 
     // An operand is required, and one that is not a §6 token is the same
     // usage error rather than a name nothing provides.

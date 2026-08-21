@@ -89,6 +89,8 @@ Task<i32> pkg_update(Args args)
             co_return 130;
         if (Task<void> e = errln("pkg", index_step_name(step), r.error()))
             co_await e;
+        if (Task<void> h = pkg_net_hint(step, r.error()))
+            co_await h;
         co_return 1;
     }
 

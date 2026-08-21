@@ -28,9 +28,46 @@ constexpr PkgCommand TABLE[] = {
     { "help", "", "print this message", pkg_help },
 };
 
-constexpr Str HEAD       = "Usage:\n    pkg <command> [<arg>...]\nCommands:\n";
+// One option is not a table: the row is written out, aligned by hand to the
+// column the commands compute below.
+constexpr Str HEAD = "Usage:\n"
+                     "    pkg [-v] <command> [<arg>...]\n"
+                     "Options:\n"
+                     "    -v, --verbose         trace each HTTP request and reply\n"
+                     "Commands:\n";
 constexpr Str USAGE_HELP = "Usage: pkg help\n";
+constexpr Str NO_MEMORY  = "pkg: out of memory\n";
 constexpr usize GAP      = 2;
+
+// The two a bare Error cannot say, in curl.cpp's words: web/svc.js reaches Perm
+// through a no-cors retry the origin answered, and Io when nothing did.
+constexpr Str CROSS_ORIGIN =
+    "pkg: response is not accessible because the server did not grant "
+    "cross-origin access\n";
+constexpr Str NO_ANSWER = "pkg: no answer\n";
+
+bool verbose_on = false;
+
+// The words with the flags taken out. Err(Invalid) is a word beginning `-`
+// that is none of them, with `bad` naming it; a §6 token cannot begin with one,
+// so nothing an operand may be is lost.
+Result<void> take_flags(Args in, Vec<Str> &out, Str &bad)
+{
+    for (usize i = 0; i < in.size(); i++) {
+        Str w = in[i];
+        if (w == "-v" || w == "--verbose") {
+            pkg_set_verbose(true);
+            continue;
+        }
+        if (w.size() > 1 && w[0] == '-' && w != "-h" && w != "--help") {
+            bad = w;
+            return Err(Error::Invalid);
+        }
+        if (!out.push(w))
+            return Err(Error::NoMemory);
+    }
+    return Result<void>();
+}
 
 const PkgCommand *find(Str name)
 {
@@ -83,6 +120,31 @@ Task<Result<void>> complain(Str before, Str name, Str after)
 }
 
 } // namespace
+
+bool pkg_verbose()
+{
+    return verbose_on;
+}
+
+void pkg_set_verbose(bool on)
+{
+    verbose_on = on;
+}
+
+Task<void> pkg_net_hint(IndexStep step, Error why)
+{
+    if (step != IndexStep::Fetch && step != IndexStep::Package)
+        co_return;
+    Str line;
+    if (why == Error::Perm)
+        line = CROSS_ORIGIN;
+    else if (why == Error::Io)
+        line = NO_ANSWER;
+    else
+        co_return;
+    if (Task<Result<void>> t = write_all(SYS_STDERR, line))
+        co_await t;
+}
 
 Task<i32> pkg_load_index(CheckedIndex &c)
 {
@@ -147,9 +209,28 @@ Task<i32> pkg_help(Args args)
 
 Task<i32> pkg_run(Args args)
 {
+    // The flags are pkg's own, wherever they were typed, so they come out of
+    // the words before the table is searched and what is left is the command's
+    // argv. Err(Invalid) names the offender in `bad`.
+    Vec<Str> words;
+    Str bad;
+    Result<void> f = take_flags(args.tail(), words, bad);
+    if (f.is_err() && f.error() == Error::Invalid) {
+        if (Task<Result<void>> t = complain("unknown option: ", bad, ""))
+            co_await t;
+        if (Task<Result<void>> t = usage(SYS_STDERR))
+            co_await t;
+        co_return 2;
+    }
+    if (f.is_err()) {
+        if (Task<Result<void>> t = write_all(SYS_STDERR, NO_MEMORY))
+            co_await t;
+        co_return 1;
+    }
+
     // No command is asking rather than getting it wrong: the block on stdout,
     // and 0, exactly as `pkg help` prints it.
-    Args rest = args.tail();
+    Args rest{ Span<const Str>(words.data(), words.size()) };
     if (rest.size() == 0) {
         Result<void> r = Err(Error::NoMemory);
         if (Task<Result<void>> t = usage(SYS_STDOUT))
@@ -157,7 +238,7 @@ Task<i32> pkg_run(Args args)
         co_return r.is_ok() ? 0 : 1;
     }
 
-    // The two spellings of asking, and the whole of pkg's flag handling.
+    // The other spelling of asking.
     Str word = rest[0];
     if (word == "-h" || word == "--help")
         word = "help";

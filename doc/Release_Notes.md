@@ -25,6 +25,74 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## What the tab asked for, and what came back
+
+A repository that would not answer gave three lines and no way to tell which of
+several things had gone wrong:
+
+```
+$ pkg update
+https://pub.sergev.org/braam
+pkg: fetch: permission denied
+```
+
+Everything the browser knew was thrown away before it reached the screen.
+`fetch_url` hands a process a `Fetched{ status, headers, body }`, `ProcHost::
+open` kept the status and dropped the headers, and `fetch_capped` turns every
+non-200 into `Error::NotFound` — so a 403, a 404 and a directory listing all
+read alike, and a refusal by the browser reads as none of them. `pkg -v` prints
+the two sides curl prints: `> GET <url>`, then `< <status>`, the response
+headers a line each, and the body's size as it was counted off the wire.
+
+**The trace lives in `ProcHost`, not in `update`.** Every fetch this program
+makes — the index, and every package `install` and `upgrade` download — goes
+through the three `PkgHost` methods `open`, `read` and `close`, so tracing them
+there covers all of it and duplicates nothing. It also keeps the printing out of
+`index.cpp` and `trust.cpp`, which compile into `tests.wasm` and may not make a
+syscall; `host.cpp` is already the file that stays out. `PkgHost` did not have
+to grow a parameter for the headers, because the layer that *drops* them is the
+same layer that now prints them.
+
+**Both lists are shorter than curl's, and that is the browser's doing.** A page
+cannot see the request headers it sent — `fetch` composes them and reports
+nothing back — so `> GET <url>` is the whole request, and it is honest: those
+are the only headers `pkg` asks for. A cross-origin response exposes only the
+CORS-safelisted headers to script, so `<` prints what the browser allowed
+through rather than what the server sent. Saying so in `/share/help` costs two
+sentences and saves a publisher an afternoon.
+
+**Two hints that should not need a flag.** `curl` has said for some time that
+`Err(Perm)` means *"the server did not grant cross-origin access"* and
+`Err(Io)` means *"no answer"*; `pkg` printed neither, though it is the program
+whose whole job is talking to a server somebody else configured. It prints them
+now, unconditionally, in curl's words — a diagnostic nobody thinks to turn on
+is a diagnostic nobody reads. The claim is earned rather than guessed:
+`web/svc.js` reaches `E.PERM` only through a deliberate `mode: "no-cors"` retry
+that the origin answered.
+
+**Gated on the step, not on the error.** The first cut printed the cross-origin
+sentence whenever a `Perm` surfaced, and the smoke suite caught it at once: a
+package whose bytes do not match its recorded digest is `Perm` as well, and
+telling that publisher about CORS would be a confident lie. So `pkg_net_hint`
+takes the `IndexStep` and says nothing unless it is one of the two that reach
+the network, `Fetch` or `Package`.
+
+**`-v` is `pkg`'s, wherever it is typed.** `OptParse` stops at the first
+operand by design, which would have accepted `pkg -v update` and rejected `pkg
+update -v` — the spelling actually typed in the report. So `pkg_run` walks the
+words once and filters the flag out, and what is left is the command's own
+argv, unchanged operand checks and all. The same pass gives `pkg` the message
+it was missing for a mistyped flag: `pkg -x` was `unknown command: -x` and is
+now `unknown option: -x`. Nothing is lost to the filter, because a §6 token
+cannot begin with `-`.
+
+The fake service can model a status, a header block, a CORS refusal and a dead
+network, so the smoke suite asserts all four through a pipe — `grep` rather
+than the grid, since the trace is wider than sixty columns. What it cannot
+model is a redirect: its routes are a `Map` with no `Location`. The real
+repository in the report serves a 308, so that part of the story is still only
+reachable with a browser.
+
 ## A table that says what its rows are for
 
 `pkg` with no command printed its own name and then eleven more, run together

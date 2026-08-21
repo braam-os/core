@@ -439,7 +439,11 @@ roughly right, which is nearly all of them.
 **A repository must send CORS headers or it is simply unreachable.** A
 cross-origin answer the page cannot read comes back as `Err(Perm)` from
 `web/svc.js`, which tells a refusal from a dead network. So "serve
-`Access-Control-Allow-Origin`" is part of what being a repository here means.
+`Access-Control-Allow-Origin`" is part of what being a repository here means,
+and `pkg` says which of the two happened rather than leaving the publisher to
+guess: `Err(Perm)` prints that the server did not grant cross-origin access and
+`Err(Io)` prints `no answer`. `pkg -v` prints the request and the reply around
+it.
 
 **No source provenance and no reproducible builds.** A signature says who
 published the bytes. It says nothing about what they were built from, by whom,

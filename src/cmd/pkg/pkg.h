@@ -43,6 +43,16 @@ Task<i32> pkg_clean(Args args);
 // own.
 Task<i32> pkg_help(Args args);
 
+// -v, set by pkg_run before it dispatches and read by host.cpp, which is where
+// every fetch this program makes goes through.
+bool pkg_verbose();
+void pkg_set_verbose(bool on);
+
+// What Perm and Io mean when a fetch is the thing that failed, in curl's words.
+// Nothing for another error, and nothing for a step that is not one of the two
+// that reach the network — a digest that does not match is Perm as well.
+Task<void> pkg_net_hint(IndexStep step, Error why);
+
 // /pkg/index as an update left it, unchecked (§7's checks are not repeated).
 // 0 is a read index; anything else is the exit status, its refusal printed.
 Task<i32> pkg_load_index(CheckedIndex &c);

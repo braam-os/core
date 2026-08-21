@@ -77,7 +77,7 @@ Programs in /bin
   mv        [-fi] <src>... <dst> — move or rename files
   pbcopy    [<file>...] — put the input on the clipboard
   pbpaste   write the clipboard to the output
-  pkg       <command> [<arg>...] — install and remove packages
+  pkg       [-v] <command> [<arg>...] — install and remove packages
   ps        list the tasks the kernel is running, and which are processes
   pwd       print the working directory
   rm        [-r] <path>... — remove files, or directories with -r
@@ -126,6 +126,15 @@ Packages
             The generation before the live one is kept
   help      print that list, in short, as `pkg` with no command prints it.
             `pkg -h` and `pkg --help` are the same command
+
+  `-v` traces what pkg asked the network for and what came back — `> GET
+  <url>`, the status, the response headers and the body's size — and is taken
+  wherever it is typed: `pkg -v update` and `pkg update -v` are one thing. A
+  page sees only the headers the server let it see, and the request headers
+  the browser adds are not shown to the page at all, so both lists are shorter
+  than curl's would be. Two failures look alike to a browser and do not to
+  pkg: a server that would not let this page read the answer says so, and one
+  that answered nothing at all is `no answer`.
 
   An install builds the whole new generation under /pkg/gen and then renames
   one symbolic link, /pkg/active, over the old one. That rename is the moment

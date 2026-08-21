@@ -468,6 +468,8 @@ Task<i32> realise(Txn &in, const PackageStanza &p)
             co_return 130;
         if (Task<void> e = refuse(stem.str(), index_step_name(step), got.error()))
             co_await e;
+        if (Task<void> h = pkg_net_hint(step, got.error()))
+            co_await h;
         co_return 1;
     }
 
