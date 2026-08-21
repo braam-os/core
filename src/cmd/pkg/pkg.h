@@ -7,7 +7,8 @@
 #include "kernel/task.h"
 #include "kernel/types.h"
 
-// `run` is null until the task that builds the command lands.
+// Every row carries a command; `run` is checked because a null one is a row
+// added without its function, not a state the table is in.
 struct PkgCommand {
     Str name;
     Task<i32> (*run)(Args args);
@@ -31,6 +32,9 @@ Task<i32> pkg_list(Args args);
 // The two that read §8.1's record, in verify.cpp.
 Task<i32> pkg_files(Args args);
 Task<i32> pkg_verify(Args args);
+
+// The collector, in clean.cpp.
+Task<i32> pkg_clean(Args args);
 
 // /pkg/index as an update left it, unchecked (§7's checks are not repeated).
 // 0 is a read index; anything else is the exit status, its refusal printed.

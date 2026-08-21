@@ -114,6 +114,9 @@ Packages
   files     <package> — the files an installed package placed
   verify    [<package>] — re-read those files, and compare each against the
             digest recorded when it was installed
+  clean     drop the downloaded archives, and what no generation still needs.
+            The generation before the live one is kept: it is what a rollback
+            swings back to
 
   `pkg verify` says a file changed since its install. It is not a guarantee
   that none did. Checking happens once, at install; nothing re-reads the store

@@ -25,6 +25,63 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## What a clean must not collect
+
+P22 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), the last row of `pkg`'s
+table, and the end of Phase E. `pkg clean` drops the download cache, the store
+directories no kept generation names, and the generations below the one a
+rollback swings back to. Most of it is bookkeeping. The part worth writing down
+is what it *keeps*, because both rules were already decided elsewhere and this
+is where they finally have to be obeyed.
+
+**A generation survives when it is the active one, when it is above the active
+one, or when it is the highest below it.** The first two clauses are one
+sentence in `install.cpp` that has been waiting for this task: `next_gen`
+counts from the highest generation on disk rather than from the live one,
+because "a rollback leaves higher generations standing and P22 keeps them".
+After rolling back from 5 to 4, generation 5 is the roll-*forward* target, and
+a collector that ate it would make rollback one-way — which is most of what
+P18 was built to provide. The third clause is the TODO's own: the generation
+before the live one is what rollback swings *to*.
+
+`gen_keep` is pure, in `db.cpp`, and has ten rows in
+[test/unit/test_db.cpp](../test/unit/test_db.cpp) rather than a walk through
+the code, because the interesting cases are sparse numbering and a rollback,
+and a table says which is which.
+
+**No `/pkg/active` keeps everything, and that needs no branch.** With an active
+of zero, every generation is above the active one, so the general rule already
+answers "collect nothing" for a tree mid-rollback or one whose link somebody
+removed by hand. A special case would have had to be right; this one cannot be
+wrong.
+
+**The db record goes with the store directory**, and not for tidiness.
+`stem_state` compares the record's digest *before* it looks for the directory,
+so a record left behind after its bytes were collected answers `Have::Other` —
+"installed at a different digest" — for a package that is not installed at any
+digest at all. The repository republishes that name-version, and an install
+that should refetch refuses instead, permanently. The two files are one fact
+about one package and they are collected as one.
+
+**The cache goes whole**, which Package_Format.md §8 already required, and §8's
+own reason is why it costs nothing: a cached archive "is re-hashed against the
+index every time it is used and never believed for being on disk", so what a
+clean throws away is a download and never a check.
+
+`Dropping` rather than `plan_verb`'s `Purging`: purging means a package left
+the installed set, and nothing `clean` touches is installed — that is the
+entire criterion for touching it. The name comes back out of the directory
+name with `pkg_stem_split`, `pkg_stem`'s inverse, which splits at the first `-`
+whose tail is a valid §7 version rather than at the first `-`; `version_valid`
+was already there to ask. A directory nothing built keeps its own name in the
+report instead of being silently mis-split.
+
+Every row of the table is a command now, so `pkg <name> is not built yet` has
+nothing left to answer for and its `smoke` case is gone. The branch stays: a
+null `run` is no longer a state the table is in, but it is still what a row
+added without its function would be, and the check costs one comparison in a
+program that has just made a syscall.
+
 ## A digest read back, and what it still does not prove
 
 P21 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). Every install since P18

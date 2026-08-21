@@ -79,6 +79,26 @@ Task<Result<u32>> store_active()
     co_return gen_of(target.value().str());
 }
 
+Task<Result<Vec<u32>>> store_generations()
+{
+    Result<Vec<DirEntry>> got = Err(Error::NoMemory);
+    if (Task<Result<Vec<DirEntry>>> t = list_dir(PKG_GEN))
+        got = co_await t;
+
+    Vec<u32> out;
+    if (got.is_err()) {
+        if (got.error() == Error::NotFound || got.error() == Error::NotDir)
+            co_return move(out);
+        co_return Err(got.error());
+    }
+    for (const DirEntry &e : got.value()) {
+        u32 n = gen_number(e.name.str());
+        if (n != 0 && !out.push(n))
+            co_return Err(Error::NoMemory);
+    }
+    co_return move(out);
+}
+
 Task<Result<String>> store_slurp(Str path)
 {
     Result<String> r = Err(Error::NoMemory);

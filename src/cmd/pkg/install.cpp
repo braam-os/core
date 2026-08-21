@@ -149,21 +149,16 @@ Task<i32> read_installed(Txn &in)
 // leaves higher generations standing and P22 keeps them.
 Task<Result<u32>> next_gen()
 {
-    Result<Vec<DirEntry>> got = Err(Error::NoMemory);
-    if (Task<Result<Vec<DirEntry>>> t = list_dir(PKG_GEN))
+    Result<Vec<u32>> got = Err(Error::NoMemory);
+    if (Task<Result<Vec<u32>>> t = store_generations())
         got = co_await t;
-    if (got.is_err()) {
-        if (got.error() == Error::NotFound || got.error() == Error::NotDir)
-            co_return u32(1);
+    if (got.is_err())
         co_return Err(got.error());
-    }
 
     u32 top = 0;
-    for (const DirEntry &e : got.value()) {
-        u32 n = gen_number(e.name.str());
+    for (u32 n : got.value())
         if (n > top)
             top = n;
-    }
     co_return top + 1;
 }
 

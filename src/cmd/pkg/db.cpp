@@ -1,6 +1,7 @@
 #include "db.h"
 
 #include "kernel/fmt.h"
+#include "version.h"
 
 namespace {
 
@@ -42,6 +43,21 @@ bool before(Str a, Str b)
 bool pkg_stem(Str name, Str version, String &out)
 {
     return out.assign(name) && out.push('-') && out.append(version);
+}
+
+bool pkg_stem_split(Str stem, Str &name, Str &version)
+{
+    for (usize i = 1; i + 1 < stem.size(); i++) {
+        if (stem[i] != '-')
+            continue;
+        Str tail = stem.substr(i + 1);
+        if (!version_valid(tail))
+            continue;
+        name    = stem.substr(0, i);
+        version = tail;
+        return true;
+    }
+    return false;
 }
 
 bool pkg_store_dir(Str name, Str version, Str leaf, String &out)
@@ -90,6 +106,27 @@ u32 gen_number(Str name)
         n = n * 10 + u32(c - '0');
     }
     return n;
+}
+
+bool gen_keep(Span<const u32> gens, u32 active, Vec<u32> &keep)
+{
+    // The one to roll back to: the highest below the active one.
+    u32 previous = 0;
+    for (u32 n : gens)
+        if (n < active && n > previous)
+            previous = n;
+
+    // Ascending, whatever order the listing arrived in.
+    for (u32 n : gens) {
+        if (n != active && n != previous && n < active)
+            continue;
+        usize at = keep.size();
+        while (at > 0 && keep[at - 1] > n)
+            at--;
+        if (!keep.insert(at, n))
+            return false;
+    }
+    return true;
 }
 
 bool packages_write(Span<const Installed> v, String &out)

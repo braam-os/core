@@ -30,6 +30,10 @@ constexpr Str PKG_ACTIVE_NEW = "/pkg/active.new";
 // <name>-<version>: a store directory, and a db file.
 bool pkg_stem(Str name, Str version, String &out);
 
+// Back apart, at the first '-' whose tail is a §7 version. False for a name
+// nothing built.
+bool pkg_stem_split(Str stem, Str &name, Str &version);
+
 bool pkg_store_dir(Str name, Str version, Str leaf, String &out);
 bool pkg_db_file(Str name, Str version, String &out);
 bool pkg_gen_dir(u32 n, Str leaf, String &out);
@@ -39,6 +43,10 @@ u32 gen_of(Str target);
 
 // A generation directory's own name as a number, or 0. At most nine digits.
 u32 gen_number(Str name);
+
+// The generations a clean keeps: the active one, every one above it, and the
+// highest below it. Sorted; an active of 0 keeps all of them.
+bool gen_keep(Span<const u32> gens, u32 active, Vec<u32> &keep);
 
 // ------------------------------------------------------- §8.2, the two files
 

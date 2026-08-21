@@ -73,6 +73,28 @@ constexpr GenCase GENERATIONS[] = {
     { "/pkg/gen/1234567890", 0 }, // wider than a generation ever gets
 };
 
+// P22's retention rule, as a row: the generations there are, the active one,
+// and what a clean leaves standing.
+struct KeepCase {
+    Str who;
+    u32 gens[6];
+    u32 active;
+    u32 keep[6];
+};
+
+constexpr KeepCase KEPT[] = {
+    { "dense", { 1, 2, 3, 4 }, 4, { 3, 4 } },
+    { "one above, from a rollback", { 1, 2, 3, 4 }, 3, { 2, 3, 4 } },
+    { "several above", { 1, 2, 3, 4, 5 }, 2, { 1, 2, 3, 4, 5 } },
+    { "a gap under the active one", { 1, 2, 5, 6 }, 6, { 5, 6 } },
+    { "sparse, rolled back", { 1, 3, 5, 7 }, 5, { 3, 5, 7 } },
+    { "unsorted on the way in", { 3, 1, 4, 2 }, 4, { 3, 4 } },
+    { "the first generation", { 1 }, 1, { 1 } },
+    { "no /pkg/active", { 1, 2, 3 }, 0, { 1, 2, 3 } },
+    { "an active nothing there matches", { 1, 2 }, 9, { 2 } },
+    { "nothing at all", {}, 0, {} },
+};
+
 constexpr Str MALFORMED[] = {
     "awk\n",              // one field
     "awk 1.2-r0 extra\n", // three
@@ -95,12 +117,38 @@ void test_db()
         CHECK(pkg_store_dir("awk", "1.2-r0", "bin/awk", s) &&
               s.str() == "/pkg/store/awk-1.2-r0/bin/awk");
         CHECK(pkg_db_file("awk", "1.2-r0", s) && s.str() == "/pkg/db/awk-1.2-r0");
+
+        // And back apart, at the first '-' whose tail is a version — so a name
+        // carrying one of its own splits where the version starts, not where
+        // the first dash is.
+        Str name, version;
+        CHECK(pkg_stem_split("awk-1.2-r0", name, version) && name == "awk" && version == "1.2-r0");
+        CHECK(pkg_stem_split("py3-tk-2.0", name, version) && name == "py3-tk" && version == "2.0");
+        CHECK(!pkg_stem_split("awk", name, version));
+        CHECK(!pkg_stem_split("awk-", name, version));
+        CHECK(!pkg_stem_split("-1.2-r0", name, version));
+        CHECK(!pkg_stem_split("", name, version));
         CHECK(pkg_gen_dir(2, "", s) && s.str() == "/pkg/gen/2");
         CHECK(pkg_gen_dir(2, "packages", s) && s.str() == "/pkg/gen/2/packages");
     }
 
     for (const GenCase &c : GENERATIONS)
         test_check(gen_of(c.target) == c.want, c.target, __FILE_NAME__, __LINE__);
+
+    // 0 is not a generation, so it terminates both rows.
+    for (const KeepCase &c : KEPT) {
+        usize n = 0, want = 0;
+        while (n < 6 && c.gens[n] != 0)
+            n++;
+        while (want < 6 && c.keep[want] != 0)
+            want++;
+
+        Vec<u32> keep;
+        bool ok = gen_keep(Span<const u32>(c.gens, n), c.active, keep) && keep.size() == want;
+        for (usize i = 0; ok && i < want; i++)
+            ok = keep[i] == c.keep[i];
+        test_check(ok, c.who, __FILE_NAME__, __LINE__);
+    }
 
     // §8.2: a generation written and read back is the same, and writing it
     // again is byte-identical. The input is unsorted; the writer sorts.

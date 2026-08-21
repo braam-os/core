@@ -27,13 +27,15 @@ changeset means, compiled into `tests.wasm` as well — `trust.cpp` and
 `index.cpp` because they take a `PkgHost` rather than calling a syscall.
 `unzip.cpp` inflates an entry, `store.cpp` performs the steps `db.cpp`
 computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`,
-`query.cpp`, `verify.cpp` and `install.cpp` are the subcommands there are — the
-last holding the four that change the installed set; those seven are the pieces
-that stay out, and `solve.cpp` is in with the first list, being pure. Phase D is
-done, and of Phase E `pkg update` writes `/pkg/index`, `pkg search`, `pkg info`
-and `pkg list` read it and the generation beside it, `pkg install`,
-`pkg remove`, `pkg autoremove` and `pkg upgrade` perform the solver's changeset,
-and `pkg files` and `pkg verify` read §8.1's record back. So this starts at P22.
+`query.cpp`, `verify.cpp`, `clean.cpp` and `install.cpp` are the subcommands
+there are — the last holding the four that change the installed set; those
+eight are the pieces that stay out, and `solve.cpp` is in with the first list,
+being pure. Phases D and E are done too: every row of the table is a command,
+`pkg update` writes `/pkg/index`, `pkg search`, `pkg info` and `pkg list` read
+it and the generation beside it, `pkg install`, `pkg remove`, `pkg autoremove`
+and `pkg upgrade` perform the solver's changeset, `pkg files` and `pkg verify`
+read §8.1's record back, and `pkg clean` collects what none of them names any
+more. So this starts at P23.
 
 Four of P26's tools came early with P18, which needed a signed repository to
 install from: `tools/ed25519.py`, `signindex.py`, `mkanchor.py`, `mkpkg.py`,
@@ -116,20 +118,6 @@ SHA-256 is **not** among them and never will be: it is compiled into `pkg`. A
 whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
-
-## Phase E — the commands
-
-### P22. `pkg clean`
-
-The download cache, store directories no generation names, and superseded
-generations. **Keep at least the previous generation**: it is what rollback
-needs, and a clean that removes it removes the property P18 was built for.
-
-`/share/help`'s Packages section names every subcommand but this one, since a
-listed command that answers "not built yet" is a lie in the manual; the row
-goes in with the code.
-
----
 
 ## Phase F — scripts and triggers
 

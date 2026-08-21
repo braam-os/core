@@ -1449,8 +1449,8 @@ if (mode === "--kernel") {
         fail(`uname -z left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
 
     // /bin/pkg's table (src/cmd/pkg/TODO.md). A bare `pkg` is a usage error
-    // and 2; a name no table row carries is the same; a row whose command is
-    // unbuilt says so and reports 1, which is what tells the two apart.
+    // and 2, and a name no table row carries is the same. Every row is a
+    // command now, so `is not built yet` has nothing left to say.
     s = submit("clear", 1184.7);
     s = submit("pkg", 1184.71);
     if (!rows(s).some((line) => line.startsWith("usage: pkg ")))
@@ -1468,13 +1468,6 @@ if (mode === "--kernel") {
         fail(`pkg nonesuch printed ${JSON.stringify(rows(s))}`);
     if (!rows(s).includes(prompt(2)))
         fail(`pkg nonesuch left ${row(s, s.cursor_y)}, expected ${prompt(2)}`);
-
-    s = submit("clear", 1184.74);
-    s = submit("pkg clean", 1184.75);
-    if (!rows(s).includes("pkg: clean is not built yet"))
-        fail(`pkg clean printed ${JSON.stringify(rows(s))}`);
-    if (!rows(s).includes(prompt(1)))
-        fail(`pkg clean left ${row(s, s.cursor_y)}, expected ${prompt(1)}`);
 
     // An operand is required, and one that is not a §6 token is the same
     // usage error rather than a name nothing provides.
@@ -2021,6 +2014,95 @@ if (mode === "--kernel") {
         submit("rm -r /pkg", (ut += 0.005));
         prints("pkg verify", "");
         prints("pkg files hello", "pkg: hello: not installed", 1);
+
+        // P22. The collector, and the two things it must not collect. It needs
+        // several generations to have anything to choose between, so the tree
+        // is built up rather than planted.
+        store.dirs.add("/pkg");
+        plant("/pkg/repositories", RURL + "\n");
+        net.routes.set(RURL + "/index",
+                       { status: 200, headers: "content-type: text/plain\n", body: repo("index") });
+        serve("libz-1.0-r0", good);
+        serve("hello-1.0-r0", archive("hello-1.0-r0"));
+        serve("hello-1.1-r0", archive("hello-1.1-r0"));
+        prints("pkg update", `${RURL}|index 1, 2 packages`);
+        prints("pkg install hello",
+               ["Installing libz (1.0-r0)", "Installing hello (1.0-r0)",
+                "generation 1, 2 packages"].join("|"));
+
+        // One generation supersedes nothing, so the cache is the whole of it —
+        // and what is installed still runs afterwards.
+        prints("pkg clean", "2 archives, 0 packages, 0 generations");
+        if (store.files.has("/pkg/cache/hello-1.0-r0.zip"))
+            fail("pkg clean left the cache behind");
+        prints("hi", "hi from hello");
+        prints("pkg clean", "nothing to clean");
+
+        // Three generations, and a version the store holds that no generation
+        // names any more.
+        net.routes.set(RURL + "/index",
+                       { status: 200, headers: "content-type: text/plain\n",
+                         body: repo("index2") });
+        prints("pkg update", `${RURL}|index 2, 2 packages`);
+        prints("pkg upgrade",
+               ["Upgrading hello (1.0-r0 -> 1.1-r0)", "generation 2, 2 packages"].join("|"));
+        plant("/pkg/world", "");
+        prints("pkg autoremove",
+               ["Purging hello (1.1-r0)", "Purging libz (1.0-r0)",
+                "generation 3, 0 packages"].join("|"));
+
+        prints("pkg clean",
+               ["Dropping hello (1.0-r0)", "Dropping generation 1",
+                "1 archive, 1 package, 1 generation"].join("|"));
+
+        // The record goes with the bytes: left behind, its digest is what
+        // stem_state compares before it looks for the directory, so a
+        // republished package would be refused rather than fetched.
+        if (store.dirs.has("/pkg/store/hello-1.0-r0") || store.files.has("/pkg/db/hello-1.0-r0"))
+            fail("a collected store directory kept its record, or the other way round");
+        // Generation 2 still names both, so both are still there.
+        if (!store.dirs.has("/pkg/store/hello-1.1-r0") || !store.dirs.has("/pkg/store/libz-1.0-r0"))
+            fail("pkg clean dropped what a kept generation names");
+        if (store.dirs.has("/pkg/gen/1"))
+            fail("pkg clean kept the superseded generation");
+        if (!store.dirs.has("/pkg/gen/2") || !store.dirs.has("/pkg/gen/3"))
+            fail("pkg clean took the active generation or the one before it");
+
+        // Rolled back: the generation above the live one is where rolling
+        // forward goes, and a clean that took it would make P18's property
+        // one-way.
+        submit("rm /pkg/active", (ut += 0.005));
+        submit("ln -s /pkg/gen/2 /pkg/active", (ut += 0.005));
+        prints("hi", "hi from hello 1.1");
+        prints("pkg clean", "nothing to clean");
+        if (!store.dirs.has("/pkg/gen/3"))
+            fail("a clean after a rollback took the generation to roll forward to");
+
+        // With no /pkg/active every generation is above the active one, which
+        // is the same rule arriving at the safe answer rather than a case of
+        // its own.
+        submit("rm /pkg/active", (ut += 0.005));
+        prints("pkg clean", "nothing to clean");
+        if (!store.dirs.has("/pkg/gen/2") || !store.dirs.has("/pkg/gen/3"))
+            fail("a clean with no /pkg/active dropped a generation");
+        submit("ln -s /pkg/gen/3 /pkg/active", (ut += 0.005));
+
+        // And what it leaves is a tree that installs again: the version it
+        // collected is missing rather than remembered, so this refetches.
+        plant("/pkg/index", repo("index"));
+        prints("pkg install hello",
+               ["Installing libz (1.0-r0)", "Installing hello (1.0-r0)",
+                "generation 4, 2 packages"].join("|"));
+        prints("hi", "hi from hello");
+
+        prints("pkg clean please", "usage: pkg clean", 2);
+
+        // Nothing to clean builds no tree to say so, as pkg remove does not.
+        submit("rm -r /pkg", (ut += 0.005));
+        prints("pkg clean", "nothing to clean");
+        if (store.dirs.has("/pkg") || store.files.has("/pkg/bin"))
+            fail("a clean with nothing to clean built /pkg");
+        store.dirs.add("/pkg");
 
         // Put the release's anchor back and leave no /pkg, so what follows
         // starts where it did.
@@ -3813,7 +3895,7 @@ if (mode === "--kernel") {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", (gt += 0.01));
-    // Three copies of a 6,669-byte file: more than the eight writes a pipe
+    // Three copies of a 6,852-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /share/help /share/help /share/help > /home/c/big", (gt += 0.01));
 
@@ -3842,11 +3924,11 @@ if (mode === "--kernel") {
     cshows("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     cshows("for f in $(echo p q); do echo $f; done", "p|q");
     cshows("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 20,007 bytes is forty chunks against eight
+    // The many-writes case: 20,556 bytes is forty-one chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
     // The counts are three copies of /share/help, so a line added there moves
     // them.
-    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "390 3111 20007");
+    cshows("x=$(cat /home/c/big); echo \"$x\" | wc", "399 3192 20556");
     submit("rm -r /home/c", (gt += 0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

@@ -17,6 +17,10 @@ Task<Result<void>> store_write(Str path, Str bytes);
 // The live generation, or 0. /pkg/active is a symlink, so read_link.
 Task<Result<u32>> store_active();
 
+// Every /pkg/gen/<n> there is, in the order the listing gave them. No /pkg/gen
+// is no generations.
+Task<Result<Vec<u32>>> store_generations();
+
 // A whole small file. Err(NotFound) comes back as empty: a tree that never had
 // a world or a repositories list has nothing in one.
 Task<Result<String>> store_slurp(Str path);
