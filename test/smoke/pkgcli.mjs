@@ -27,16 +27,17 @@ function status(line, now, want) {
 }
 
 export function check() {
-    // /bin/pkg's table (src/cmd/pkg/pkg.cpp). A bare `pkg` is a usage error
-    // and 2, and a name no table row carries is the same. Every row is a
-    // command now, so `is not built yet` has nothing left to say.
-    piped("pkg 2>&1 | head -n 2", 1184.7, USAGE);
-    status("pkg", 1184.71, 2);
+    // /bin/pkg's table (src/cmd/pkg/pkg.cpp). A bare `pkg` asks for the block
+    // rather than getting anything wrong: stdout, and 0. A name no table row
+    // carries is the mistake. Every row is a command now, so `is not built
+    // yet` has nothing left to say.
+    piped("pkg | head -n 2", 1184.7, USAGE);
+    status("pkg", 1184.71, 0);
 
     // The rows come off the table rather than a second list beside it, each
     // with the operands its own usage line spells and one line of what it is
     // for.
-    piped("pkg 2>&1 | grep \"install <package>\"", 1184.72,
+    piped("pkg | grep \"install <package>\"", 1184.72,
         "    install <package>...  install packages and dependencies");
 
     piped("pkg nonesuch 2>&1 | head -n 1", 1184.73, "pkg: unknown command: nonesuch");

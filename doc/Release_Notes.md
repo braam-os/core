@@ -75,8 +75,13 @@ a row is the only way it stays listed. The two flags are handled by rewriting
 the first word before the table is searched, not by an `Opts` parse: `pkg` has
 no options and this does not give it any — the first word is a command, and
 these are two more ways of writing one of them. Being asked is not a mistake,
-so `pkg help` prints to stdout and exits 0, while a bare `pkg` and an unknown
-command keep stderr and 2.
+so all four of them — `pkg help`, `-h`, `--help`, and `pkg` with nothing after
+it — print to stdout and exit 0. **A bare `pkg` is the fourth spelling of
+asking, not a usage error.** Typing a program's name and nothing else is how
+somebody finds out what it does; there is no wrong argument to report, nothing
+was refused, and a shell script that would like the list can have it down a
+pipe. What stays a mistake is a word the table does not carry, which prints
+`unknown command` and the block on stderr and exits 2.
 
 **`Usage:` is a heading now, and `pkg` alone in the tree capitalises it.** The
 block has two of them — `Usage:` over the command line, `Commands:` over the

@@ -147,11 +147,14 @@ Task<i32> pkg_help(Args args)
 
 Task<i32> pkg_run(Args args)
 {
+    // No command is asking rather than getting it wrong: the block on stdout,
+    // and 0, exactly as `pkg help` prints it.
     Args rest = args.tail();
     if (rest.size() == 0) {
-        if (Task<Result<void>> t = usage(SYS_STDERR))
-            co_await t;
-        co_return 2;
+        Result<void> r = Err(Error::NoMemory);
+        if (Task<Result<void>> t = usage(SYS_STDOUT))
+            r = co_await t;
+        co_return r.is_ok() ? 0 : 1;
     }
 
     // The two spellings of asking, and the whole of pkg's flag handling.
