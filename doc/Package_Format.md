@@ -149,7 +149,7 @@ P:less
 | `I` | unpacked size, for a human | optional |
 | `T` | description | optional |
 | `D` | depends — a dependency list (§6) | optional |
-| `p` | provides — a dependency list | optional |
+| `p` | provides — a dependency list, and §6.1's generated names | optional |
 | `i` | install-if — a dependency list | optional |
 | `o` | origin — the source package's name | optional |
 | `t` | build time | optional |
@@ -327,7 +327,7 @@ when that bit is in the mask, inverted by `!`. So no operator is any version,
 A list is **space- or newline-separated**, runs of separators collapsing.
 
 **A name is any token**, and need not be a package: `cmd:awk` is an ordinary
-name whose providers ship an `awk`. apk's `so:` is dropped.
+name whose providers ship an `awk` (§6.1). apk's `so:` is dropped.
 
 **An unparseable version marks the dependency broken, not the file** — the
 stanza becomes an uninstallable package and every other stanza still reads.
@@ -336,6 +336,46 @@ stanza becomes an uninstallable package and every other stanza still reads.
 `=1.2`, `foo>=`, a bare `!`. That is not a broken dependency but a field that is
 not a dependency list, and it is the reader's to refuse the record over. A
 broken dependency names something and is simply satisfied by nothing.
+
+### 6.1 `cmd:` names
+
+The one generated namespace. A package provides **`cmd:<command>=<V>` for every
+entry of its `bin/`**, `<V>` being the package's own version: `hello-1.0-r0`
+shipping `bin/hi` provides `cmd:hi=1.0-r0`.
+
+**`bin/`, and flat.** That is exactly the set §8.3's link farm carries — one
+link per entry, directories skipped — so `cmd:x` holds precisely when `x` on
+`PATH` runs this package's file. `bin/sub/tool` yields nothing, because the farm
+never reaches it. A rule naming more would promise a command nobody could type;
+one naming less would leave a typeable command unnamed.
+
+**Whether the entry is a program (Concept.md §4) is not asked.** The farm does
+not ask either — it links what is there — so a `bin/` entry that is not one is
+already on `PATH` and already answers 126. Asking here would make the two sets
+differ, and the point of the rule is that they do not.
+
+**The version is what makes the name selectable**, not decoration. A name whose
+providers are all unversioned can be depended on but never installed: there is
+nothing for a solver to choose between, and the name is virtual. With one,
+`pkg install cmd:awk` picks a provider and `cmd:awk>=1.2` compares the providing
+package's version.
+
+**The publisher generates them, into the index stanza.** A package need not
+declare them and cannot get them wrong; `.PKGINFO` need carry none, since §5.1
+requires only `P` and `V` to agree. A `p:` line written by hand is an ordinary
+provide and merges with them. `/pkg/db` is written from the index stanza (§8.1),
+so an installed package provides these names too, and a solve against the
+installed set sees what a solve against the index saw.
+
+**Two packages shipping one command both provide one name, and that is not a
+conflict.** Both may be installed, and §8.3's "whichever the farm wrote last"
+still decides which runs. What the name adds is that a *dependency* on `cmd:x`
+is satisfied by either, with `k` (§3.2) choosing. Making co-installation
+impossible is a package's own `!` conflict to declare.
+
+**Nothing special-cases the prefix.** §6's reader, the index lookup and the
+solver see a name that happens to contain a colon; there is no clause for
+`cmd:` in any of them, and adding one would be the regression.
 
 ---
 

@@ -25,6 +25,59 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## A namespace with no code in it
+
+P23 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), which turned out to be a
+paragraph rather than a patch. `cmd:awk` has worked everywhere it is *read*
+since P14: `dep_parse` takes it as an ordinary name, `index_provides` finds it
+under `p:`, and the solver resolves it through the provider machinery apk's own
+fixtures exercise. What was missing was the rule saying where such a name comes
+from — the whole of it was one clause of Package_Format.md §6, "an ordinary name
+whose providers ship an `awk`", which says nothing about which files produce
+one, with what version, or who writes them. §6.1 is now that rule, and the task
+is deleted having added no code at all.
+
+**`bin/` was chosen so that one set serves twice.** `cmd:x` names an entry of
+the package's `bin/`, flat, which is exactly what §8.3's link farm carries —
+`store_commands` lists that directory and skips subdirectories, and `gen_ops`
+makes one link per entry. So `cmd:x` holds precisely when typing `x` runs this
+package's file. Any other rule would have been a second definition of "a
+command this package ships", and two definitions of one thing drift.
+
+That is also why the rule does not ask whether the entry is a *program*
+(Concept.md §4). It could: a scanner can look for the `braam` section or a `#!`.
+But the farm does not ask, so a `bin/` entry that is not a program is already on
+`PATH` and already answers 126, and a `cmd:` rule that skipped it would make the
+two sets differ in exactly the case where a package is already wrong. The
+namespace should describe what the farm does, not correct it.
+
+**The version is the difference between a name you can install and one you can
+only depend on.** A name whose providers are all unversioned is virtual: there
+is nothing for the solver to choose between, and `pkg install cmd:awk` refuses.
+Emitting `cmd:hi=1.0-r0` — apk's answer, and what
+[test/unit/solve.data](../test/unit/solve.data)'s ported cases already assume —
+makes the name selectable and makes `cmd:awk>=1.2` mean the providing package's
+version. One `=` decides which of two commands the namespace is.
+
+**The publisher derives them, not the packager.** A package cannot be trusted
+to describe itself and does not have to be: the index is what vouches, and
+§5.1 already requires only `P` and `V` to agree between `.PKGINFO` and the
+stanza that signed for it. Since `/pkg/db` is written from the index stanza, an
+installed package carries the derived names too, so a solve against the
+installed set sees what a solve against the index saw — without a line of code
+arranging it.
+
+**The grammar landed a task ahead of the tool on purpose.** `tools/mkindex.py`
+still copies `p:` verbatim and P26 still owns changing that. Writing the
+definition first is the cheaper order: a producer with no written rule is how an
+implementation quietly becomes the specification, and the two `cmd:` strings in
+the tree are hand-typed into a fixture precisely because nobody had had to say
+what they meant.
+
+The one thing that did move is a row in
+[test/unit/test_dep.cpp](../test/unit/test_dep.cpp): §6.1 now mandates a string
+form, `cmd:awk=1.2-r0`, and the table only covered the bare name.
+
 ## What a clean must not collect
 
 P22 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), the last row of `pkg`'s

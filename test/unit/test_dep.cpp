@@ -27,9 +27,10 @@ constexpr ParseCase PARSE[] = {
     { "!foo", DepParse::Ok, "foo", "", VER_ANY | VER_CONFLICT },
     { "!foo=1.2", DepParse::Ok, "foo", "1.2", VER_EQUAL | VER_CONFLICT },
 
-    // cmd: is an ordinary name (P23), @edge is part of one, and >< is LESS and
-    // GREATER rather than apk's checksum comparison.
+    // cmd: is an ordinary name (§6.1), @edge is part of one, and >< is LESS
+    // and GREATER rather than apk's checksum comparison.
     { "cmd:awk", DepParse::Ok, "cmd:awk", "", VER_ANY },
+    { "cmd:awk=1.2-r0", DepParse::Ok, "cmd:awk", "1.2-r0", VER_EQUAL },
     { "foo@edge", DepParse::Ok, "foo@edge", "", VER_ANY },
     { "foo><1.2", DepParse::Ok, "foo", "1.2", VER_LESS | VER_GREATER },
 
