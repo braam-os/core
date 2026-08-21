@@ -53,6 +53,31 @@ bool plan_changes(const Changeset &cs, String &out)
     return true;
 }
 
+PlanScripts plan_scripts(const SolveChange &c)
+{
+    PlanScripts s;
+    if (plan_verb(c).empty())
+        return s;
+
+    if (!c.old_pkg) {
+        s.before = ZipMeta::PreInstall;
+        s.after  = ZipMeta::PostInstall;
+        s.pkg    = c.new_pkg;
+    } else if (!c.new_pkg) {
+        // The version leaving, out of the store directory it still has.
+        s.before = ZipMeta::PreDeinstall;
+        s.after  = ZipMeta::PostDeinstall;
+        s.pkg    = c.old_pkg;
+    } else {
+        // Any version change, down as well as up: apk's pair either way.
+        s.before      = ZipMeta::PreUpgrade;
+        s.after       = ZipMeta::PostUpgrade;
+        s.pkg         = c.new_pkg;
+        s.old_version = c.old_pkg->version;
+    }
+    return s;
+}
+
 bool plan_errors(const Changeset &cs, Str lead, String &out)
 {
     if (!out.append(lead) || !out.push('\n'))

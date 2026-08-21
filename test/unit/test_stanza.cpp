@@ -244,5 +244,32 @@ void test_stanza()
         CHECK(back.files[2].dir == "share/man" && back.files[2].name == "awk.1");
         CHECK_EQ(u32(back.index_version), 41);
         CHECK(back.pkg.globs == "/bin /share" && back.pkg.priority == 5);
+        CHECK(back.broken.empty());
+
+        // b is §11's failed script. Lowercase, so an index stanza carrying one
+        // drops it rather than being refused over it.
+        r.broken = "post-install";
+        String marked;
+        CHECK(db_write(r, marked));
+        CHECK(marked.str().find("G:41\nb:post-install\nF:bin\n") != Str::npos);
+
+        Vec<StanzaField> g;
+        DbRecord broke;
+        CHECK(StanzaReader::one(marked.str(), STANZA_DB, g));
+        CHECK(db_read(g, broke) == StanzaRead::Ok);
+        CHECK(broke.broken == "post-install");
+
+        // The same letter in an index stanza: lowercase, so it is dropped and
+        // the record still reads. G, F, R and Z would have refused it.
+        String plain;
+        CHECK(package_write(r.pkg, plain));
+        CHECK(plain.append("b:post-install\n"));
+
+        Vec<StanzaField> h;
+        PackageStanza ignored;
+        CHECK(StanzaReader::one(plain.str(), STANZA_PACKAGE, h));
+        CHECK(package_read(h, ignored) == StanzaRead::Ok);
+        for (const StanzaField &x : h)
+            CHECK(x.letter != 'b');
     }
 }

@@ -10,6 +10,7 @@ add_library(braam_pkg STATIC
     pkg.cpp
     plan.cpp
     query.cpp
+    script.cpp
     sha256.cpp
     solve.cpp
     stanza.cpp

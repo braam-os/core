@@ -6,6 +6,7 @@
 #include "pkg.h"
 #include "plan.h"
 #include "proc/io.h"
+#include "script.h"
 #include "sha256.h"
 #include "solve.h"
 #include "stanza.h"
@@ -31,6 +32,11 @@ constexpr Str CANNOT_REMOVE  = "pkg: cannot remove:";
 constexpr Str CANNOT_UPGRADE = "pkg: cannot upgrade:";
 constexpr Str CACHE_EXT      = ".zip";
 
+// A script that failed, to be written into its record once the run is over.
+struct Broken {
+    Str name, version, script;
+};
+
 // Everything one run holds: a frame past 512 bytes costs a 64 KiB span.
 struct Txn {
     CheckedIndex index;
@@ -53,6 +59,7 @@ struct Txn {
     Vec<String> commands;              // owned; GenLink views these
     Vec<GenLink> links;
     Vec<StoreOp> ops;
+    Vec<Broken> broken;
 
     String archive; // one package at a time
     Sha256 hash;
@@ -270,6 +277,14 @@ Result<void> check_meta(Span<const ZipEntry> entries, const PackageStanza &p, St
     return {};
 }
 
+// What the store directory keeps: the payload, and §5.1's scripts under their
+// own names. .PKGINFO stays out — the §8.1 record supersedes it.
+bool stored(Str name)
+{
+    ZipMeta m = zip_meta(name);
+    return m == ZipMeta::Payload || zip_meta_kept(m);
+}
+
 // I is inside the signed body and is therefore as trusted as C. Without one,
 // UNPACK_MAX alone, which also bounds a single entry.
 bool check_size(Span<const ZipEntry> entries, const PackageStanza &p)
@@ -277,7 +292,7 @@ bool check_size(Span<const ZipEntry> entries, const PackageStanza &p)
     u64 cap = p.installed_size && p.installed_size < UNPACK_MAX ? p.installed_size : UNPACK_MAX;
     u64 sum = 0;
     for (const ZipEntry &e : entries) {
-        if (zip_meta(e.name) != ZipMeta::Payload)
+        if (!stored(e.name))
             continue;
         if (e.size > cap || sum > cap - e.size)
             return false;
@@ -316,12 +331,12 @@ Task<Result<void>> unpack(Txn &in, const PackageStanza &p, Str &step)
     if (!check_size(entries, p))
         co_return Err(Error::Unsupported);
 
-    // The directories, in first-seen order; a payload entry's own directory is
-    // §8.1's F and the files under it are grouped by it.
+    // The directories, in first-seen order; a stored entry's own directory is
+    // §8.1's F and the files under it are grouped by it. A script's is "".
     step = "store";
     Vec<Str> dirs;
     for (const ZipEntry &e : entries) {
-        if (zip_meta(e.name) != ZipMeta::Payload)
+        if (!stored(e.name))
             continue;
         Str dir, leaf;
         db_split(e.name, dir, leaf);
@@ -368,7 +383,7 @@ Task<Result<void>> unpack(Txn &in, const PackageStanza &p, Str &step)
 
     for (Str dir : dirs) {
         for (const ZipEntry &e : entries) {
-            if (zip_meta(e.name) != ZipMeta::Payload)
+            if (!stored(e.name))
                 continue;
             DbFile file;
             db_split(e.name, file.dir, file.name);
@@ -466,6 +481,84 @@ Task<void> unwind(Txn &in)
     for (const Installed &p : in.fresh)
         if (Task<Result<void>> t = store_drop(p.name, p.version))
             (void)co_await t;
+}
+
+// ------------------------------------------------------------ §5.1's scripts
+
+// ".post-upgrade" is the entry; "post-upgrade" is what a person is told.
+Str script_label(ZipMeta kind)
+{
+    Str leaf = zip_meta_name(kind);
+    return leaf.empty() ? leaf : leaf.substr(1);
+}
+
+// One script. 130 is ^C; anything else carries on, the failure recorded
+// rather than fatal (§11).
+Task<i32> run_script(Txn &in, const SolveChange &c, bool after)
+{
+    PlanScripts s = plan_scripts(c);
+    ZipMeta kind  = after ? s.after : s.before;
+    if (!s.pkg || kind == ZipMeta::Payload)
+        co_return 0;
+
+    Result<i32> got = Err(Error::NoMemory);
+    if (Task<Result<i32>> t = script_run(s.pkg->name, s.pkg->version, kind, s.old_version))
+        got = co_await t;
+    if (got.is_ok() && got.value() == 0)
+        co_return 0;
+    if (got.is_err() && got.error() == Error::Cancelled)
+        co_return 130;
+
+    String stem;
+    if (!pkg_stem(s.pkg->name, s.pkg->version, stem))
+        co_return 0;
+    if (got.is_err()) {
+        if (Task<void> e = refuse(stem.str(), script_label(kind), got.error()))
+            co_await e;
+    } else {
+        Buf<64> tail;
+        tail.put(script_label(kind)).put(" failed (").put(u64(u32(got.value()))).put(')');
+        if (Task<void> e = refuse_line(stem.str(), tail.str()))
+            co_await e;
+    }
+    if (!in.broken.push(Broken{ s.pkg->name, s.pkg->version, script_label(kind) }))
+        co_return 0;
+    co_return 0;
+}
+
+// The record read back and written again: unpack serialised it while the
+// archive was still alive, and a post- failure arrives long after.
+Task<Result<void>> mark_broken(const Broken &b)
+{
+    Result<String> text = Err(Error::NoMemory);
+    if (Task<Result<String>> t = store_db_get(b.name, b.version))
+        text = co_await t;
+    if (text.is_err())
+        co_return Err(text.error());
+
+    Vec<StanzaField> f;
+    DbRecord rec;
+    if (!StanzaReader::one(text.value().str(), STANZA_DB, f) || db_read(f, rec) != StanzaRead::Ok)
+        co_return Err(Error::Invalid);
+    rec.broken = b.script;
+    if (Task<Result<void>> t = store_db_put(rec))
+        co_return co_await t;
+    co_return Err(Error::NoMemory);
+}
+
+Task<void> mark_all(Txn &in)
+{
+    for (const Broken &b : in.broken) {
+        Result<void> r = Err(Error::NoMemory);
+        if (Task<Result<void>> t = mark_broken(b))
+            r = co_await t;
+        if (r.is_err()) {
+            String path;
+            if (pkg_db_file(b.name, b.version, path))
+                if (Task<void> e = errln("pkg", path.str(), r.error()))
+                    co_await e;
+        }
+    }
 }
 
 // ------------------------------------------------------------- the commit
@@ -637,6 +730,19 @@ Task<i32> settle(Txn &in)
         }
     }
 
+    // Every pre- script, then the rename, then every post- one: the rename is
+    // the only moment anything outside the transaction can see (§8.3).
+    for (const SolveChange &c : in.cset.changes) {
+        i32 bad = 0;
+        if (Task<i32> t = run_script(in, c, false))
+            bad = co_await t;
+        if (bad == 130) {
+            if (Task<void> u = unwind(in))
+                co_await u;
+            co_return 130;
+        }
+    }
+
     if (!plan_installed(in.cset, in.want))
         co_return 1;
     for (const Installed &p : in.want) {
@@ -673,6 +779,19 @@ Task<i32> settle(Txn &in)
         co_return 1;
     }
 
+    i32 stopped = 0;
+    for (const SolveChange &c : in.cset.changes) {
+        i32 bad = 0;
+        if (Task<i32> t = run_script(in, c, true))
+            bad = co_await t;
+        if (bad == 130) {
+            stopped = 130;
+            break;
+        }
+    }
+    if (Task<void> m = mark_all(in))
+        co_await m;
+
     Buf<64> line;
     line.put("generation ")
         .put(n.value())
@@ -681,7 +800,7 @@ Task<i32> settle(Txn &in)
         .put(in.want.size() == 1 ? " package\n" : " packages\n");
     if (Task<Result<void>> t = put(SYS_STDOUT, line.str()))
         co_await t;
-    co_return 0;
+    co_return stopped;
 }
 
 // Every operand must be a §6 token; the command's own usage says so.

@@ -250,7 +250,28 @@ can be metadata, so `bin/.keep` is an ordinary file.
 | `.trigger` | a `/bin/sh` script, for the globs `.PKGINFO`'s `g:` names |
 
 Scripts run as Package_Management.md §11 describes, with apk's argv convention:
-the new version, and on an upgrade the old one after it.
+the new version, and on an upgrade the old one after it. A removal passes the
+version leaving and nothing after it. Each is spawned as `/bin/sh <file>`, so
+the file itself need carry no `#!`.
+
+**A dot-entry other than `.PKGINFO` is kept**, written into
+`/pkg/store/<name>-<version>/` under its own name and recorded in §8.1's file
+list like any payload file. It has to be: `pre-deinstall` runs at a removal,
+when the archive is long gone. Keeping it there rather than beside the record
+means `pkg verify` re-hashes it, `pkg files` lists it, and `pkg clean` collects
+it with the package, none of which needed a rule of its own. `.PKGINFO` is the
+exception because the record supersedes it.
+
+**The commit is the line between `pre-` and `post-`.** Every `pre-` script runs
+after each package is fetched, checked and unpacked and before §8.3's rename;
+every `post-` script runs after it. So a `post-` script can run what was just
+installed and a `pre-` script cannot. apk draws the line at extraction instead;
+here nothing is extracted *into place* — the rename is the only moment anything
+else can see — so that boundary has no analogue and would mark a moment at which
+nothing happens.
+
+A script that fails is recorded (§8.1's `b`) and the transaction carries on.
+Package_Management.md §11 says why.
 
 - **An unknown top-level dot-entry makes the package uninstallable** — §1's
   uppercase rule applied to an entry name.
@@ -434,12 +455,22 @@ skip a download without skipping a check.
 | Letter | Value | |
 | --- | --- | --- |
 | `G` | the index version that vouched for this package | required |
+| `b` | the install script that failed (§5.1), without its dot | optional |
 | `F` | a directory, relative to the store directory, repeats | |
 | `R` | a filename under the last `F`, repeats | |
 | `Z` | the digest of the file the last `R` named | |
 
-A writer emits §3.3's order, then `G`, then each `F` followed by its `R` and `Z`
-pairs, so the round trip is defined here too.
+A writer emits §3.3's order, then `G`, then `b`, then each `F` followed by its
+`R` and `Z` pairs, so the round trip is defined here too.
+
+The file list covers §5.1's kept dot-entries as well as the payload — they are
+written into the store directory and hashed like anything else — so a script at
+the top of the package is an `F` of `""` and an `R` of `.post-install`.
+
+`b` is **lowercase on purpose**. §1: a reader that does not know it ignores it
+and loses a warning; one that refused the record over it would lose `pkg list`,
+`pkg files` and the installed set the solver is handed. Losing the warning is
+the safer failure.
 
 `G` is what makes a reinstall re-check rather than believe the disk
 (Package_Management.md §7). apk's `M:` and `a:` are dropped: they carry uid, gid

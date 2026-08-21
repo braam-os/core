@@ -32,11 +32,11 @@ enum class StanzaRead {
 
 // Every letter a file may carry. An unknown uppercase one makes the record
 // unusable, an unknown lowercase one is dropped.
-constexpr Str STANZA_SIGNATURE = "Y";                 // §2
-constexpr Str STANZA_HEADER    = "XNGET";             // §3.1
-constexpr Str STANZA_PACKAGE   = "CPVSITDpiotkg";     // §3.2, and .PKGINFO
-constexpr Str STANZA_ANCHOR    = "XGEHK";             // §4
-constexpr Str STANZA_DB        = "CPVSITDpiotkgGFRZ"; // §8.1
+constexpr Str STANZA_SIGNATURE = "Y";                  // §2
+constexpr Str STANZA_HEADER    = "XNGET";              // §3.1
+constexpr Str STANZA_PACKAGE   = "CPVSITDpiotkg";      // §3.2, and .PKGINFO
+constexpr Str STANZA_ANCHOR    = "XGEHK";              // §4
+constexpr Str STANZA_DB        = "CPVSITDpiotkgGbFRZ"; // §8.1
 
 // Y, K, H, F, R and Z repeat; every other letter is malformed twice.
 constexpr Str STANZA_ACCUMULATING = "YKHFRZ";
@@ -136,6 +136,7 @@ struct DbFile {
 struct DbRecord {
     PackageStanza pkg;
     u64 index_version = 0; // G
+    Str broken;            // b — the script that failed, empty when none did
     Vec<DbFile> files;
 };
 
@@ -152,5 +153,5 @@ StanzaRead db_read(const Vec<StanzaField> &f, DbRecord &out);
 // §3.3's order, appended to `out`. False only on an allocation failure.
 bool package_write(const PackageStanza &p, String &out);
 
-// §3.3's order, then G, then each F with its R and Z pairs.
+// §3.3's order, then G, then b, then each F with its R and Z pairs.
 bool db_write(const DbRecord &r, String &out);

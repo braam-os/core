@@ -31,6 +31,32 @@ void test_plan()
     CHECK(plan_verb(SolveChange{ &new_app, &old_app, false }) == "Downgrading");
     CHECK(plan_verb(SolveChange{ &new_app, &swap, false }) == "Replacing");
 
+    // §5.1's pairs, off the same three shapes. A deinstall runs out of the
+    // version leaving, and only an upgrade has an argv[2].
+    {
+        PlanScripts s = plan_scripts(SolveChange{ nullptr, &libz, false });
+        CHECK(s.before == ZipMeta::PreInstall && s.after == ZipMeta::PostInstall);
+        CHECK(s.pkg == &libz && s.old_version.empty());
+
+        s = plan_scripts(SolveChange{ &gone, nullptr, false });
+        CHECK(s.before == ZipMeta::PreDeinstall && s.after == ZipMeta::PostDeinstall);
+        CHECK(s.pkg == &gone && s.old_version.empty());
+
+        s = plan_scripts(SolveChange{ &old_app, &new_app, false });
+        CHECK(s.before == ZipMeta::PreUpgrade && s.after == ZipMeta::PostUpgrade);
+        CHECK(s.pkg == &new_app && s.old_version == "1");
+
+        // Down as well as up, and a reinstall with it.
+        s = plan_scripts(SolveChange{ &new_app, &old_app, false });
+        CHECK(s.before == ZipMeta::PreUpgrade && s.pkg == &old_app && s.old_version == "2");
+        s = plan_scripts(SolveChange{ &libz, &libz, true });
+        CHECK(s.before == ZipMeta::PreUpgrade && s.pkg == &libz);
+
+        // No verb is no work, and no work runs nothing.
+        s = plan_scripts(SolveChange{ &libz, &libz, false });
+        CHECK(s.before == ZipMeta::Payload && s.after == ZipMeta::Payload && !s.pkg);
+    }
+
     Changeset cs;
     CHECK(cs.changes.push(SolveChange{ nullptr, &libz, false }));
     CHECK(cs.changes.push(SolveChange{ &old_app, &new_app, false }));

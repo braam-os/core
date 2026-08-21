@@ -25,6 +25,64 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## Six scripts, and the moment they run around
+
+P24 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). Package_Format.md §5.1 has
+named `.pre-install` and its five relatives since P14, and `zip_meta` has
+returned a kind for each of them, but `unpack` wrote only `ZipMeta::Payload` —
+so a package carrying scripts installed with them silently dropped on the floor.
+They run now. Package_Management.md §11 needed nothing said that it had not
+already said, which is what a policy document written before the code is for.
+
+**A script is an ordinary file of the package, kept in the store directory.**
+apk puts them beside the record, in `/lib/apk/db/<pkg>.<script>`; here they go
+into `/pkg/store/<name>-<version>/` under their own dot-names with an `F`/`R`/`Z`
+row apiece. They have to be kept somewhere — `pre-deinstall` runs at a removal,
+when the archive is long gone — and the store directory is the one place where
+keeping them costs nothing else. `pkg verify` re-hashes them, `pkg files` lists
+them, `store_drop` and `pkg clean` collect them with the package, and not one of
+those four learned a rule. The alternative would have taught `pkg clean`'s stem
+scan about a naming convention, given `pkg verify` a blind spot, and left the
+files unhashed.
+
+The rule is every dot-entry but `.PKGINFO`, not the six by name. `.PKGINFO` is
+excluded because §8.1's record supersedes it — that is §5.1's own reason for it
+existing. The generalisation is what leaves P25 nothing to store: `.trigger` is
+already unpacked and recorded, and only the firing rule is missing.
+
+**The commit is the line between `pre-` and `post-`.** apk draws it at
+extraction, and that boundary does not exist here. Nothing is extracted into
+place: the unpack writes into a store directory nothing yet names, and §8.3's
+rename of `/pkg/active` is the single moment anything outside the transaction
+can observe. So every `pre-` script runs after every package is fetched, checked
+and unpacked, and every `post-` script runs after the rename. The consequence is
+worth stating: a `post-` script can run what was just installed, because
+`/pkg/bin` points at the new generation, and a `pre-` script cannot. Drawing the
+line where apk draws it would have marked a moment at which nothing happens.
+
+**A failing script does not abort.** §11 already required that, and gave the
+reason: it is what leaves `pkg verify` something to find. So a non-zero exit is
+`pkg: <stem>: post-upgrade failed (1)` on stderr, a `b:` in the record, and a
+transaction that carries on to its commit. The mark is written by reading the
+record back and writing it again rather than folded into the staged text,
+because `unpack` serialises that text while the archive is still alive and a
+`post-` failure arrives long after — one path for both halves beats two.
+
+`b` is lowercase, and §1 is why. An unknown uppercase letter makes a record
+unusable; an unknown lowercase one is ignored. A future reader that does not
+understand "broken" loses a warning, which is bad. One that refused the record
+would lose `pkg list`, `pkg files` and the installed set `read_installed` hands
+the solver, which is worse. Fail-closed is not automatically the safer choice —
+it is only safer when what closes is smaller than what breaks.
+
+The fixture is a package called `noisy` carrying all six scripts, each echoing
+its own name and arguments, whose 1.1 `post-upgrade` exits 1 — one package for
+the happy path and the broken one. It lives in two indexes of its own rather
+than joining the existing pair, so every assertion written before it is
+undisturbed by a package that exists to make noise. Its scripts carry no `#!`,
+which is not an oversight: they are spawned as `/bin/sh <file>`, and the fixture
+is where that stops being a claim.
+
 ## A namespace with no code in it
 
 P23 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md), which turned out to be a

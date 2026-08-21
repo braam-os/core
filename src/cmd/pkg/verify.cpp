@@ -20,6 +20,7 @@ constexpr Str NOT_INSTALLED = "not installed";
 constexpr Str MISSING  = "missing";
 constexpr Str MODIFIED = "modified";
 constexpr Str EXTRA    = "extra";
+constexpr Str BROKEN   = "broken";
 constexpr usize W_WORD = 10;
 
 // Sha256 is 112 bytes, and a frame past 512 costs a whole span.
@@ -227,6 +228,16 @@ Task<i32> verify_one(Job &in, Str name, Str version)
 
     in.recorded.clear();
     i32 bad = 0;
+
+    // §11: a script that failed is recorded, not fatal, and this is what finds
+    // it. The path is the record that says so.
+    if (!rec.broken.empty()) {
+        String path;
+        if (!pkg_db_file(name, version, path) || !report(in.out, BROKEN, path.str()))
+            co_return 1;
+        bad = 1;
+    }
+
     for (const DbFile &f : rec.files) {
         String rel;
         if (!db_join(f.dir, f.name, rel))

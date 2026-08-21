@@ -131,29 +131,48 @@ bool zip_stored(const ZipEntry &e, Str &out)
     return true;
 }
 
+namespace {
+
+struct Named {
+    Str name;
+    ZipMeta meta;
+};
+
+// One table, read both ways, so the name and the kind cannot drift apart.
+constexpr Named META[] = {
+    { ".PKGINFO", ZipMeta::PkgInfo },
+    { ".pre-install", ZipMeta::PreInstall },
+    { ".post-install", ZipMeta::PostInstall },
+    { ".pre-deinstall", ZipMeta::PreDeinstall },
+    { ".post-deinstall", ZipMeta::PostDeinstall },
+    { ".pre-upgrade", ZipMeta::PreUpgrade },
+    { ".post-upgrade", ZipMeta::PostUpgrade },
+    { ".trigger", ZipMeta::Trigger },
+};
+
+} // namespace
+
 ZipMeta zip_meta(Str name)
 {
     if (name.empty() || name[0] != '.' || name.contains("/"))
         return ZipMeta::Payload;
-
-    struct Named {
-        Str name;
-        ZipMeta meta;
-    };
-    constexpr Named TABLE[] = {
-        { ".PKGINFO", ZipMeta::PkgInfo },
-        { ".pre-install", ZipMeta::PreInstall },
-        { ".post-install", ZipMeta::PostInstall },
-        { ".pre-deinstall", ZipMeta::PreDeinstall },
-        { ".post-deinstall", ZipMeta::PostDeinstall },
-        { ".pre-upgrade", ZipMeta::PreUpgrade },
-        { ".post-upgrade", ZipMeta::PostUpgrade },
-        { ".trigger", ZipMeta::Trigger },
-    };
-    for (const Named &n : TABLE)
+    for (const Named &n : META)
         if (n.name == name)
             return n.meta;
     return ZipMeta::Unknown;
+}
+
+Str zip_meta_name(ZipMeta meta)
+{
+    for (const Named &n : META)
+        if (n.meta == meta)
+            return n.name;
+    return Str();
+}
+
+bool zip_meta_kept(ZipMeta meta)
+{
+    return meta != ZipMeta::Payload && meta != ZipMeta::PkgInfo && meta != ZipMeta::Unknown;
 }
 
 bool ZipSink::take(Str chunk)

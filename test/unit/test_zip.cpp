@@ -430,6 +430,21 @@ void test_zip()
     for (const MetaCase &c : META)
         test_check(zip_meta(c.name) == c.meta, c.name, __FILE_NAME__, __LINE__);
 
+    // The name and the kind read off one table, so a round trip pins both.
+    // Payload and Unknown have no name; the store keeps every kind but
+    // .PKGINFO, whose §8.1 record supersedes it.
+    for (const MetaCase &c : META) {
+        bool named = c.meta != ZipMeta::Payload && c.meta != ZipMeta::Unknown;
+        Str leaf   = zip_meta_name(c.meta);
+        bool ok    = named ? leaf == c.name : leaf.empty();
+        test_check(ok && (leaf.empty() || zip_meta(leaf) == c.meta), c.name, __FILE_NAME__,
+                   __LINE__);
+    }
+    CHECK(!zip_meta_kept(ZipMeta::Payload) && !zip_meta_kept(ZipMeta::PkgInfo));
+    CHECK(!zip_meta_kept(ZipMeta::Unknown));
+    CHECK(zip_meta_kept(ZipMeta::PreInstall) && zip_meta_kept(ZipMeta::PostDeinstall));
+    CHECK(zip_meta_kept(ZipMeta::Trigger));
+
     // The entry that refuses the package it is in.
     {
         Vec<ZipEntry> v;

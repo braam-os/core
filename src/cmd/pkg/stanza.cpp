@@ -295,6 +295,7 @@ StanzaRead db_read(const Vec<StanzaField> &f, DbRecord &out)
         return s;
     if (!has(f, 'G') || !take_number(f, 'G', r.index_version, true))
         return StanzaRead::Unusable;
+    r.broken = field(f, 'b');
 
     // F, R and Z are positional: a directory, a name under the last F, and the
     // digest of the file the last R named.
@@ -354,6 +355,8 @@ bool package_write(const PackageStanza &p, String &out)
 bool db_write(const DbRecord &r, String &out)
 {
     if (!package_write(r.pkg, out) || !put_number(out, 'G', r.index_version))
+        return false;
+    if (!r.broken.empty() && !put_field(out, 'b', r.broken))
         return false;
 
     Str dir;

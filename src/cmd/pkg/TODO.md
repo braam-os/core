@@ -28,15 +28,17 @@ changeset means, compiled into `tests.wasm` as well — `trust.cpp` and
 `unzip.cpp` inflates an entry, `store.cpp` performs the steps `db.cpp`
 computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`,
 `query.cpp`, `verify.cpp`, `clean.cpp` and `install.cpp` are the subcommands
-there are — the last holding the four that change the installed set; those
-eight are the pieces that stay out, and `solve.cpp` is in with the first list,
-being pure. Phases D and E are done too: every row of the table is a command,
-`pkg update` writes `/pkg/index`, `pkg search`, `pkg info` and `pkg list` read
-it and the generation beside it, `pkg install`, `pkg remove`, `pkg autoremove`
-and `pkg upgrade` perform the solver's changeset, `pkg files` and `pkg verify`
-read §8.1's record back, and `pkg clean` collects what none of them names any
-more. P23 went the way Phases A and B did: `cmd:` was never code here, and the
-grammar it asked for is Package_Format.md §6.1. So this starts at P24.
+there are — the last holding the four that change the installed set — and
+`script.cpp` spawns §5.1's scripts; those nine are the pieces that stay out, and
+`solve.cpp` is in with the first list, being pure. Phases D and E are done too:
+every row of the table is a command, `pkg update` writes `/pkg/index`,
+`pkg search`, `pkg info` and `pkg list` read it and the generation beside it,
+`pkg install`, `pkg remove`, `pkg autoremove` and `pkg upgrade` perform the
+solver's changeset, `pkg files` and `pkg verify` read §8.1's record back, and
+`pkg clean` collects what none of them names any more. P23 went the way Phases A
+and B did: `cmd:` was never code here, and the grammar it asked for is
+Package_Format.md §6.1. P24 ran §5.1's six scripts around the commit, so this
+starts at P25.
 
 Four of P26's tools came early with P18, which needed a signed repository to
 install from: `tools/ed25519.py`, `signindex.py`, `mkanchor.py`, `mkpkg.py`,
@@ -129,22 +131,18 @@ paragraph — in particular, nothing below is allowed to imply a fence §11 says
 does not exist, and a package that only places files must still run no code at
 all.
 
-### P24. Install scripts
-
-`pre-install`, `post-install`, `pre-deinstall`, `post-deinstall`,
-`pre-upgrade`, `post-upgrade` — run as `/bin/sh` through `Sys::Spawn`, in the
-changeset's order, with apk's argv convention: the new version, and on an
-upgrade the old one after it.
-
-A failing script marks the package broken and is recorded rather than aborting.
-That is apk's behaviour and it is what gives `pkg verify` something to find.
-
 ### P25. Triggers
 
 A package's `.trigger` script and its path globs. Fired once per package after
 the whole transaction, with the matched directories as argv. A freshly
 installed package runs all of its triggers; an existing one runs a trigger whose
 glob matches a directory the transaction modified.
+
+P24 left it nothing to store: `.trigger` is already unpacked into the store
+directory and recorded, being a dot-entry that is not `.PKGINFO` (§5.1), and
+`script_run` already spawns one by kind. What is missing is the firing rule —
+`g:`'s globs against what the transaction touched — and that `.trigger` takes
+directories as argv rather than §5.1's versions.
 
 ---
 

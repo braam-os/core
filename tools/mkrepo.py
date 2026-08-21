@@ -49,13 +49,31 @@ def hello(version, greeting):
     }
 
 
-PACKAGES = [LIBZ, hello("1.0-r0", "hi from hello"), hello("1.1-r0", "hi from hello 1.1")]
+# §5.1's six scripts, each saying which it is and what it was handed. 1.1's
+# fail: post-upgrade for a mark written after the commit, pre-install for one
+# written before it, which the commit must not overwrite.
+def noisy(version, failing):
+    files = {"bin/noisy": f"#!/bin/sh\necho noisy {version}\n"}
+    for name in ("pre-install", "post-install", "pre-deinstall", "post-deinstall",
+                 "pre-upgrade", "post-upgrade"):
+        tail = "exit 1\n" if name in failing else ""
+        files[f".{name}"] = f"echo {name} $*\n" + tail
+    return {"name": "noisy", "version": version, "fields": {"T": "a package that talks"},
+            "files": files}
+
+
+PACKAGES = [LIBZ, hello("1.0-r0", "hi from hello"), hello("1.1-r0", "hi from hello 1.1"),
+            noisy("1.0-r0", ()), noisy("1.1-r0", ("post-upgrade", "pre-install"))]
 
 # One index per generation of the repository: the second moves hello and
 # leaves libz where it is, so an upgrade can be seen touching only what moved.
+# The last two are noisy's alone, so the assertions over the first two are not
+# disturbed by a package that exists to make noise.
 INDEXES = [
     (1, ["libz-1.0-r0", "hello-1.0-r0"]),
     (2, ["libz-1.0-r0", "hello-1.1-r0"]),
+    (3, ["noisy-1.0-r0"]),
+    (4, ["noisy-1.1-r0"]),
 ]
 
 

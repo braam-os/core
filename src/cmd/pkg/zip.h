@@ -58,6 +58,13 @@ enum class ZipMeta {
 
 ZipMeta zip_meta(Str name);
 
+// The entry name a kind is carried under, empty for Payload and Unknown.
+Str zip_meta_name(ZipMeta meta);
+
+// Whether the store directory keeps it: every dot-entry but .PKGINFO, which
+// the §8.1 record supersedes. A kept entry is recorded like any payload file.
+bool zip_meta_kept(ZipMeta meta);
+
 // --------------------------------------------------------------- the ceiling
 
 // An inflate's output side. Sys::Inflate caps its input and not its output, so

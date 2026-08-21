@@ -113,7 +113,8 @@ Packages
   list      list installed packages
   files     <package> — the files an installed package placed
   verify    [<package>] — re-read those files, and compare each against the
-            digest recorded when it was installed
+            digest recorded when it was installed, and report a package whose
+            install script failed
   clean     drop the downloaded archives, and what no generation still needs.
             The generation before the live one is kept: it is what a rollback
             swings back to
