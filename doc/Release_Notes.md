@@ -163,9 +163,20 @@ fake, so a package can be served at all.
 
 **`/bin/pkg` is 171 KB, from 86.** `solve.cpp` and the newly reachable bodies
 of `zip.cpp`, `unzip.cpp` and `db.cpp` are most of it. The staging tree is
-973,441 bytes against `tools/size_budget.txt`'s 1 MiB, so it fits — but P19 to
-P22 all land on this one binary, and that is 75 KB of room. Raising the number
-is a deliberate act; this is the entry that says when the trend started.
+973,441 bytes, which fitted the old 1 MiB budget with 75 KB to spare — and P19
+to P22 all land on this one binary, so the next task would have broken the
+build rather than reported anything.
+
+**So the staging budget is 2 MiB.** Raising it is a deliberate act, and this is
+the entry that says why: `/bin/pkg` is a package manager, and a package manager
+is a solver, a version grammar, a stanza reader, a zip reader and a digest.
+That is not §4.4's duplication, which is what the number exists to bound — the
+duplication is the process runtime every binary carries, and it did not move.
+One program grew, once, for a reason that will not repeat. The bound stays a
+bound: 973,441 against 2 MiB is not room to stop watching, it is room for the
+four commands that finish the one program this was raised for. `kernel.wasm`
+keeps its 262,144 unchanged, which is the number that would mean something had
+gone wrong.
 
 ## A solver with no way back, and 72 fixtures that say so
 
