@@ -51,6 +51,7 @@ void test_jsref();
 void test_svc();
 void test_sysabi();
 void test_vfs();
+void test_trigger();
 void test_zip();
 
 // The kernel's init() calls this too, so the cases below start from the same
@@ -120,6 +121,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_solve(); // after dep and version, which it decides with
     test_db();    // after dep: world is a list of dependency tokens
     test_plan();  // after solve and db: a changeset as texts and steps
+    test_trigger(); // after db and dep: a changeset says which triggers fire
     test_zip(); // after sha256 and svc: rootfs.zip is compared by digest
     test_procfs();
 

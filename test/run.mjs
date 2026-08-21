@@ -2192,6 +2192,54 @@ if (mode === "--kernel") {
         net.routes.delete(`${RURL}/noisy-1.0-r0.zip`);
         net.routes.delete(`${RURL}/noisy-1.1-r0.zip`);
 
+        // P25. `hooky` watches every package's share/ and /pkg/bin, and echoes
+        // what it is handed. Its own index again, so what is above is not
+        // disturbed by a package that exists to watch.
+        submit("rm -r /pkg", (ut += 0.005));
+        store.dirs.add("/pkg");
+        plant("/pkg/repositories", RURL + "\n");
+        net.routes.set(RURL + "/index",
+                       { status: 200, headers: "content-type: text/plain\n",
+                         body: repo("index5") });
+        serve("hooky-1.0-r0", archive("hooky-1.0-r0"));
+        serve("bad-1.0-r0", archive("bad-1.0-r0"));
+        prints("pkg update", `${RURL}|index 5, 3 packages`);
+
+        // Freshly installed, so it sees every directory its globs name and not
+        // only what this transaction wrote — its own share/ among them.
+        prints("pkg install hooky",
+               ["Installing hooky (1.0-r0)", "trigger /pkg/bin /pkg/store/hooky-1.0-r0/share/hooky",
+                "generation 1, 1 package"].join("|"));
+
+        // Not fresh any more: a second package's share/ is what the
+        // transaction wrote, and that alone is what it is handed.
+        prints("pkg install libz",
+               ["Installing libz (1.0-r0)", "trigger /pkg/bin /pkg/store/libz-1.0-r0/share/libz",
+                "generation 2, 2 packages"].join("|"));
+
+        // A removal writes nothing to the store, so /pkg/bin is the whole of
+        // what changed — the clause that exists so a removal can be noticed.
+        prints("pkg remove libz",
+               ["Purging libz (1.0-r0)", "trigger /pkg/bin", "generation 3, 1 package"].join("|"));
+
+        // A trigger is a script, so §11 records a failing one the same way.
+        // Two fire here, in the changeset's order, and one failing does not
+        // stop the other.
+        prints("pkg install bad",
+               ["Installing bad (1.0-r0)", "trigger /pkg/bin",
+                "pkg: bad-1.0-r0: trigger failed (3)",
+                "trigger /pkg/bin /pkg/store/bad-1.0-r0/share/bad",
+                "generation 4, 2 packages"].join("|"));
+        if (!text("/pkg/db/bad-1.0-r0").includes("b:trigger\n"))
+            fail("a failing trigger was not recorded");
+        prints("pkg verify", "broken    /pkg/db/bad-1.0-r0", 1);
+
+        net.routes.delete(`${RURL}/hooky-1.0-r0.zip`);
+        net.routes.delete(`${RURL}/bad-1.0-r0.zip`);
+        net.routes.set(RURL + "/index",
+                       { status: 200, headers: "content-type: text/plain\n",
+                         body: repo("index") });
+
         // Put the release's anchor back and leave no /pkg, so what follows
         // starts where it did.
         store.files.set("/share/pkg/anchor", shipped);

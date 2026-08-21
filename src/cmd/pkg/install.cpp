@@ -11,6 +11,7 @@
 #include "solve.h"
 #include "stanza.h"
 #include "store.h"
+#include "trigger.h"
 #include "unzip.h"
 #include "zip.h"
 
@@ -60,6 +61,7 @@ struct Txn {
     Vec<GenLink> links;
     Vec<StoreOp> ops;
     Vec<Broken> broken;
+    Vec<String> touched; // the store directories this run wrote
 
     String archive; // one package at a time
     Sha256 hash;
@@ -360,6 +362,12 @@ Task<Result<void>> unpack(Txn &in, const PackageStanza &p, Str &step)
     mkroot.kind = StoreOpKind::MkDir;
     if (!mkroot.path.assign(root.str()) || !ops.push(move(mkroot)))
         co_return Err(Error::NoMemory);
+
+    // Each of these is a directory the transaction wrote, which is what a
+    // trigger's globs are matched against (§5.1).
+    String had;
+    if (!had.assign(root.str()) || !in.touched.push(move(had)))
+        co_return Err(Error::NoMemory);
     for (Str dir : dirs) {
         String path;
         if (!pkg_store_dir(p.name, p.version, dir, path))
@@ -367,6 +375,11 @@ Task<Result<void>> unpack(Txn &in, const PackageStanza &p, Str &step)
         StoreOp mk;
         mk.kind = StoreOpKind::MkDir;
         if (!mk.path.assign(path.str()) || !ops.push(move(mk)))
+            co_return Err(Error::NoMemory);
+        if (dir.empty())
+            continue;
+        String seen;
+        if (!seen.assign(path.str()) || !in.touched.push(move(seen)))
             co_return Err(Error::NoMemory);
     }
     if (Task<Result<void>> t = store_perform(ops))
@@ -494,15 +507,10 @@ Str script_label(ZipMeta kind)
 
 // One script. 130 is ^C; anything else carries on, the failure recorded
 // rather than fatal (§11).
-Task<i32> run_script(Txn &in, const SolveChange &c, bool after)
+Task<i32> spawn_script(Txn &in, const PackageStanza &p, ZipMeta kind, Span<const Str> args)
 {
-    PlanScripts s = plan_scripts(c);
-    ZipMeta kind  = after ? s.after : s.before;
-    if (!s.pkg || kind == ZipMeta::Payload)
-        co_return 0;
-
     Result<i32> got = Err(Error::NoMemory);
-    if (Task<Result<i32>> t = script_run(s.pkg->name, s.pkg->version, kind, s.old_version))
+    if (Task<Result<i32>> t = script_run(p.name, p.version, kind, args))
         got = co_await t;
     if (got.is_ok() && got.value() == 0)
         co_return 0;
@@ -510,7 +518,7 @@ Task<i32> run_script(Txn &in, const SolveChange &c, bool after)
         co_return 130;
 
     String stem;
-    if (!pkg_stem(s.pkg->name, s.pkg->version, stem))
+    if (!pkg_stem(p.name, p.version, stem))
         co_return 0;
     if (got.is_err()) {
         if (Task<void> e = refuse(stem.str(), script_label(kind), got.error()))
@@ -521,8 +529,144 @@ Task<i32> run_script(Txn &in, const SolveChange &c, bool after)
         if (Task<void> e = refuse_line(stem.str(), tail.str()))
             co_await e;
     }
-    if (!in.broken.push(Broken{ s.pkg->name, s.pkg->version, script_label(kind) }))
+    if (!in.broken.push(Broken{ p.name, p.version, script_label(kind) }))
         co_return 0;
+    co_return 0;
+}
+
+Task<i32> run_script(Txn &in, const SolveChange &c, bool after)
+{
+    PlanScripts s = plan_scripts(c);
+    ZipMeta kind  = after ? s.after : s.before;
+    if (!s.pkg || kind == ZipMeta::Payload)
+        co_return 0;
+
+    Str argv[2] = { s.pkg->version, s.old_version };
+    co_return co_await spawn_script(in, *s.pkg, kind,
+                                    Span<const Str>(argv, s.old_version.empty() ? 1 : 2));
+}
+
+// --------------------------------------------------------------- §5.1's triggers
+
+bool push_dir(Vec<String> &v, Str path)
+{
+    for (const String &had : v)
+        if (had.str() == path)
+            return true;
+    String s;
+    return s.assign(path) && v.push(move(s));
+}
+
+// Str carries no order, and a run's argv must not depend on a listing's.
+bool ahead(Str a, Str b)
+{
+    usize n = a.size() < b.size() ? a.size() : b.size();
+    for (usize i = 0; i < n; i++)
+        if (a[i] != b[i])
+            return u8(a[i]) < u8(b[i]);
+    return a.size() < b.size();
+}
+
+// Sorted, and a path already there keeps the `modified` it arrived with.
+bool push_sorted(Vec<TriggerDir> &v, TriggerDir d)
+{
+    usize at = v.size();
+    while (at > 0 && ahead(d.path, v[at - 1].path))
+        at--;
+    if (at > 0 && v[at - 1].path == d.path)
+        return true;
+    return v.insert(at, d);
+}
+
+// Every directory of every package the transaction leaves installed. Read back
+// rather than remembered: most of them this run never touched.
+Task<Result<void>> installed_dirs(Txn &in, Vec<String> &out)
+{
+    for (const Installed &p : in.want) {
+        Result<String> text = Err(Error::NoMemory);
+        if (Task<Result<String>> t = store_db_get(p.name, p.version))
+            text = co_await t;
+        if (text.is_err())
+            co_return Err(text.error());
+
+        Vec<StanzaField> f;
+        DbRecord rec;
+        if (!StanzaReader::one(text.value().str(), STANZA_DB, f) ||
+            db_read(f, rec) != StanzaRead::Ok)
+            co_return Err(Error::Invalid);
+
+        String root;
+        if (!pkg_store_dir(p.name, p.version, "", root) || !push_dir(out, root.str()))
+            co_return Err(Error::NoMemory);
+        for (const DbFile &file : rec.files) {
+            if (file.dir.empty())
+                continue;
+            String path;
+            if (!pkg_store_dir(p.name, p.version, file.dir, path) || !push_dir(out, path.str()))
+                co_return Err(Error::NoMemory);
+        }
+    }
+    co_return Result<void>();
+}
+
+// apk's fire_triggers, once the transaction is over. 130 is ^C.
+Task<i32> fire_triggers(Txn &in)
+{
+    bool any = false, fresh = false;
+    for (const SolveChange &c : in.cset.changes) {
+        if (!c.new_pkg || c.new_pkg->globs.empty())
+            continue;
+        any   = true;
+        fresh = fresh || !plan_verb(c).empty();
+    }
+    if (!any)
+        co_return 0;
+
+    // The farm was rewritten, which is the whole of what a removal changes.
+    Vec<String> modified, all;
+    for (const String &d : in.touched)
+        if (!push_dir(modified, d.str()))
+            co_return 0;
+    if (!push_dir(modified, PKG_BIN))
+        co_return 0;
+
+    if (fresh) {
+        Result<void> r = Err(Error::NoMemory);
+        if (Task<Result<void>> t = installed_dirs(in, all))
+            r = co_await t;
+        if (r.is_err()) {
+            if (Task<void> e = errln("pkg", PKG_DB, r.error()))
+                co_await e;
+            co_return 0;
+        }
+    }
+
+    // Sorted, so argv does not depend on the order a zip or a listing gave.
+    Vec<TriggerDir> dirs;
+    for (const String &d : modified)
+        if (!push_sorted(dirs, TriggerDir{ d.str(), true }))
+            co_return 0;
+    for (const String &d : all)
+        if (!push_sorted(dirs, TriggerDir{ d.str(), false }))
+            co_return 0;
+
+    for (const SolveChange &c : in.cset.changes) {
+        if (!c.new_pkg || c.new_pkg->globs.empty())
+            continue;
+
+        Vec<Str> argv;
+        bool fire = false;
+        if (!trigger_dirs(c.new_pkg->globs, !plan_verb(c).empty(), dirs, argv, fire))
+            co_return 0;
+        if (!fire)
+            continue;
+
+        i32 bad = 0;
+        if (Task<i32> t = spawn_script(in, *c.new_pkg, ZipMeta::Trigger, argv))
+            bad = co_await t;
+        if (bad == 130)
+            co_return 130;
+    }
     co_return 0;
 }
 
@@ -789,6 +933,11 @@ Task<i32> settle(Txn &in)
             break;
         }
     }
+
+    // §5.1: once per package, after the whole transaction.
+    if (stopped == 0)
+        if (Task<i32> t = fire_triggers(in))
+            stopped = co_await t;
     if (Task<void> m = mark_all(in))
         co_await m;
 

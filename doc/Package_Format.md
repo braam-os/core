@@ -154,7 +154,7 @@ P:less
 | `o` | origin — the source package's name | optional |
 | `t` | build time | optional |
 | `k` | provider priority | optional |
-| `g` | trigger globs, space-separated | optional |
+| `g` | trigger globs, space-separated (§5.1.1) | optional |
 
 `C` and `S` are what Package_Management.md §7's steps 8 and 9 check against.
 
@@ -247,7 +247,7 @@ can be metadata, so `bin/.keep` is an ordinary file.
 | `.pre-install` `.post-install` | `/bin/sh` scripts |
 | `.pre-deinstall` `.post-deinstall` | `/bin/sh` scripts |
 | `.pre-upgrade` `.post-upgrade` | `/bin/sh` scripts |
-| `.trigger` | a `/bin/sh` script, for the globs `.PKGINFO`'s `g:` names |
+| `.trigger` | a `/bin/sh` script, for the globs `g:` names (§5.1.1) |
 
 Scripts run as Package_Management.md §11 describes, with apk's argv convention:
 the new version, and on an upgrade the old one after it. A removal passes the
@@ -271,7 +271,40 @@ else can see — so that boundary has no analogue and would mark a moment at whi
 nothing happens.
 
 A script that fails is recorded (§8.1's `b`) and the transaction carries on.
-Package_Management.md §11 says why.
+Package_Management.md §11 says why, and a trigger is a script like the six.
+
+### 5.1.1 `.trigger`, and what wakes it
+
+`.trigger` takes **directories** as argv rather than versions, and runs **once
+per package, after the whole transaction** — after the `post-` scripts, which
+are themselves after the commit. apk's rule, ported whole.
+
+A transaction has a view of two sets of directories. The **modified** set is
+what it wrote: each unpacked package's store directory and each of its `F`s,
+plus **`/pkg/bin`**. `/pkg/bin` is there because a removal writes nothing to the
+store — the bytes stay for a rollback — but §8.3's farm is rebuilt and
+`/pkg/bin` resolves to new contents; it is the equivalent of apk marking a
+directory modified when it deletes files from it, and without it a removal could
+never wake anything. The rest is every directory of every package the
+transaction leaves installed.
+
+For each installed package carrying `g:`, and each directory:
+
+- Skip the directory unless the package is **fresh** — installed or upgraded by
+  this transaction — or the directory was modified. A purged package's triggers
+  do not fire at all.
+- Take the globs in order. A leading `+` is stripped and means **only-changed**.
+  A glob not then starting with `/` is skipped. Matching is **per component**:
+  `*` does not cross a `/`, so `/pkg/store/*/share` names one package's `share`
+  and not everything beneath the store.
+- The **first** glob that matches settles that directory: the trigger will now
+  fire, and the directory joins argv unless only-changed and the directory was
+  not modified.
+
+Two consequences, both easy to read backwards. A `+` glob matching an unmodified
+directory **still wakes the trigger** — it only withholds that directory, so a
+fresh package whose globs are all `+` runs with an empty argv. And a package
+whose globs match nothing does not run its trigger at all.
 
 - **An unknown top-level dot-entry makes the package uninstallable** — §1's
   uppercase rule applied to an entry name.

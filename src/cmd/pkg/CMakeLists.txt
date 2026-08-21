@@ -15,6 +15,7 @@ add_library(braam_pkg STATIC
     solve.cpp
     stanza.cpp
     store.cpp
+    trigger.cpp
     trust.cpp
     unzip.cpp
     update.cpp

@@ -62,8 +62,26 @@ def noisy(version, failing):
             "files": files}
 
 
+# §5.1's trigger. `hooky` watches every package's share/ and echoes what it was
+# handed; `broken-hook` fails, so a trigger is a script §11 records like the six.
+HOOKY = {
+    "name": "hooky",
+    "version": "1.0-r0",
+    "fields": {"T": "a package that watches", "g": "/pkg/store/*/share/* /pkg/bin"},
+    "files": {"share/hooky/README": "watching\n", ".trigger": "echo trigger $*\n"},
+}
+
+# Short, because run.mjs asserts its trigger's argv on a sixty-column grid.
+BADHOOK = {
+    "name": "bad",
+    "version": "1.0-r0",
+    "fields": {"T": "a package whose trigger fails", "g": "/pkg/bin"},
+    "files": {"share/bad/README": "no\n", ".trigger": "echo trigger $*\nexit 3\n"},
+}
+
 PACKAGES = [LIBZ, hello("1.0-r0", "hi from hello"), hello("1.1-r0", "hi from hello 1.1"),
-            noisy("1.0-r0", ()), noisy("1.1-r0", ("post-upgrade", "pre-install"))]
+            noisy("1.0-r0", ()), noisy("1.1-r0", ("post-upgrade", "pre-install")),
+            HOOKY, BADHOOK]
 
 # One index per generation of the repository: the second moves hello and
 # leaves libz where it is, so an upgrade can be seen touching only what moved.
@@ -74,6 +92,7 @@ INDEXES = [
     (2, ["libz-1.0-r0", "hello-1.1-r0"]),
     (3, ["noisy-1.0-r0"]),
     (4, ["noisy-1.1-r0"]),
+    (5, ["hooky-1.0-r0", "bad-1.0-r0", "libz-1.0-r0"]),
 ]
 
 

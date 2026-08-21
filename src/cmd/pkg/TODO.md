@@ -20,11 +20,12 @@ went with them, P5 to P12: `src/cmd/pkg/` is a directory beside `src/cmd/sh/`,
 `braam_pkg` is the library its `main.cpp` links, `pkg.cpp` holds the subcommand
 table each task below fills a row of, and `sha256.cpp`, `encode.cpp`,
 `version.cpp`, `dep.cpp`, `stanza.cpp`, `zip.cpp`, `db.cpp`, `trust.cpp`,
-`index.cpp` and `plan.cpp` are the digest, the two encodings, apk's version
-grammar, the dependency token, the stanza grammar with its records, the zip's
-directory, `/pkg`'s layout, the anchor's checks, §7's pipeline and what a
-changeset means, compiled into `tests.wasm` as well — `trust.cpp` and
-`index.cpp` because they take a `PkgHost` rather than calling a syscall.
+`index.cpp`, `plan.cpp` and `trigger.cpp` are the digest, the two encodings,
+apk's version grammar, the dependency token, the stanza grammar with its
+records, the zip's directory, `/pkg`'s layout, the anchor's checks, §7's
+pipeline, what a changeset means and which triggers a transaction wakes,
+compiled into `tests.wasm` as well — `trust.cpp` and `index.cpp` because they
+take a `PkgHost` rather than calling a syscall.
 `unzip.cpp` inflates an entry, `store.cpp` performs the steps `db.cpp`
 computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`,
 `query.cpp`, `verify.cpp`, `clean.cpp` and `install.cpp` are the subcommands
@@ -37,8 +38,11 @@ every row of the table is a command, `pkg update` writes `/pkg/index`,
 solver's changeset, `pkg files` and `pkg verify` read §8.1's record back, and
 `pkg clean` collects what none of them names any more. P23 went the way Phases A
 and B did: `cmd:` was never code here, and the grammar it asked for is
-Package_Format.md §6.1. P24 ran §5.1's six scripts around the commit, so this
-starts at P25.
+Package_Format.md §6.1. Phase F is done as well: P24 ran §5.1's six scripts
+around the commit, and P25 fired `.trigger` after the whole transaction, both
+under the paragraph §11 wrote before either — nothing implies a fence §11 says
+does not exist, and a package that only places files still runs no code. So this
+starts at P26.
 
 Four of P26's tools came early with P18, which needed a signed repository to
 install from: `tools/ed25519.py`, `signindex.py`, `mkanchor.py`, `mkpkg.py`,
@@ -122,30 +126,6 @@ whole package through `SYS_STAGE_MAX` and capping a package at a megabyte. In
 wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
 
-## Phase F — scripts and triggers
-
-§11 permits install scripts and says what one is: an
-ordinary `/bin/sh` process with the authority of whoever typed `pkg install`,
-because there is no privilege boundary here to give it less. Build to that
-paragraph — in particular, nothing below is allowed to imply a fence §11 says
-does not exist, and a package that only places files must still run no code at
-all.
-
-### P25. Triggers
-
-A package's `.trigger` script and its path globs. Fired once per package after
-the whole transaction, with the matched directories as argv. A freshly
-installed package runs all of its triggers; an existing one runs a trigger whose
-glob matches a directory the transaction modified.
-
-P24 left it nothing to store: `.trigger` is already unpacked into the store
-directory and recorded, being a dot-entry that is not `.PKGINFO` (§5.1), and
-`script_run` already spawns one by kind. What is missing is the firing rule —
-`g:`'s globs against what the transaction touched — and that `.trigger` takes
-directories as argv rather than §5.1's versions.
-
----
-
 ## Phase G — the other side of the wire, and proof
 
 ### P26. Publisher tools
@@ -167,6 +147,10 @@ git tree, in anything built from it, inside `rootfs.zip`, or anywhere a browser
 can reach. The signer reads a key from a path given on its command line, keeps
 nothing, and writes nothing but the signature. `pkg` itself never signs and
 holds no code to make a key.
+
+Create a section in doc/Package_Format.md where explain for unsophisticated
+reader, in a tutorial style, how to use the publisher tools to build and
+maintain a file server with binary packages.
 
 ### P27. End to end
 

@@ -39,6 +39,7 @@ add_executable(tests
     unit/test_textbuf.cpp
     unit/test_index.cpp
     unit/test_time.cpp
+    unit/test_trigger.cpp
     unit/test_trust.cpp
     unit/test_tty.cpp
     unit/test_vec.cpp
@@ -80,6 +81,7 @@ add_executable(tests
     ../src/cmd/pkg/sha256.cpp
     ../src/cmd/pkg/solve.cpp
     ../src/cmd/pkg/stanza.cpp
+    ../src/cmd/pkg/trigger.cpp
     ../src/cmd/pkg/trust.cpp
     ../src/cmd/pkg/version.cpp
     ../src/cmd/pkg/zip.cpp)

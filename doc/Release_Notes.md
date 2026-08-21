@@ -25,6 +25,61 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## What a transaction touched, and who wanted to know
+
+P25, the last of Phase F. P24 left `.trigger` almost nothing to build — it was
+already unpacked into the store directory and recorded, being a dot-entry that
+is not `.PKGINFO`, and `script_run` already spawned a script by kind. What was
+missing was the firing rule, and neither format document said a word of it: §3.2
+had one row reading "trigger globs, space-separated" and §5.1 one line. So this
+landed a rule as much as it landed code, and the rule is §5.1.1.
+
+apk's `fire_triggers` is ported whole. The interesting part of porting it was
+deciding what a *directory the transaction modified* means in a system that
+deletes nothing.
+
+**`/pkg/bin` is what a removal changes.** apk marks a directory modified when it
+deletes files from it, so removing a font package wakes the font cache. Here a
+removal writes nothing at all — the bytes stay in the store for a rollback, and
+the generation simply stops naming them. The one thing that did change is
+§8.3's link farm, and `/pkg/bin` resolves through `/pkg/active` to new contents.
+Putting it in the modified set is not an extra rule bolted on; it is the same
+rule pointed at the place where this system records that the installed set
+moved. Without it a removal could never wake anything, and "uninstall the
+package, the cache still lists it" would have no expressible fix.
+
+**The `+` prefix was ported rather than dropped into §9**, and it is worth
+writing down what it actually does, because the obvious reading is wrong. A `+`
+glob does not mean "only fire on a change". It means *only hand over changed
+directories* — a `+` glob matching an unmodified directory still wakes the
+trigger, and merely withholds that directory from argv. So a freshly installed
+package whose globs are all `+` runs its trigger with an empty argv rather than
+not running. Two of the unit cases exist for exactly that, because it is the
+kind of thing that gets quietly implemented backwards.
+
+**The matcher had to learn about slashes.** `glob_match` is the shell's
+per-component matcher and its `*` crosses anything, because `glob.cpp` walks the
+components and never asks it to. A trigger glob is matched against a whole path,
+so `/pkg/store/*` would have named every directory under the store rather than
+one package. `trigger_match` splits both sides on `/` and matches component by
+component, which is apk's `FNM_PATHNAME` and is what lets `*` stand for the
+stem and nothing more.
+
+**The rule is a pure file, not a loop inside `settle`.** `trigger.cpp` takes a
+glob list, a fresh flag and a list of directories-with-a-modified-bit, and
+answers whether the trigger fires and what it is handed. Three inputs, no
+syscall, so it compiles into `tests.wasm` and the whole of apk's semantics —
+first-glob-wins, `+`, absolute-only, fresh-versus-modified — is a table of cases
+rather than something only an end-to-end test could reach. `install.cpp` is left
+gathering the two directory sets and spawning.
+
+The second set — every directory of every installed package — is read back from
+the §8.1 records rather than remembered, and only when some package about to be
+installed carries a `g:` at all. A transaction with no triggers in it does no
+extra reads and asks no extra questions, which is the same shape as P24's stat:
+the common case is a package that only places files, and it must keep costing
+nothing.
+
 ## Six scripts, and the moment they run around
 
 P24 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). Package_Format.md §5.1 has

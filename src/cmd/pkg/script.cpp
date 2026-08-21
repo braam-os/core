@@ -2,8 +2,8 @@
 
 #include "db.h"
 #include "kernel/args.h"
-#include "kernel/span.h"
 #include "kernel/string.h"
+#include "kernel/vec.h"
 #include "proc/io.h"
 
 // A child of /bin/pkg sharing its stdio, spawned as `/bin/sh <file>`.
@@ -14,7 +14,7 @@ constexpr Str SHELL = "/bin/sh";
 
 } // namespace
 
-Task<Result<i32>> script_run(Str name, Str version, ZipMeta kind, Str old_version)
+Task<Result<i32>> script_run(Str name, Str version, ZipMeta kind, Span<const Str> args)
 {
     Str leaf = zip_meta_name(kind);
     if (leaf.empty())
@@ -33,11 +33,15 @@ Task<Result<i32>> script_run(Str name, Str version, ZipMeta kind, Str old_versio
     if (st.value().kind != SYS_KIND_FILE)
         co_return 0;
 
-    Str argv[4] = { SHELL, path.str(), version, old_version };
-    usize n     = old_version.empty() ? 3 : 4;
+    Vec<Str> argv;
+    if (!argv.push(SHELL) || !argv.push(path.str()))
+        co_return Err(Error::NoMemory);
+    for (Str a : args)
+        if (!argv.push(a))
+            co_return Err(Error::NoMemory);
 
     Result<u32> pid = Err(Error::NoMemory);
-    if (Task<Result<u32>> t = spawn(Args{ Span<const Str>(argv, n) }))
+    if (Task<Result<u32>> t = spawn(Args{ argv }))
         pid = co_await t;
     if (pid.is_err())
         co_return Err(pid.error());
