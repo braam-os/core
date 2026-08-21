@@ -60,6 +60,10 @@ bool world_read(Str text, Vec<Str> &out);
 // new one appended.
 bool world_push(Vec<Str> &specs, Str spec, bool &changed);
 
+// Every line naming `name`, taken out. Nothing to allocate, so the bool is
+// whether one went rather than whether it worked.
+bool world_drop(Vec<Str> &specs, Str name);
+
 // The lines as dependencies. One that does not parse is dropped.
 bool world_deps(Span<const Str> specs, Vec<Dep> &out);
 

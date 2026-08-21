@@ -27,11 +27,13 @@ changeset means, compiled into `tests.wasm` as well — `trust.cpp` and
 `index.cpp` because they take a `PkgHost` rather than calling a syscall.
 `unzip.cpp` inflates an entry, `store.cpp` performs the steps `db.cpp`
 computes, `host.cpp` is the `PkgHost` `/bin/pkg` uses, and `update.cpp`,
-`query.cpp` and `install.cpp` are the subcommands there are; those six are the
-pieces that stay out, and `solve.cpp` is in with the first list, being pure.
-Phase D is done, and of Phase E `pkg update` writes `/pkg/index`, `pkg search`,
-`pkg info` and `pkg list` read it and the generation beside it, and
-`pkg install` performs the solver's changeset. So this starts at P19.
+`query.cpp` and `install.cpp` are the subcommands there are — the last holding
+the three that change the installed set; those six are the pieces that stay
+out, and `solve.cpp` is in with the first list, being pure. Phase D is done,
+and of Phase E `pkg update` writes `/pkg/index`, `pkg search`, `pkg info` and
+`pkg list` read it and the generation beside it, and `pkg install`,
+`pkg remove` and `pkg autoremove` perform the solver's changeset. So this
+starts at P20.
 
 Four of P26's tools came early with P18, which needed a signed repository to
 install from: `tools/ed25519.py`, `signindex.py`, `mkanchor.py`, `mkpkg.py`,
@@ -116,12 +118,6 @@ wasm it hashes the body as it streams off the fetch descriptor, and nothing
 large crosses the ABI. That is P6.
 
 ## Phase E — the commands
-
-### P19. `pkg remove` / `pkg autoremove`
-
-`/pkg/world` is the explicitly-installed set. `remove` takes a name out of it
-and re-solves; `autoremove` drops what is no longer reachable from it. Both
-commit a new generation the same way P18 does.
 
 ### P20. `pkg upgrade`
 

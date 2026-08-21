@@ -13,10 +13,17 @@ constexpr Str NO_INDEX = "pkg: no index; run pkg update\n";
 // Sorted, and explicit: --gc-sections never extracts an unreferenced archive
 // member. What each command is for is /share/help's, not a string here.
 constexpr PkgCommand TABLE[] = {
-    { "autoremove", nullptr }, { "clean", nullptr },       { "files", nullptr },
-    { "info", pkg_info },      { "install", pkg_install }, { "list", pkg_list },
-    { "remove", nullptr },     { "search", pkg_search },   { "update", pkg_update },
-    { "upgrade", nullptr },    { "verify", nullptr },
+    { "autoremove", pkg_autoremove },
+    { "clean", nullptr },
+    { "files", nullptr },
+    { "info", pkg_info },
+    { "install", pkg_install },
+    { "list", pkg_list },
+    { "remove", pkg_remove },
+    { "search", pkg_search },
+    { "update", pkg_update },
+    { "upgrade", nullptr },
+    { "verify", nullptr },
 };
 
 constexpr Str USAGE  = "usage: pkg <command> [<arg>...]\n";

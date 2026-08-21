@@ -175,6 +175,21 @@ bool world_push(Vec<Str> &specs, Str spec, bool &changed)
     return specs.push(spec);
 }
 
+bool world_drop(Vec<Str> &specs, Str name)
+{
+    // Every line naming it, not the first: a hand-edited world may say a name
+    // twice, and leaving the second would make the package unremovable.
+    bool found = false;
+    for (usize i = specs.size(); i > 0; i--) {
+        Dep d;
+        if (dep_parse(specs[i - 1], d) == DepParse::Malformed || d.name != name)
+            continue;
+        specs.erase(i - 1);
+        found = true;
+    }
+    return found;
+}
+
 bool world_deps(Span<const Str> specs, Vec<Dep> &out)
 {
     for (Str spec : specs) {

@@ -13,18 +13,23 @@
 #include "unzip.h"
 #include "zip.h"
 
-// §7's steps 8 to 10, then activation. The crossing between 9 and 10 is one
-// line in `realise`, and nothing under /pkg is written above it.
+// The three commands that change the installed set. `install` is §7's steps 8
+// to 10, and the crossing between 9 and 10 is one line in `realise`; `remove`
+// and `autoremove` are the same transaction with nothing to fetch.
 
 namespace {
 
-constexpr Str USAGE     = "usage: pkg install <package>...\n";
-constexpr Str NO_MEMORY = "pkg: out of memory\n";
-constexpr Str CANNOT    = "pkg: cannot install:";
-constexpr Str CACHE_EXT = ".zip";
+constexpr Str USAGE          = "usage: pkg install <package>...\n";
+constexpr Str USAGE_REMOVE   = "usage: pkg remove <package>...\n";
+constexpr Str USAGE_AUTO     = "usage: pkg autoremove\n";
+constexpr Str NO_MEMORY      = "pkg: out of memory\n";
+constexpr Str NOTHING        = "nothing installed\n";
+constexpr Str CANNOT_INSTALL = "pkg: cannot install:";
+constexpr Str CANNOT_REMOVE  = "pkg: cannot remove:";
+constexpr Str CACHE_EXT      = ".zip";
 
 // Everything one run holds: a frame past 512 bytes costs a 64 KiB span.
-struct Install {
+struct Txn {
     CheckedIndex index;
 
     String world_text; // /pkg/world as it was
@@ -51,7 +56,7 @@ struct Install {
 
 struct Held {
     ~Held() { heap_delete(p); }
-    Install *p;
+    Txn *p;
 };
 
 Task<Result<void>> put(u32 fd, Str text)
@@ -83,7 +88,7 @@ Task<void> refuse_line(Str stem, Str tail)
 
 // The active generation as stanzas. solve() keys identity on the digest, so
 // these must come off /pkg/db and cannot be built out of name and version.
-Task<i32> read_installed(Install &in)
+Task<i32> read_installed(Txn &in)
 {
     String path, text;
     Result<void> g = Err(Error::NoMemory);
@@ -206,7 +211,7 @@ bool cache_path(Str stem, String &out)
 
 // The archive, from the cache when it hashes to what the index says and off
 // the network otherwise. Either way §7 step 9 has passed when this is Ok.
-Task<Result<void>> acquire(Install &in, const PackageStanza &p, Str stem, IndexStep &step)
+Task<Result<void>> acquire(Txn &in, const PackageStanza &p, Str stem, IndexStep &step)
 {
     String cache;
     if (!cache_path(stem, cache))
@@ -284,7 +289,7 @@ bool check_size(Span<const ZipEntry> entries, const PackageStanza &p)
 
 // The payload into /pkg/store/<stem>/, an entry at a time so that only one
 // inflated file is held, and the record serialised before the archive goes.
-Task<Result<void>> unpack(Install &in, const PackageStanza &p, Str &step)
+Task<Result<void>> unpack(Txn &in, const PackageStanza &p, Str &step)
 {
     step = "archive";
     Vec<ZipEntry> entries;
@@ -403,7 +408,7 @@ Task<Result<void>> unpack(Install &in, const PackageStanza &p, Str &step)
     co_return Result<void>();
 }
 
-Task<i32> realise(Install &in, const PackageStanza &p)
+Task<i32> realise(Txn &in, const PackageStanza &p)
 {
     String stem;
     if (!pkg_stem(p.name, p.version, stem))
@@ -457,7 +462,7 @@ Task<i32> realise(Install &in, const PackageStanza &p)
 
 // A transaction that stops takes its own store directories with it. Nothing
 // refers to them: no db record was written and /pkg/active never moved.
-Task<void> unwind(Install &in)
+Task<void> unwind(Txn &in)
 {
     for (const Installed &p : in.fresh)
         if (Task<Result<void>> t = store_drop(p.name, p.version))
@@ -467,7 +472,7 @@ Task<void> unwind(Install &in)
 // ------------------------------------------------------------- the commit
 
 // The records, then world, then §8.3's generation, ending in the rename.
-Task<Result<void>> commit(Install &in, u32 n)
+Task<Result<void>> commit(Txn &in, u32 n)
 {
     for (usize i = 0; i < in.records.size(); i++) {
         StoreOp op;
@@ -492,57 +497,32 @@ Task<Result<void>> commit(Install &in, u32 n)
     co_return Err(Error::NoMemory);
 }
 
-} // namespace
+// -------------------------------------------------- what all three share
 
-Task<i32> pkg_install(Args args)
+// The tree, the index when a command wants one, the installed set, world.
+// No index leaves `in.index` empty, which is the repo a removal solves
+// against: only what is installed is selectable, so nothing can be fetched.
+Task<i32> begin(Txn &in, bool need_index)
 {
-    if (args.size() < 2) {
-        if (Task<Result<void>> t = put(SYS_STDERR, USAGE))
-            co_await t;
-        co_return 2;
-    }
-    for (usize i = 1; i < args.size(); i++) {
-        Dep d;
-        if (dep_parse(args[i], d) == DepParse::Malformed) {
-            if (Task<Result<void>> t = put(SYS_STDERR, USAGE))
-                co_await t;
-            co_return 2;
-        }
-    }
-
-    Held held{ heap_new<Install>() };
-    if (!held.p) {
-        if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
-            co_await t;
-        co_return 1;
-    }
-    Install &in = *held.p;
-
     i32 bad = 1;
-    if (Task<i32> t = pkg_load_index(in.index))
-        bad = co_await t;
-    if (bad != 0)
-        co_return bad;
+    if (need_index) {
+        if (Task<i32> t = pkg_load_index(in.index))
+            bad = co_await t;
+        if (bad != 0)
+            co_return bad;
 
-    // /pkg/cache and /pkg/store must stand before anything writes into them.
-    Vec<StoreOp> tree;
-    Result<void> made = Err(Error::NoMemory);
-    if (!pkg_tree_ops(tree))
-        co_return 1;
-    if (Task<Result<void>> t = store_perform(tree))
-        made = co_await t;
-    if (made.is_err()) {
-        if (Task<void> e = errln("pkg", PKG_DIR, made.error()))
-            co_await e;
-        co_return 1;
-    }
-
-    // §7 step 7: a name the index does not offer does not exist.
-    for (usize i = 1; i < args.size(); i++) {
-        Dep d;
-        dep_parse(args[i], d);
-        if (!index_provides(in.index, d.name)) {
-            if (Task<void> e = refuse_line(d.name, "not in the index"))
+        // /pkg/cache and /pkg/store must stand before anything writes into
+        // them. Only an install builds the tree: a removal writes nothing a
+        // generation has not already made, so making one would be the whole
+        // of what `pkg remove nonesuch` did.
+        Vec<StoreOp> tree;
+        Result<void> made = Err(Error::NoMemory);
+        if (!pkg_tree_ops(tree))
+            co_return 1;
+        if (Task<Result<void>> t = store_perform(tree))
+            made = co_await t;
+        if (made.is_err()) {
+            if (Task<void> e = errln("pkg", PKG_DIR, made.error()))
                 co_await e;
             co_return 1;
         }
@@ -562,19 +542,12 @@ Task<i32> pkg_install(Args args)
         co_return 1;
     }
     in.world_text = move(world.value());
-    if (!world_read(in.world_text.str(), in.specs))
-        co_return 1;
+    co_return world_read(in.world_text.str(), in.specs) ? 0 : 1;
+}
 
-    // apk's `add`: the operand joins world and names itself, and the run
-    // carries no flag of its own.
-    for (usize i = 1; i < args.size(); i++) {
-        bool changed = false;
-        Dep d;
-        dep_parse(args[i], d);
-        if (!world_push(in.specs, args[i], changed) || !in.named.push(SolveRequest{ d.name, 0, 0 }))
-            co_return 1;
-        in.world_changed = in.world_changed || changed;
-    }
+// The changeset, once the caller has said what it wants of world.
+Task<i32> decide(Txn &in, Str lead)
+{
     if (!world_deps(in.specs, in.world))
         co_return 1;
 
@@ -588,58 +561,75 @@ Task<i32> pkg_install(Args args)
 
     if (!in.cset.errors.empty()) {
         String out;
-        if (!plan_errors(in.cset, CANNOT, out))
+        if (!plan_errors(in.cset, lead, out))
             co_return 1;
         if (Task<Result<void>> t = put(SYS_STDERR, out.str()))
             co_await t;
         co_return 1;
     }
+    co_return 0;
+}
 
-    String changes;
-    if (!plan_changes(in.cset, changes))
+// Nothing to do, but world may still have changed, and that must not be
+// silent.
+Task<i32> settle_world(Txn &in)
+{
+    Result<u32> at = Err(Error::NoMemory);
+    if (Task<Result<u32>> t = store_active())
+        at = co_await t;
+    if (at.is_err()) {
+        if (Task<void> e = errln("pkg", PKG_ACTIVE, at.error()))
+            co_await e;
         co_return 1;
+    }
 
-    // Nothing to install: world may still have gained a name, and making an
-    // implicit package explicit must not be silent.
-    if (changes.empty()) {
-        Result<u32> at = Err(Error::NoMemory);
-        if (Task<Result<u32>> t = store_active())
-            at = co_await t;
-        if (at.is_err()) {
-            if (Task<void> e = errln("pkg", PKG_ACTIVE, at.error()))
+    if (in.world_changed) {
+        String text;
+        if (!world_write(in.specs, text))
+            co_return 1;
+        Result<void> w = Err(Error::NoMemory);
+        if (Task<Result<void>> t = store_write(PKG_WORLD, text.str()))
+            w = co_await t;
+        if (w.is_err()) {
+            if (Task<void> e = errln("pkg", PKG_WORLD, w.error()))
                 co_await e;
             co_return 1;
         }
-        if (in.world_changed) {
-            String text;
-            if (!world_write(in.specs, text))
-                co_return 1;
-            Result<void> w = Err(Error::NoMemory);
-            if (Task<Result<void>> t = store_write(PKG_WORLD, text.str()))
-                w = co_await t;
-            if (w.is_err()) {
-                if (Task<void> e = errln("pkg", PKG_WORLD, w.error()))
-                    co_await e;
-                co_return 1;
-            }
-        }
-        Buf<64> line;
+    }
+
+    Buf<64> line;
+    if (at.value() == 0)
+        line.put(NOTHING);
+    else
         line.put("generation ").put(at.value()).put(", unchanged\n");
-        if (Task<Result<void>> t = put(SYS_STDOUT, line.str()))
-            co_await t;
-        co_return 0;
+    if (Task<Result<void>> t = put(SYS_STDOUT, line.str()))
+        co_await t;
+    co_return 0;
+}
+
+// The plan, the work it names, and the rename that commits it.
+Task<i32> settle(Txn &in)
+{
+    String changes;
+    if (!plan_changes(in.cset, changes))
+        co_return 1;
+    if (changes.empty()) {
+        if (Task<i32> t = settle_world(in))
+            co_return co_await t;
+        co_return 1;
     }
 
     if (Task<Result<void>> t = put(SYS_STDOUT, changes.str()))
         co_await t;
 
+    // A Purging has no new_pkg: a generation holds what plan_installed names
+    // and nothing else, so a removal needs no step of its own.
     for (const SolveChange &c : in.cset.changes) {
         if (!c.new_pkg || plan_verb(c).empty())
             continue;
+        i32 bad = 1;
         if (Task<i32> t = realise(in, *c.new_pkg))
             bad = co_await t;
-        else
-            bad = 1;
         if (bad != 0) {
             if (Task<void> u = unwind(in))
                 co_await u;
@@ -692,4 +682,214 @@ Task<i32> pkg_install(Args args)
     if (Task<Result<void>> t = put(SYS_STDOUT, line.str()))
         co_await t;
     co_return 0;
+}
+
+// Every operand must be a §6 token; the command's own usage says so.
+Task<i32> operands_ok(Args args, Str usage)
+{
+    for (usize i = 1; i < args.size(); i++) {
+        Dep d;
+        if (dep_parse(args[i], d) != DepParse::Malformed)
+            continue;
+        if (Task<Result<void>> t = put(SYS_STDERR, usage))
+            co_await t;
+        co_return 2;
+    }
+    co_return 0;
+}
+
+// Whether what the transaction leaves installed still provides `name`.
+// SOLVE_REMOVE unseats a preference and does not uninstall, so it can. The
+// changeset carries the unchanged packages too, which is what makes this
+// answerable when there is nothing to print.
+bool survives(const Txn &in, Str name)
+{
+    for (const SolveChange &c : in.cset.changes) {
+        if (!c.new_pkg)
+            continue;
+        if (c.new_pkg->name == name)
+            return true;
+        Str rest = c.new_pkg->provides, spec;
+        while (dep_next(rest, spec)) {
+            Dep d;
+            if (dep_parse(spec, d) != DepParse::Malformed && d.name == name)
+                return true;
+        }
+    }
+    return false;
+}
+
+// Whoever still depends on `name`, for the diagnostic.
+Str requirer(const Txn &in, Str name)
+{
+    for (const SolveChange &c : in.cset.changes) {
+        if (!c.new_pkg || c.new_pkg->name == name)
+            continue;
+        Str rest = c.new_pkg->depends, spec;
+        while (dep_next(rest, spec)) {
+            Dep d;
+            if (dep_parse(spec, d) != DepParse::Malformed && d.name == name)
+                return c.new_pkg->name;
+        }
+    }
+    return Str();
+}
+
+} // namespace
+
+Task<i32> pkg_install(Args args)
+{
+    if (args.size() < 2) {
+        if (Task<Result<void>> t = put(SYS_STDERR, USAGE))
+            co_await t;
+        co_return 2;
+    }
+    i32 bad = 1;
+    if (Task<i32> t = operands_ok(args, USAGE))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+
+    Held held{ heap_new<Txn>() };
+    if (!held.p) {
+        if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
+            co_await t;
+        co_return 1;
+    }
+    Txn &in = *held.p;
+
+    if (Task<i32> t = begin(in, true))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+
+    // §7 step 7: a name the index does not offer does not exist.
+    for (usize i = 1; i < args.size(); i++) {
+        Dep d;
+        dep_parse(args[i], d);
+        if (!index_provides(in.index, d.name)) {
+            if (Task<void> e = refuse_line(d.name, "not in the index"))
+                co_await e;
+            co_return 1;
+        }
+    }
+
+    // apk's `add`: the operand joins world and names itself, and the run
+    // carries no flag of its own.
+    for (usize i = 1; i < args.size(); i++) {
+        bool changed = false;
+        Dep d;
+        dep_parse(args[i], d);
+        if (!world_push(in.specs, args[i], changed) || !in.named.push(SolveRequest{ d.name, 0, 0 }))
+            co_return 1;
+        in.world_changed = in.world_changed || changed;
+    }
+
+    if (Task<i32> t = decide(in, CANNOT_INSTALL))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+    if (Task<i32> t = settle(in))
+        co_return co_await t;
+    co_return 1;
+}
+
+Task<i32> pkg_remove(Args args)
+{
+    if (args.size() < 2) {
+        if (Task<Result<void>> t = put(SYS_STDERR, USAGE_REMOVE))
+            co_await t;
+        co_return 2;
+    }
+    i32 bad = 1;
+    if (Task<i32> t = operands_ok(args, USAGE_REMOVE))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+
+    Held held{ heap_new<Txn>() };
+    if (!held.p) {
+        if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
+            co_await t;
+        co_return 1;
+    }
+    Txn &in = *held.p;
+
+    if (Task<i32> t = begin(in, false))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+
+    // apk's `del`: out of world, and unseated where it still stands.
+    for (usize i = 1; i < args.size(); i++) {
+        Dep d;
+        dep_parse(args[i], d);
+        if (world_drop(in.specs, d.name))
+            in.world_changed = true;
+        if (!in.named.push(SolveRequest{ d.name, SOLVE_REMOVE, 0 }))
+            co_return 1;
+    }
+
+    if (Task<i32> t = decide(in, CANNOT_REMOVE))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+
+    // Before the commit, apk's order. World is rewritten either way, so a name
+    // that stayed has stopped being explicit and has to say so.
+    i32 kept = 0;
+    for (usize i = 1; i < args.size(); i++) {
+        Dep d;
+        dep_parse(args[i], d);
+        if (!survives(in, d.name))
+            continue;
+        kept = 1;
+
+        Str who = requirer(in, d.name);
+        String tail;
+        if (!tail.assign("still needed"))
+            co_return 1;
+        if (!who.empty() && (!tail.append(" by ") || !tail.append(who)))
+            co_return 1;
+        if (in.world_changed && !tail.append("; world updated"))
+            co_return 1;
+        if (Task<void> e = refuse_line(d.name, tail.str()))
+            co_await e;
+    }
+
+    bad = 1;
+    if (Task<i32> t = settle(in))
+        bad = co_await t;
+    co_return bad != 0 ? bad : kept;
+}
+
+Task<i32> pkg_autoremove(Args args)
+{
+    if (args.size() != 1) {
+        if (Task<Result<void>> t = put(SYS_STDERR, USAGE_AUTO))
+            co_await t;
+        co_return 2;
+    }
+
+    Held held{ heap_new<Txn>() };
+    if (!held.p) {
+        if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
+            co_await t;
+        co_return 1;
+    }
+    Txn &in = *held.p;
+
+    // World untouched: what it no longer reaches is what the solver drops.
+    i32 bad = 1;
+    if (Task<i32> t = begin(in, false))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+    if (Task<i32> t = decide(in, CANNOT_REMOVE))
+        bad = co_await t;
+    if (bad != 0)
+        co_return bad;
+    if (Task<i32> t = settle(in))
+        co_return co_await t;
+    co_return 1;
 }

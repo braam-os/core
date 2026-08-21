@@ -199,6 +199,30 @@ void test_db()
         CHECK(out.str() == "awk\nless\nhello\n");
     }
 
+    // Out again, by name: the line goes whatever constraint it carried, and
+    // what was never there is not a change.
+    {
+        Vec<Str> specs;
+        CHECK(world_read("awk\nless>=1.6\nhello\n", specs));
+        CHECK(world_drop(specs, "less"));
+        CHECK_EQ(specs.size(), 2);
+        CHECK(specs[0] == "awk" && specs[1] == "hello");
+        CHECK(!world_drop(specs, "less"));
+        CHECK(!world_drop(specs, "nonesuch"));
+        CHECK_EQ(specs.size(), 2);
+
+        String out;
+        CHECK(world_write(specs, out));
+        CHECK(out.str() == "awk\nhello\n");
+
+        // Down to nothing, which is a world with no lines and not a failure.
+        CHECK(world_drop(specs, "awk") && world_drop(specs, "hello"));
+        CHECK(specs.empty());
+        String none;
+        CHECK(world_write(specs, none));
+        CHECK(none.empty());
+    }
+
     // The lines as dependencies, and one that is not a token at all is not.
     {
         Vec<Str> specs;

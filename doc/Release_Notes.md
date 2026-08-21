@@ -25,6 +25,99 @@ difference in kind can be asserted, and 0.2 → 0.3 is that assertion: a script
 written against 0.2's shell was a list of commands, and one written against
 0.3's may be a program.
 
+## The purge was already written
+
+P19 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `pkg remove` takes a name
+out of `/pkg/world` and re-solves; `pkg autoremove` re-solves without taking
+anything out. Both commit a generation the way P18 does, and between them they
+are about eighty lines, because the work is somewhere else.
+
+**The solver already drops what world does not reach, so neither command walks
+the graph.** `generate_changeset`'s three sweeps
+([solve.cpp:1116-1144](../src/cmd/pkg/solve.cpp#L1116)) emit a removal for
+every installed package whose name has no requirer and no chosen provider, and
+`cset_track_deps_removed` recurses into each dependency as its last requirer
+goes. Fixture `basic14` — `del a` with world `a` — expects `Purging a` *and*
+`Purging b`, and `basic4`, the same shape with `b` in world, expects only
+`Purging a`. So reachability from world is the whole of what "explicitly
+installed" means here, and `autoremove` is the re-solve with nothing else
+attached. Writing a reachability pass would have been writing the solver twice.
+
+Nor is there an uninstall step. `plan_installed` builds a generation from the
+changes that carry a `new_pkg`, so **a removal is expressed as absence** — the
+new `packages` and the new `bin/` simply do not name it. `realise` skips a
+change with no `new_pkg`, which is exactly what a `Purging` is, so P18's commit
+path took a removal without a line of change.
+
+**A removal solves against the installed set alone, and that is a property
+rather than an economy.** `SolveInput::repo` is left empty, which
+[solve.cpp:427](../src/cmd/pkg/solve.cpp#L427) makes harmless — `p.selectable
+= p.available || … || p.ipkg`, so what is installed stays selectable with no
+repository at all. What it buys: no change can name a package that is not
+already unpacked, so **a removal can never fetch**, never consults
+`/pkg/index`, and works with no network and no `pkg update` behind it. apk's
+`del` re-solves against the repositories and may swap in a different provider,
+which would have needed a fetch, a digest check and an unpack on a code path
+whose whole point is that it destroys nothing.
+
+The cost is one refusal that reads oddly: a world entry nothing installed
+satisfies stops a removal with `ghost (no such package)`, which under a full
+index means "the index does not list it" and here means "nothing installed
+provides it". That is reachable by hand-editing world, so it has a test rather
+than a fix; `pkg install` is what repairs a world the store cannot satisfy.
+
+**`SOLVE_REMOVE` unseats a preference; it does not uninstall.** It suppresses
+the installed-package rung of `compare_providers`
+([solve.cpp:769](../src/cmd/pkg/solve.cpp#L769)) so that a name something else
+still needs is not re-picked out of habit — but if that name is still required,
+its provider is still chosen. So `pkg remove libz` while `hello` needs it
+changes nothing, and printing `generation 3, unchanged` alone would have looked
+like success. It prints `pkg: libz: still needed by hello` first, before the
+commit, which is apk's order.
+
+That report can be computed at all because the changeset carries the
+*unchanged* packages too — `cset_gen_name_change` records `(old, new)` even
+when they are the same package, and `plan_verb` then returns an empty verb. So
+the changes with a non-null `new_pkg` are the complete surviving set even when
+nothing is printed, which is what makes both `plan_installed` and `survives`
+correct.
+
+**Exit 1, where `apk del` exits 0.** apk prints its not-removed report and
+commits regardless, and the status says only whether the commit worked. Here a
+named operand that could not be honoured is 1, which is what `pkg info
+nonesuch` and `pkg install nonesuch` already answer. The pair does read oddly —
+`pkg remove nosuch`, a name that was never installed, is a quiet 0, while
+`pkg remove libz`, a name that is, is 1 — and that is the right way round: the
+first did what was asked, the second did not. **World is rewritten either way**,
+so the message says `; world updated` when it was: a name that stayed has
+stopped being explicit, and would go at the next `autoremove` without it.
+
+**A removal drops no bytes.** `/pkg/store/<stem>` and `/pkg/db/<stem>` stay
+where they are, because the previous generation still names them and that is
+what rolling back means. `pkg clean` collects them (P22), and P18's rule —
+never `store_drop` on a removal — is what makes the rollback in the test
+meaningful.
+
+**Only an install builds `/pkg`.** `pkg_tree_ops` moved behind the same flag
+that loads the index, because a removal writes nothing a generation has not
+already created — and without the flag, `pkg remove nonesuch` on a machine that
+had never installed anything would have created `/pkg`, four directories and a
+dangling `/pkg/bin` in the course of doing nothing. On that tree the summary
+also had to change: `store_active()` answers 0, and there is no generation 0,
+so it says `nothing installed`.
+
+**`world_drop` erases every line naming a package, not the first.** World is a
+file people edit, and a name written twice would otherwise leave a line behind
+that makes the package permanently unremovable — reported forever as still
+needed, by nobody.
+
+**`pkg install`'s head and tail became `begin`, `decide` and `settle`**, and
+the record it carries is a `Txn` now rather than an `Install`, since three
+commands share it. P20 is the fourth and should be a dozen lines. `/bin/pkg`
+is 180,174 bytes, from 171,351 — two commands for nine kilobytes, most of it
+their text — and the staging tree 982,264 of the 2 MiB the last entry raised
+it to.
+
 ## One rename, and everything above it is a check
 
 P18 of [src/cmd/pkg/TODO.md](../src/cmd/pkg/TODO.md). `pkg install` is

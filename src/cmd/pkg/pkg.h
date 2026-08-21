@@ -19,6 +19,8 @@ Task<i32> pkg_run(Args args);
 // The subcommands, one file each. argv[0] is the subcommand's own name.
 Task<i32> pkg_update(Args args);
 Task<i32> pkg_install(Args args);
+Task<i32> pkg_remove(Args args);
+Task<i32> pkg_autoremove(Args args);
 
 // The three that only read, in query.cpp.
 Task<i32> pkg_search(Args args);
