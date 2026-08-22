@@ -59,6 +59,17 @@ function(braam_add_package)
 
     set(zip ${CMAKE_CURRENT_BINARY_DIR}/${P_NAME}-${P_VERSION}.zip)
 
+    # A version bump leaves the old zip in the build tree, where whatever
+    # collects packages would find it and publish a version the tree can no
+    # longer build. Configure time is the moment to drop it: a bump edits this
+    # call, which reconfigures.
+    file(GLOB stale ${CMAKE_CURRENT_BINARY_DIR}/${P_NAME}-*.zip)
+    foreach(f IN LISTS stale)
+        if(NOT f STREQUAL zip)
+            file(REMOVE ${f})
+        endif()
+    endforeach()
+
     # A value with a space in it has to be quoted at the call, or CMake splits
     # it into arguments of its own and mkpkg.py drops the remainder as a letter
     # it does not know. Refuse what does not look like <L>=<value> rather than
