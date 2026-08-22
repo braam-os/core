@@ -10,7 +10,7 @@ export function check() {
     // the hook against a canned callback; what it cannot reach is a real
     // command writing down a real pipe.
     submit("mkdir /home/c", t.at(0.01));
-    // Three copies of an 8,628-byte file: more than the eight writes a pipe
+    // Three copies of a 7,413-byte file: more than the eight writes a pipe
     // holds, so the drain has to be running before the wait or this hangs.
     submit("cat /etc/help /etc/help /etc/help > /home/c/big", t.at(0.01));
 
@@ -32,11 +32,11 @@ export function check() {
     t.is("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     t.is("for f in $(echo p q); do echo $f; done", "p|q");
     t.is("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 28,080 bytes is fifty chunks against eight
+    // The many-writes case: 22,239 bytes is forty chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
     // The counts are three copies of /etc/help, so a line added there moves
     // them.
-    t.is("x=$(cat /home/c/big); echo \"$x\" | wc", "516 4500 28080");
+    t.is("x=$(cat /home/c/big); echo \"$x\" | wc", "450 3453 22239");
     submit("rm -r /home/c", t.at(0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

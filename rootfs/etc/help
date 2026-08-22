@@ -1,165 +1,143 @@
 braam — the commands
 ====================
 
-A command word is a shell function first, then one of the builtins below, then
-a file that PATH names — /bin:/pkg/bin at boot. Only the last of the three
-costs a process: a program is a wasm binary in a worker of its own, with its
-own address space, its own memory cap and a kill switch behind ^C.
+The shell looks for a command word in three places: shell functions, then the
+builtins below, then files on PATH — /bin:/pkg/bin at boot. Only a file costs a
+process: a wasm binary in a worker of its own, with its own memory limit, which
+^C kills.
 
-A builtin lives inside /bin/sh, either because it touches the shell's own
-state — its working directory, its variables, its jobs — or because its whole
-cost would have been the spawn. echo, test, true and false are of the second
-kind, so each is a builtin *and* a file in /bin: the builtin is what a prompt
-runs, the file is what anything spawning the name by itself gets. [ and : are
-of that kind too and have no file, being punctuation nothing spawns.
+Builtins live inside /bin/sh. echo, test, true and false are files in /bin as
+well, so anything can spawn them; [ and : are builtins only.
 
-This list is what the boot archive ships, and is a file: /etc/help. A
-program installed somewhere else on PATH runs perfectly well and is not named
-here. Each program also answers for itself — a usage error prints how the
-command is spelled and exits 2.
+This list is the file /etc/help, and covers what the system ships with. Every
+program also prints how it is spelled and exits 2 when you get it wrong.
 
 Shell builtins
 --------------
 
   .         <file> — run a file's commands in this shell
-  :         [<arg>...] — do nothing, successfully
-  [         <expr> ] — evaluate a condition, as `test` does
-  break     [<n>] — leave a loop, or n of them
-  cd        [<dir>] — change the working directory, /home by default
-  command   -v <name>... — say what a command word would run
-  continue  [<n>] — start a loop's next turn
-  echo      [-n] [<word>...] — write the arguments
+  :         [<arg>...] — do nothing, and succeed
+  [         <expr> ] — test a condition, the same as `test`
+  break     [<n>] — leave the loop, or n of them
+  cd        [<dir>] — change directory, to /home by default
+  command   -v <name>... — show what a name would run
+  continue  [<n>] — go on to the loop's next turn
+  echo      [-n] [<word>...] — print the arguments
   eval      [<arg>...] — join the arguments and run them as a command
-  exec      [<command>] — keep its redirections, or run it and leave
+  exec      [<command>] — run a command in place of the shell, or just keep its
+            redirections
   exit      [<status>] — end the shell
-  export    [<name>[=<value>]...] — put a variable in each child's environment
-  false     fail
-  fg        [%n] — wait for a background job in the foreground
+  export    [<name>[=<value>]...] — pass a variable to child processes
+  false     do nothing, and fail
+  fg        [%n] — bring a background job to the front and wait for it
   jobs      list the jobs started with &
-  kill      %n — cancel a job
-  read      <name>... — one line of input, split across the names
-  readonly  [<name>[=<value>]...] — refuse further assignment to a variable
+  kill      %n — stop a job
+  read      <name>... — read one line and split it across the names
+  readonly  [<name>[=<value>]...] — stop a variable being changed
   return    [<status>] — leave a function or a sourced file
-  set       [-eux] [--] [<arg>...] — the options, the parameters, or a listing
+  set       [-eux] [--] [<arg>...] — set options or parameters, or list
+            variables
   shift     [<n>] — drop the first n positional parameters
-  test      <expr> — evaluate a condition and report it as a status
-  trap      [<action>|-] 0|2 — run an action when the shell ends, or on ^C
-  true      succeed
+  test      <expr> — test a condition; the result is the exit status
+  trap      [<action>|-] 0|2 — run an action when the shell ends (0) or on ^C
+            (2)
+  true      do nothing, and succeed
   unset     [-f] <name>... — remove a variable, or a function with -f
-  wait      [%n...] — wait for a background job, or for all of them
+  wait      [%n...] — wait for one background job, or for all of them
 
 Programs in /bin
 ----------------
 
-  cat       [<file>...] — copy files, or the input, to the output
-  chat      <url> [<nick>] — talk over a WebSocket to whoever else is there
-  clear     blank the screen
+  cat       [<file>...] — print files, or the input
+  chat      <url> [<nick>] — chat with whoever else is on a WebSocket
+  clear     clear the screen
   curl      [-i] [-X <method>] [-H <header>] [-d <data>] <url> — fetch a URL
   date      [-u] — print the date and time
-  df        [-h] — report filesystem space, and with -h in scaled units
-  echo      [-n] [<word>...] — write the arguments
-  edit      <file> — a full-screen editor; ^S saves, ^Q quits
+  df        [-h] — show filesystem space, scaled with -h
+  echo      [-n] [<word>...] — print the arguments
+  edit      <file> — full-screen editor; ^S saves, ^Q quits
   env       [-i] [<name>=<value>...] [<command> [<arg>...]]
             — print the environment, or run a command with it changed
-  false     fail
-  fexport   <file> [<name>] — download a file out of the browser
-  fimport   [<dir>] — copy files from the browser into /import
-  grep      [-i] [-v] <text> [<file>...] — pass matching lines
+  false     do nothing, and fail
+  fexport   <file> [<name>] — download a file to your computer
+  fimport   [<dir>] — copy files from your computer into /import
+  grep      [-i] [-v] <text> [<file>...] — print the lines that match
   head      [-n <count>] [<file>...] — the first lines, ten by default
-  help      page this list, which is /etc/help
-  hog       take memory until the cap refuses more
-  less      [<file>] — page a file on a terminal, copy it off one; q quits
+  help      show this list, which is /etc/help
+  hog       take memory until the limit stops it
+  less      [<file>] — read a file a screen at a time; q quits
   ln        -s [-f] <target> <name> — make a symbolic link
-  ls        [-1CRSdhlrt] [<path>...] — list directories, in columns on a
-            terminal
-  mkdir     [-p] <dir>... — create directories, with missing parents under -p
+  ls        [-1CRSdhlrt] [<path>...] — list files, in columns on a terminal
+  mkdir     [-p] <dir>... — make directories, with missing parents under -p
   mount     list the mounted filesystems
   mv        [-fi] <src>... <dst> — move or rename files
-  pbcopy    [<file>...] — put the input on the clipboard
-  pbpaste   write the clipboard to the output
+  pbcopy    [<file>...] — copy the input to the clipboard
+  pbpaste   print the clipboard
   pkg       [-v] <command> [<arg>...] — install and remove packages
   ps        list the tasks the kernel is running, and which are processes
-  pwd       print the working directory
+  pwd       print the current directory
   rm        [-r] <path>... — remove files, or directories with -r
   sh        [-eux] [-s | -c <command> | <file>] [<arg>...] — the shell
   sleep     [-m] <secs> — wait, in seconds, or milliseconds with -m
-  spin      [<millions>] — loop without yielding, to be killed
+  spin      [<millions>] — loop without stopping, so you can kill it
   tail      [-n <count>] [<file>...] — the last lines, ten by default
-  test      <expr> — evaluate a condition and report it as a status
+  test      <expr> — test a condition; the result is the exit status
   timeout   [-m] <secs> <command> [<arg>...]
-            — run a command, killing it after a delay (124)
-  touch     <file>... — create empty files, or move an existing one's mtime
-  true      succeed
+            — run a command, and kill it after a delay (124)
+  touch     <file>... — make empty files, or update an existing one's mtime
+  true      do nothing, and succeed
   uname     [-a|-s|-r|-m] — name the system, and with -a the host it runs on
   unzip     [-l] [-p] [-d <dir>] <archive> [<name>...]
-            — extract a zip, list it with -l, or write one entry out with -p
+            — extract a zip, list it with -l, or print one entry with -p
   vmstat    [-s] [-m] [<secs> [<count>]] — what the kernel is doing, as rates
-  watch     [-m] [-n <secs>] <command> [<arg>...] — run a command repeatedly
+  watch     [-m] [-n <secs>] <command> [<arg>...] — run a command again and
+            again
   wc        [<file>...] — count lines, words and bytes
 
 Packages
 --------
 
-  `pkg` installs into /pkg, which the boot archive does not carry — so what it
-  installed outlives a release that replaces /bin and /etc. /pkg/bin is on
-  PATH after /bin, so nothing installed can shadow a system command. The URL
-  it reads from, /etc/repositories, is carried and so is put back by a
-  release, as the keys below it are.
+  `pkg` installs into /pkg. A system update does not touch /pkg, so packages
+  survive one. /pkg/bin comes after /bin on PATH, so a package cannot replace a
+  system command. /etc/repositories holds the repository URL.
 
-  Nothing off the repository is installed unchecked. Its index is signed, the
-  keys it is checked against are in /etc/anchor and come out of the boot
-  archive, and every package is compared against the size and the digest that
-  index gave before a byte of it is unpacked. A check that fails names the
-  step it failed at, and nothing is half-installed.
+  Packages from a repository are always checked. The index is signed with the
+  keys in /etc/anchor, and each package must match the size and digest the
+  index gives before anything is unpacked. If a check fails, pkg says which one
+  and installs nothing.
 
-  An archive named outright — a path ending .zip, or a URL — is installed on
-  the strength of whoever typed it instead, and `pkg` says so before it acts.
-  It must still be a package: a .PKGINFO that reads, whose name and version
-  are plain filenames. Nothing vouched for it, so its record keeps `G: 0` and
-  `pkg verify` reports it `unvouched`. An archive the index does turn out to
-  list is the repository's package and is checked as one. The commands, each
-  of them spelled `pkg <name>`:
+  You can also install an archive directly — a path ending .zip, or a URL.
+  Nothing vouches for it, so pkg warns you, records it as `G: 0`, and `pkg
+  verify` calls it `unvouched`. The commands are spelled `pkg <name>`:
 
-  update    fetch the repository index, and check it before storing it
-  search    <pattern> — search the index by name and description
+  update    download the repository index, and check it
+  search    <pattern> — find packages by name or description
   info      <package> — what the index says about one package
-  install   <package>... — install packages, and what they depend on. An
-            operand ending .zip is an archive in the filesystem and one
-            holding :// is fetched; either is installed unverified
+  install   <package>... — install packages and what they need. A .zip path or
+            a URL is installed without checking
   remove    <package>... — remove packages
   autoremove
-            remove dependencies nothing explicit needs any more
+            remove packages installed only as dependencies
   upgrade   upgrade everything installed
   list      list installed packages
-  files     <package> — the files an installed package placed
-  verify    [<package>] — re-read those files, and compare each against the
-            digest recorded when it was installed, and report a package whose
-            install script failed
-  clean     drop the downloaded archives, and what no generation still needs.
-            The generation before the live one is kept
-  help      print that list, in short, as `pkg` with no command prints it.
-            `pkg -h` and `pkg --help` are the same command
+  files     <package> — the files a package installed
+  verify    [<package>] — check installed files against the digests saved at
+            install time
+  clean     delete downloaded archives and old generations; the one before the
+            current is kept
+  help      print a short version of this list
 
-  `-v` traces what pkg asked the network for and what came back — `> GET
-  <url>`, the status, the response headers and the body's size — and is taken
-  wherever it is typed: `pkg -v update` and `pkg update -v` are one thing. A
-  page sees only the headers the server let it see, and the request headers
-  the browser adds are not shown to the page at all, so both lists are shorter
-  than curl's would be. Two failures look alike to a browser and do not to
-  pkg: a server that would not let this page read the answer says so, and one
-  that answered nothing at all is `no answer`.
+  `-v` shows the network traffic — the request, the status, the headers and the
+  body's size. It works anywhere on the line.
 
-  An install builds the whole new generation under /pkg/gen and then renames
-  one symbolic link, /pkg/active, over the old one. That rename is the moment
-  it happens: before it nothing has changed, and after it everything has. The
-  generation `clean` keeps is the one before, and going back to it is putting
-  the link back yourself — `ln -sf /pkg/gen/<n> /pkg/active`. There is no
+  An install builds a new generation under /pkg/gen, then moves the symbolic
+  link /pkg/active onto it. That is the moment it takes effect. To go back, move
+  the link yourself: `ln -sf /pkg/gen/<n> /pkg/active`. There is no
   `pkg rollback`.
 
-  `pkg verify` says a file changed since its install. It is not a guarantee
-  that none did. Checking happens once, at install; nothing re-reads the store
-  afterwards, there are no file permissions here, and anything may overwrite
-  anything — /bin/pkg included.
+  `pkg verify` tells you a file has changed since it was installed. It cannot
+  promise that none did: files are checked once, at install, and anything here
+  can overwrite anything.
 
 More
 ----
@@ -167,6 +145,6 @@ More
   /README           what this system is, in a page
   /etc/motd         what boot prints
   /etc/anchor       the keys a repository's index is checked against
-  /proc             the system describing itself as text — try cat /proc/host
+  /proc             the system as text — try cat /proc/host
 
   help | grep ls    off a terminal `less` copies, so this list pipes
