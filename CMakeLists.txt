@@ -196,8 +196,13 @@ install(FILES ${BRAAM_CONFIG}
               cmake/wasm32-unknown-unknown.cmake
         DESTINATION ${BRAAM_INSTALL_CMAKEDIR})
 
-# mkpkg.py takes MODE and stamp from pack.py, so the two travel together.
+# The build tools and the publisher's, in one directory so that the plain
+# imports between them resolve: mkpkg takes MODE and stamp from pack, mkindex
+# and mkanchor take ed25519 and signindex, signindex takes ed25519. The signing
+# ones want `pip3 install cryptography`; nothing else here does.
 install(PROGRAMS tools/stamp.py tools/mkpkg.py tools/pack.py
+                 tools/ed25519.py tools/signindex.py
+                 tools/mkindex.py tools/mkanchor.py
         DESTINATION ${BRAAM_INSTALL_LIBEXECDIR})
 install(DIRECTORY examples/hello DESTINATION ${BRAAM_INSTALL_EXAMPLESDIR})
 install(FILES doc/Programming_Manual.md LICENSE DESTINATION ${BRAAM_INSTALL_DOCDIR})

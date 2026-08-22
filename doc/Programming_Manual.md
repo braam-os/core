@@ -40,6 +40,7 @@ Either way, this is what you get:
 | `lib/cmake/braam/BraamProgram.cmake` | `braam_add_program()` |
 | `libexec/braam/stamp.py` | the post-link stamp |
 | `libexec/braam/mkpkg.py` | the package builder (§3.1), with `pack.py` beside it |
+| `libexec/braam/mkindex.py` | the publisher's tools (§3.1): `mkanchor.py`, `signindex.py` and `ed25519.py` beside it |
 | `share/braam/examples/hello/` | the example below |
 | `share/doc/braam/Programming_Manual.md` | this file |
 
@@ -178,8 +179,23 @@ Versions are apk's grammar (§7): `1.0-r0`, and `1.0-r1` supersedes it.
 
 The zip on its own is not installable. `pkg` checks every package against a
 signed index, so publishing means a repository — keys, an anchor and an index,
-which is Package_Formats.md §10 end to end. `tools/mkrepo.py` does all of it in
-forty lines.
+which is Package_Formats.md §10 end to end. The tools that do it ship here too,
+in `libexec/braam/`: `ed25519.py` for keys, `mkanchor.py` for the anchor,
+`mkindex.py` for the index, `signindex.py` for a `Y:` line over a body. They are
+the only thing in the SDK that wants a Python package —
+`pip3 install cryptography` — and only the ones that sign.
+
+```
+mkindex.py --out index --url https://packages.example/braam \
+    --version 41 --expiry 1790000000000 \
+    --description 'Example packages' --sign index.key \
+    hello-1.0-r0.zip
+```
+
+`--url` must equal the line in the client's `/etc/repositories`, byte for byte,
+and `--version` must rise at every publication or a client refuses the index as
+a rollback. `C`, `S` and the `cmd:` provides are read out of the zips, so the
+index is never hand-written.
 
 ---
 
