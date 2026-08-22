@@ -37,3 +37,60 @@ function(braam_add_program)
                 --max-pages ${BRAAM_BIN_MAX_PAGES}
         VERBATIM)
 endfunction()
+
+# A package zip, Package_Formats.md §5. BRAAM_MKPKG names tools/mkpkg.py.
+#
+#   braam_add_package(NAME hello VERSION 1.0-r0
+#                     [FIELD T=a greeting] [FIELD D=libz]...
+#                     FILES $<TARGET_FILE:bin_hello>=bin/hi ...)
+#
+# FILES takes §10's `<src>=<entry>` pairs. `bin/` is what reaches PATH: every
+# flat entry becomes a link in the installed generation's bin/ (§8.3) and a
+# `cmd:<entry>` provide (§6.1), so the entry's leaf is the command's name.
+#
+# Defines target pkg_<name> producing <name>-<version>.zip, and it is not in
+# ALL: packing is not part of an ordinary build.
+function(braam_add_package)
+    cmake_parse_arguments(P "" "NAME;VERSION" "FIELD;FILES" ${ARGN})
+    if("${P_NAME}" STREQUAL "" OR "${P_VERSION}" STREQUAL "" OR
+       "${P_FILES}" STREQUAL "")
+        message(FATAL_ERROR "braam_add_package: NAME, VERSION and FILES are required")
+    endif()
+
+    set(zip ${CMAKE_CURRENT_BINARY_DIR}/${P_NAME}-${P_VERSION}.zip)
+
+    # A value with a space in it has to be quoted at the call, or CMake splits
+    # it into arguments of its own and mkpkg.py drops the remainder as a letter
+    # it does not know. Refuse what does not look like <L>=<value> rather than
+    # packing a truncated description.
+    set(fields "")
+    foreach(f IN LISTS P_FIELD)
+        if(NOT f MATCHES "^[A-Za-z]=")
+            message(FATAL_ERROR
+                "braam_add_package: FIELD ${f} is not <letter>=<value>"
+                " (quote a value that has a space in it)")
+        endif()
+        list(APPEND fields --field ${f})
+    endforeach()
+
+    # The sources of the <src>=<entry> pairs, so that rebuilding a payload file
+    # repacks. A generator expression is a dependency CMake already tracks.
+    set(sources "")
+    foreach(pair IN LISTS P_FILES)
+        string(FIND "${pair}" "=" at)
+        if(at EQUAL -1)
+            message(FATAL_ERROR "braam_add_package: ${pair} is not <src>=<entry>")
+        endif()
+        string(SUBSTRING "${pair}" 0 ${at} src)
+        list(APPEND sources ${src})
+    endforeach()
+
+    add_custom_command(OUTPUT ${zip}
+        COMMAND ${Python3_EXECUTABLE} ${BRAAM_MKPKG}
+                --out ${zip} --name ${P_NAME} --version ${P_VERSION}
+                ${fields} ${P_FILES}
+        DEPENDS ${sources}
+        COMMENT "Packing ${P_NAME}-${P_VERSION}.zip"
+        VERBATIM)
+    add_custom_target(pkg_${P_NAME} DEPENDS ${zip})
+endfunction()

@@ -39,6 +39,7 @@ Either way, this is what you get:
 | `lib/cmake/braam/braamConfig.cmake` | `find_package(braam)` |
 | `lib/cmake/braam/BraamProgram.cmake` | `braam_add_program()` |
 | `libexec/braam/stamp.py` | the post-link stamp |
+| `libexec/braam/mkpkg.py` | the package builder (§3.1), with `pack.py` beside it |
 | `share/braam/examples/hello/` | the example below |
 | `share/doc/braam/Programming_Manual.md` | this file |
 
@@ -144,6 +145,41 @@ a `PATH` that names it: `PATH=/home:$PATH` and the bare name runs.
 One thing to know while iterating: the host caches a compiled module by path, so
 replacing a program at a path that has already been run in this page does not
 take effect until a reload. Write the new one beside the old, or reload.
+
+### 3.1 Shipping it as a package
+
+A program that is to be installed rather than carried about is a zip
+([Package_Formats.md](Package_Formats.md) §5), and `braam_add_package` builds
+one:
+
+```cmake
+braam_add_program(NAME hello SOURCES hello.cpp)
+
+braam_add_package(NAME hello VERSION 1.0-r0
+                  FIELD "T=a greeting"
+                  FILES $<TARGET_FILE:bin_hello>=bin/hi)
+```
+
+`FILES` takes §10's `<src>=<entry>` pairs — a local file, and where it sits
+inside the package. The target is `pkg_<name>` and the file is
+`<name>-<version>.zip`; it is **not in `ALL`**, so `cmake --build build --target
+pkg_hello` is what packs it. `FIELD <L>=<value>` sets any §3.2 letter, `T` and
+`D` being the two worth setting; `.PKGINFO` is written for you and only `P` and
+`V` are required, which `NAME` and `VERSION` are. **Quote a field whose value
+has a space in it**, or CMake splits it into arguments of its own.
+
+**`bin/` is what reaches `PATH`.** Every flat entry of it becomes a link in the
+installed generation's `bin/` (§8.3) and a `cmd:<entry>` provide (§6.1), and the
+default `PATH` is `/bin:/pkg/bin`. The entry's leaf is the command's name, so
+`bin/hi` is typed `hi` — name the entry as the command, without `.wasm`, and
+keep it flat: `bin/sub/tool` yields no command at all.
+
+Versions are apk's grammar (§7): `1.0-r0`, and `1.0-r1` supersedes it.
+
+The zip on its own is not installable. `pkg` checks every package against a
+signed index, so publishing means a repository — keys, an anchor and an index,
+which is Package_Formats.md §10 end to end. `tools/mkrepo.py` does all of it in
+forty lines.
 
 ---
 

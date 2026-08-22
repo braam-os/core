@@ -87,6 +87,7 @@ add_library(braam::proc  ALIAS braam_proc)
 add_library(braam::ui    ALIAS braam_ui)
 add_library(braam::flags ALIAS braam_flags)
 set(BRAAM_STAMP ${CMAKE_SOURCE_DIR}/tools/stamp.py)
+set(BRAAM_MKPKG ${CMAKE_SOURCE_DIR}/tools/mkpkg.py)
 set(BRAAM_SYSABI ${CMAKE_SOURCE_DIR}/src/kernel/sysabi.h)
 include(cmake/BraamProgram.cmake)
 
@@ -195,7 +196,9 @@ install(FILES ${BRAAM_CONFIG}
               cmake/wasm32-unknown-unknown.cmake
         DESTINATION ${BRAAM_INSTALL_CMAKEDIR})
 
-install(PROGRAMS tools/stamp.py DESTINATION ${BRAAM_INSTALL_LIBEXECDIR})
+# mkpkg.py takes MODE and stamp from pack.py, so the two travel together.
+install(PROGRAMS tools/stamp.py tools/mkpkg.py tools/pack.py
+        DESTINATION ${BRAAM_INSTALL_LIBEXECDIR})
 install(DIRECTORY examples/hello DESTINATION ${BRAAM_INSTALL_EXAMPLESDIR})
 install(FILES doc/Programming_Manual.md LICENSE DESTINATION ${BRAAM_INSTALL_DOCDIR})
 
