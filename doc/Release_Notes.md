@@ -7,6 +7,24 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## 0.4 — A system that can install software it was not built with
+
+`BRAAM_VERSION_BASE` moves to 0.4; the commit count and the hash behind it carry
+on unedited. 0.3 was a shell grown into a language over a filesystem that
+answered about what it held — everything it could run, it had been built with.
+0.4 adds the other half: `/bin/pkg`, twelve subcommands over signed
+repositories, an Ed25519 anchor, an index whose command names the publisher
+never writes down, a dependency solver, and a transaction that rolls back. A
+store the system did not compile is now a place software arrives from.
+
+**The move is the assertion, not the count.** Nothing between 0.3 and here forced
+a new base: the commits are a package format frozen before a parser existed, a
+verifier passed in rather than reached for, five stanza files read by one reader,
+and the four commands that finished the set. Taken one at a time they are a
+program being written. Taken together they change what the system *is* — 0.3's
+answer to "where does a new program come from" was "the tree it was built from",
+and 0.4's is "a repository, if it is signed by something the anchor names".
+
 ## 0.3 — A shell with a language, and files with names of their own
 
 `BRAAM_VERSION_BASE` moves to 0.3; the commit count and the hash behind it carry
