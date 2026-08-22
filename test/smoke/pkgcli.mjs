@@ -59,12 +59,20 @@ export function check() {
     piped("pkg | grep 'v, --verbose'", 1184.83,
         "    -v, --verbose         trace each HTTP request and reply");
     status("pkg -v", 1184.84, 0);
-    status("pkg -v list", 1184.85, 0);
-    status("pkg list -v", 1184.86, 0);
+    status("pkg -v list -i", 1184.85, 0);
+    status("pkg list -i -v", 1184.86, 0);
     // A flag that is none of them is an option, not a command: `pkg -x` used
     // to say `unknown command`.
     piped("pkg -x update 2>&1 | head -n 1", 1184.87, "pkg: unknown option: -x");
     status("pkg -x update", 1184.88, 2);
+
+    // A flag after the command word is the command's own, right or wrong.
+    piped("pkg list -x 2>&1 | head -n 1", 1184.89, "Usage: pkg list [-i]");
+    status("pkg list -x", 1184.9, 2);
+
+    // Nothing to list until an index is stored; -i has a store to read.
+    piped("pkg list 2>&1 | head -n 1", 1184.91, "pkg: no index; run pkg update");
+    status("pkg list", 1184.92, 1);
 
     // An operand is required, and one that is not a §6 token is the same
     // usage error rather than a name nothing provides.

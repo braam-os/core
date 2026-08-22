@@ -119,7 +119,7 @@ Packages
   autoremove
             remove packages installed only as dependencies
   upgrade   upgrade everything installed
-  list      list installed packages
+  list      [-i] — list what the index offers; -i lists what is installed
   files     <package> — the files a package installed
   verify    [<package>] — check installed files against the digests saved at
             install time

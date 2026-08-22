@@ -7,6 +7,57 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## `pkg list` lists the repository, and `-i` what is installed
+
+The index was reachable only through `pkg search <pattern>`: a person who wanted
+to know what a repository offers had to invent a pattern for it, and `pkg search
+'*'` is not something anyone guesses. Meanwhile `pkg list` printed the installed
+set — the one listing that is also `ls /pkg/gen/<N>` away, and the one a person
+asks for second, after deciding what to install.
+
+So the default is flipped. `pkg list` prints the stored index in `pkg search`'s
+three columns, and `pkg list -i` prints what `pkg list` used to. That is a
+change of meaning for an existing command rather than an addition, which is
+worth stating plainly: a script that ran `pkg list` for the installed set now
+gets the repository. The flag is the whole of the migration, and it is the
+letter apk and dpkg both spell `-i` for the same question.
+
+The listing deliberately does **not** mark rows that are already installed. It
+would need the active generation as well as the index, so the command would
+start failing in situations where only one of the two is readable, and `pkg
+info` already answers "is this installed" for a name, with an `installed` row
+that a listing has no room for.
+
+### The two callers are one function
+
+`pkg search` and the new listing differ by a predicate, so the index is loaded,
+filtered and printed by one coroutine that takes `all` — column widths still
+come off the rows actually printed, and a stanza with no description still ends
+its row at the version. The installed path keeps its own coroutine rather than
+becoming a branch of `pkg_list`: one frame would then hold a `CheckedIndex`
+pointer *and* the generation's two `String`s, and §2's 512-byte frame rule is
+not a suggestion.
+
+### An option after a command word belongs to the command
+
+`take_flags` rejected any word beginning `-` that was not `-v`, `--verbose`,
+`-h` or `--help`, wherever it appeared, so `pkg list -i` would have died as
+`pkg: unknown option: -i` before `pkg_list` ran. It now rejects only what stands
+*before* the command word; after it, an unrecognised flag is passed through as
+that command's argv, which is how `-i` reaches `pkg list` and how any later
+subcommand option will reach its own. `-v` is still taken wherever it is typed —
+`pkg -v list -i` and `pkg list -i -v` are one thing — and `pkg -x update` still
+says `unknown option: -x`, because `-x` is in front. What changed is the message
+for a flag *behind* the command: `pkg update -x` now fails through `update`'s
+own operand check, its usage line and 2, rather than pkg's. Same status, better
+address.
+
+The flag itself is parsed by `OptParse`, the parser `ls`, `mkdir` and `mv`
+already use, rather than a hand-written comparison — `pkg list -i` is the first
+pkg subcommand with an option of its own and will not be the last.
+
+---
+
 ## Two ways to name a package, and `/bin/unzip`
 
 `pkg install` took package names, and every name had to be in a signed index.

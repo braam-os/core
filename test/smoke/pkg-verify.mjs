@@ -59,7 +59,7 @@ export function check() {
     // §11: it says a file changed, and it changes nothing back.
     if (!store.files.has("/pkg/store/hello-1.0-r0/bin/spare"))
         fail("pkg verify removed a file it only reported");
-    prints("pkg list", "hello  1.0-r0|libz   1.0-r0");
+    prints("pkg list -i", "hello  1.0-r0|libz   1.0-r0");
 
     prints("pkg verify nonesuch", "pkg: nonesuch: not installed", 1);
     prints("pkg verify hello libz", "Usage: pkg verify [<package>]", 2);

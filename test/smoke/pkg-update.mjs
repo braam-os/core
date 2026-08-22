@@ -134,16 +134,20 @@ export function check() {
     // §7 step 7: a name the index does not list does not exist.
     prints("pkg info nonesuch", "pkg: nonesuch: not in the index", 1);
 
-    // No generation is nothing installed, and not an error.
-    prints("pkg list", "");
+    // The whole index, in search's columns and without a pattern.
+    prints("pkg list",
+           "awk   1.2-r0  pattern-directed scanning and processing language|less  1.6-r1");
 
-    // One planted by hand, since installing is P18. `pkg list` reads the
+    // No generation is nothing installed, and not an error.
+    prints("pkg list -i", "");
+
+    // One planted by hand, since installing is P18. `pkg list -i` reads the
     // link and the text behind it, and `info` gains a row.
     submit("mkdir -p /pkg/gen/1", at());
     submit("echo awk 1.2-r0 > /pkg/gen/1/packages", at());
     submit("echo less 1.6-r1 >> /pkg/gen/1/packages", at());
     submit("ln -s /pkg/gen/1 /pkg/active", at());
-    prints("pkg list", "awk   1.2-r0|less  1.6-r1");
+    prints("pkg list -i", "awk   1.2-r0|less  1.6-r1");
     prints("pkg info awk",
            ["name          awk", "version       1.2-r0", "installed     1.2-r0",
             "vouched       index 41", "size          18244", "unpacked      41984",
@@ -152,7 +156,7 @@ export function check() {
             "digest        Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI="].join("|"));
 
     // A usage error is 2, the same as any other program's.
-    prints("pkg list please", "Usage: pkg list", 2);
+    prints("pkg list please", "Usage: pkg list [-i]", 2);
     prints("pkg info", "Usage: pkg info <package>", 2);
 
     regrid(60, 16, "the resize after pkg info failed");

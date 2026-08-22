@@ -36,7 +36,7 @@ export function check() {
            ["Upgrading hello (1.0-r0 -> 1.1-r0)", "generation 2, 2 packages"].join("|"));
     if (text("/pkg/gen/2/packages") !== "hello 1.1-r0\nlibz 1.0-r0\n")
         fail(`the upgraded generation holds ${JSON.stringify(text("/pkg/gen/2/packages"))}`);
-    prints("pkg list", "hello  1.1-r0|libz   1.0-r0");
+    prints("pkg list -i", "hello  1.1-r0|libz   1.0-r0");
 
     // The farm was rebuilt, and nothing was told a generation changed.
     prints("hi", "hi from hello 1.1");

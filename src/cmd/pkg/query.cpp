@@ -6,6 +6,7 @@
 #include "kernel/traits.h"
 #include "pkg.h"
 #include "proc/io.h"
+#include "proc/opt.h"
 #include "proc/time.h"
 #include "stanza.h"
 #include "store.h"
@@ -17,7 +18,7 @@ namespace {
 
 constexpr Str USAGE_SEARCH = "Usage: pkg search <pattern>\n";
 constexpr Str USAGE_INFO   = "Usage: pkg info <package>\n";
-constexpr Str USAGE_LIST   = "Usage: pkg list\n";
+constexpr Str USAGE_LIST   = "Usage: pkg list [-i]\n";
 constexpr Str NO_MEMORY    = "pkg: out of memory\n";
 
 // `info`'s label column, and the gap between the columns of a listing.
@@ -163,16 +164,10 @@ Task<Result<void>> emit(Str text)
     co_return co_await write_all(SYS_STDOUT, text);
 }
 
-} // namespace
-
-Task<i32> pkg_search(Args args)
+// The stored index printed: every stanza when `all`, else the ones the pattern
+// keeps.
+Task<i32> print_index(Str pattern, bool all)
 {
-    if (args.size() != 2) {
-        if (Task<Result<void>> t = put(SYS_STDERR, USAGE_SEARCH))
-            co_await t;
-        co_return 2;
-    }
-
     Held held{ heap_new<CheckedIndex>() };
     if (!held.p) {
         if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
@@ -186,20 +181,19 @@ Task<i32> pkg_search(Args args)
     if (bad != 0)
         co_return bad;
 
-    Str pattern = args[1];
-    bool glob   = glob_meta(pattern, Span<const u8>());
+    bool glob = !all && glob_meta(pattern, Span<const u8>());
 
-    // The widths come off the matches, not off the index.
+    // The widths come off the rows printed, not off the index.
     usize w_name = 0, w_version = 0;
     for (const PackageStanza &p : held.p->packages)
-        if (found(p, pattern, glob)) {
+        if (all || found(p, pattern, glob)) {
             w_name    = max(w_name, p.name.size());
             w_version = max(w_version, p.version.size());
         }
 
     String out;
     for (const PackageStanza &p : held.p->packages) {
-        if (!found(p, pattern, glob))
+        if (!all && !found(p, pattern, glob))
             continue;
         bool ok = pad_to(out, p.name, w_name + GAP);
         if (p.description.empty())
@@ -220,6 +214,65 @@ Task<i32> pkg_search(Args args)
     if (Task<Result<void>> t = emit(out.str()))
         w = co_await t;
     co_return w.is_ok() ? 0 : 1;
+}
+
+// The active generation's packages file, a row each. A frame of its own.
+Task<i32> list_installed()
+{
+    String path, text;
+    Result<void> g = Err(Error::NoMemory);
+    if (Task<Result<void>> t = pkg_generation(path, text))
+        g = co_await t;
+    if (g.is_err()) {
+        if (g.error() == Error::Cancelled)
+            co_return 130;
+        if (Task<void> e = errln("pkg", path.empty() ? PKG_ACTIVE : path.str(), g.error()))
+            co_await e;
+        co_return 1;
+    }
+    if (path.empty())
+        co_return 0;
+
+    Vec<Installed> pkgs;
+    if (!packages_read(text.str(), pkgs)) {
+        if (Task<void> e = errln("pkg", path.str(), Error::Invalid))
+            co_await e;
+        co_return 1;
+    }
+
+    // The writer sorted the file by name.
+    usize w_name = 0;
+    for (const Installed &p : pkgs)
+        w_name = max(w_name, p.name.size());
+
+    String out;
+    for (const Installed &p : pkgs)
+        if (!pad_to(out, p.name, w_name + GAP) || !out.append(p.version) || !out.push('\n')) {
+            if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
+                co_await t;
+            co_return 1;
+        }
+
+    if (out.empty())
+        co_return 0;
+    Result<void> w = Err(Error::NoMemory);
+    if (Task<Result<void>> t = emit(out.str()))
+        w = co_await t;
+    co_return w.is_ok() ? 0 : 1;
+}
+
+} // namespace
+
+Task<i32> pkg_search(Args args)
+{
+    if (args.size() != 2) {
+        if (Task<Result<void>> t = put(SYS_STDERR, USAGE_SEARCH))
+            co_await t;
+        co_return 2;
+    }
+
+    Task<i32> t = print_index(args[1], false);
+    co_return t ? co_await t : 1;
 }
 
 Task<i32> pkg_info(Args args)
@@ -321,52 +374,29 @@ Task<i32> pkg_info(Args args)
     co_return w.is_ok() ? 0 : 1;
 }
 
+// The index, or -i for what is installed.
 Task<i32> pkg_list(Args args)
 {
-    if (args.size() != 1) {
+    bool installed = false;
+    OptParse opts(args, Opts{ "i", "" });
+    for (Opt o;;) {
+        Result<bool> r = opts.next(o);
+        if (r.is_err()) {
+            if (Task<Result<void>> t = put(SYS_STDERR, USAGE_LIST))
+                co_await t;
+            co_return 2;
+        }
+        if (!r.value())
+            break;
+        installed = true;
+    }
+
+    if (opts.rest().size() != 0) {
         if (Task<Result<void>> t = put(SYS_STDERR, USAGE_LIST))
             co_await t;
         co_return 2;
     }
 
-    String path, text;
-    Result<void> g = Err(Error::NoMemory);
-    if (Task<Result<void>> t = pkg_generation(path, text))
-        g = co_await t;
-    if (g.is_err()) {
-        if (g.error() == Error::Cancelled)
-            co_return 130;
-        if (Task<void> e = errln("pkg", path.empty() ? PKG_ACTIVE : path.str(), g.error()))
-            co_await e;
-        co_return 1;
-    }
-    if (path.empty())
-        co_return 0;
-
-    Vec<Installed> pkgs;
-    if (!packages_read(text.str(), pkgs)) {
-        if (Task<void> e = errln("pkg", path.str(), Error::Invalid))
-            co_await e;
-        co_return 1;
-    }
-
-    // The writer sorted the file by name.
-    usize w_name = 0;
-    for (const Installed &p : pkgs)
-        w_name = max(w_name, p.name.size());
-
-    String out;
-    for (const Installed &p : pkgs)
-        if (!pad_to(out, p.name, w_name + GAP) || !out.append(p.version) || !out.push('\n')) {
-            if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
-                co_await t;
-            co_return 1;
-        }
-
-    if (out.empty())
-        co_return 0;
-    Result<void> w = Err(Error::NoMemory);
-    if (Task<Result<void>> t = emit(out.str()))
-        w = co_await t;
-    co_return w.is_ok() ? 0 : 1;
+    Task<i32> t = installed ? list_installed() : print_index(Str(), true);
+    co_return t ? co_await t : 1;
 }

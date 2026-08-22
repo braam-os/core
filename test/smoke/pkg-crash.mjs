@@ -77,7 +77,7 @@ export function check() {
 
     // Nothing names the generation, so nothing is installed and nothing of
     // it is on PATH: §7's "nothing is half-installed" as a fact.
-    prints("pkg list", "");
+    prints("pkg list -i", "");
     prints("hi", "hi: not found", 127);
 
     // And the transaction is simply done again — the store directory it

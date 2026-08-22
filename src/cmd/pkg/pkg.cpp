@@ -21,7 +21,7 @@ constexpr PkgCommand TABLE[] = {
     { "remove", "<package>...", "remove packages", pkg_remove },
     { "autoremove", "", "remove dependencies nothing needs", pkg_autoremove },
     { "upgrade", "", "upgrade everything installed", pkg_upgrade },
-    { "list", "", "list installed packages", pkg_list },
+    { "list", "[-i]", "list available packages, -i installed", pkg_list },
     { "files", "<package>", "the files a package installed", pkg_files },
     { "verify", "[<package>]", "re-check installed files", pkg_verify },
     { "clean", "", "drop archives nothing needs", pkg_clean },
@@ -49,8 +49,9 @@ constexpr Str NO_ANSWER = "pkg: no answer\n";
 bool verbose_on = false;
 
 // The words with the flags taken out. Err(Invalid) is a word beginning `-`
-// that is none of them, with `bad` naming it; a §6 token cannot begin with one,
-// so nothing an operand may be is lost.
+// that is none of them and stands before the command word, with `bad` naming
+// it; one after the command word is that command's own option. A §6 token
+// cannot begin with `-`, so nothing an operand may be is lost.
 Result<void> take_flags(Args in, Vec<Str> &out, Str &bad)
 {
     for (usize i = 0; i < in.size(); i++) {
@@ -59,7 +60,7 @@ Result<void> take_flags(Args in, Vec<Str> &out, Str &bad)
             pkg_set_verbose(true);
             continue;
         }
-        if (w.size() > 1 && w[0] == '-' && w != "-h" && w != "--help") {
+        if (out.empty() && w.size() > 1 && w[0] == '-' && w != "-h" && w != "--help") {
             bad = w;
             return Err(Error::Invalid);
         }
