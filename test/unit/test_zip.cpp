@@ -488,7 +488,7 @@ void test_zip()
     CHECK(sched_spawn(ask_rootfs()) != 0);
     CHECK_EQ(sched_tick(0), -1);
     test_check(rootfs_ok, rootfs_why.str(), __FILE_NAME__, __LINE__);
-    CHECK_EQ(compared, 45);
+    CHECK_EQ(compared, 46);
     CHECK_EQ(jsref_live(), live);
     CHECK_EQ(host_orphans(), 0);
     vfs_reset();

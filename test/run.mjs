@@ -30,6 +30,7 @@ import * as pkgcli from "./smoke/pkgcli.mjs";
 import * as pkgClean from "./smoke/pkg-clean.mjs";
 import * as pkgCrash from "./smoke/pkg-crash.mjs";
 import * as pkgInstall from "./smoke/pkg-install.mjs";
+import * as pkgLocal from "./smoke/pkg-local.mjs";
 import * as pkgRemove from "./smoke/pkg-remove.mjs";
 import * as pkgScripts from "./smoke/pkg-scripts.mjs";
 import * as pkgUpdate from "./smoke/pkg-update.mjs";
@@ -46,6 +47,7 @@ import * as spawn from "./smoke/spawn.mjs";
 import * as subst from "./smoke/subst.mjs";
 import * as sysinfo from "./smoke/sysinfo.mjs";
 import * as term from "./smoke/term.mjs";
+import * as unzip from "./smoke/unzip.mjs";
 import * as vars from "./smoke/vars.mjs";
 import * as worker from "./smoke/worker.mjs";
 import * as wrap from "./smoke/wrap.mjs";
@@ -66,7 +68,7 @@ const CASES = [
     ["ls",         ls.check],         // after cwd: the fixture tree it lists
     ["sysinfo",    sysinfo.check],
     ["pkgcli",     pkgcli.check],
-    // The eight share test/smoke/pkgfix.mjs and one clock, and run in this
+    // The nine share test/smoke/pkgfix.mjs and one clock, and run in this
     // order because each leaves the /pkg the next one starts from.
     ["pkg-update",  pkgUpdate.check,  ARCHIVE],
     ["pkg-install", pkgInstall.check, ARCHIVE],
@@ -75,6 +77,7 @@ const CASES = [
     ["pkg-verify",  pkgVerify.check,  ARCHIVE],
     ["pkg-clean",   pkgClean.check,   ARCHIVE], // after upgrade: the generations it collects
     ["pkg-scripts", pkgScripts.check, ARCHIVE],
+    ["pkg-local",   pkgLocal.check,   ARCHIVE], // takes a /pkg of its own, as pkg-install does
     ["pkg-crash",   pkgCrash.check,   ARCHIVE], // last: puts the shipped /etc back, drops /pkg
     ["procfs",     procfs.check],
     ["interrupt",  interrupt.check],
@@ -93,6 +96,7 @@ const CASES = [
     ["subst",      subst.check],
     ["redirect",   redirect.check],
     ["script",     script.check],
+    ["unzip",      unzip.check],
     ["entry",      entry.check],
     ["language",   language.check],   // last: it exits the shell for good
 ];

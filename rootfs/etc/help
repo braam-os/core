@@ -91,6 +91,8 @@ Programs in /bin
   touch     <file>... — create empty files, or move an existing one's mtime
   true      succeed
   uname     [-a|-s|-r|-m] — name the system, and with -a the host it runs on
+  unzip     [-l] [-p] [-d <dir>] <archive> [<name>...]
+            — extract a zip, list it with -l, or write one entry out with -p
   vmstat    [-s] [-m] [<secs> [<count>]] — what the kernel is doing, as rates
   watch     [-m] [-n <secs>] <command> [<arg>...] — run a command repeatedly
   wc        [<file>...] — count lines, words and bytes
@@ -104,17 +106,26 @@ Packages
   it reads from, /etc/repositories, is carried and so is put back by a
   release, as the keys below it are.
 
-  Nothing is installed unchecked. The repository's index is signed, the keys
-  it is checked against are in /etc/anchor and come out of the boot
+  Nothing off the repository is installed unchecked. Its index is signed, the
+  keys it is checked against are in /etc/anchor and come out of the boot
   archive, and every package is compared against the size and the digest that
   index gave before a byte of it is unpacked. A check that fails names the
-  step it failed at, and nothing is half-installed. Its commands, each of them
-  spelled `pkg <name>`:
+  step it failed at, and nothing is half-installed.
+
+  An archive named outright — a path ending .zip, or a URL — is installed on
+  the strength of whoever typed it instead, and `pkg` says so before it acts.
+  It must still be a package: a .PKGINFO that reads, whose name and version
+  are plain filenames. Nothing vouched for it, so its record keeps `G: 0` and
+  `pkg verify` reports it `unvouched`. An archive the index does turn out to
+  list is the repository's package and is checked as one. The commands, each
+  of them spelled `pkg <name>`:
 
   update    fetch the repository index, and check it before storing it
   search    <pattern> — search the index by name and description
   info      <package> — what the index says about one package
-  install   <package>... — install packages, and what they depend on
+  install   <package>... — install packages, and what they depend on. An
+            operand ending .zip is an archive in the filesystem and one
+            holding :// is fetched; either is installed unverified
   remove    <package>... — remove packages
   autoremove
             remove dependencies nothing explicit needs any more

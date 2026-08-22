@@ -177,9 +177,17 @@ keep it flat: `bin/sub/tool` yields no command at all.
 
 Versions are apk's grammar (§7): `1.0-r0`, and `1.0-r1` supersedes it.
 
-The zip on its own is not installable. `pkg` checks every package against a
-signed index, so publishing means a repository — keys, an anchor and an index,
-which is Package_Formats.md §10 end to end. The tools that do it ship here too,
+**The zip is installable on its own**, which is how to try one before there is
+anywhere to publish it: `pkg install ./hello-1.0-r0.zip`, or the URL of wherever
+it sits. `pkg` says `unverified: no index vouches for it`, since none does, and
+everything else runs as it will after publishing. That is a person choosing to
+install software they have in their hands (Package_Management.md §7.1) and is
+not a way to hand one to anybody else — nothing has been signed, the install
+records `G: 0`, and `pkg verify` reports it `unvouched` from then on.
+
+*Distributing* it is the other thing. `pkg` fetches only what a signed index
+lists, so publishing means a repository — keys, an anchor and an index, which is
+Package_Formats.md §10 end to end. The tools that do it ship here too,
 in `libexec/braam/`: `ed25519.py` for keys, `mkanchor.py` for the anchor,
 `mkindex.py` for the index, `signindex.py` for a `Y:` line over a body. They are
 the only thing in the SDK that wants a Python package —

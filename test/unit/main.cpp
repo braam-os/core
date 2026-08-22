@@ -33,6 +33,7 @@ void test_dep();
 void test_stanza();
 void test_trust();
 void test_index();
+void test_local();
 void test_solve();
 void test_plan();
 void test_text();
@@ -118,6 +119,7 @@ BRAAM_EXPORT("run_tests") u32 run_tests()
     test_stanza();
     test_trust(); // after stanza and svc: the anchor over both
     test_index(); // after trust: the pipeline stands on it
+    test_local(); // after index and sha256: a stanza with nothing vouching
     test_solve(); // after dep and version, which it decides with
     test_db();    // after dep: world is a list of dependency tokens
     test_plan();  // after solve and db: a changeset as texts and steps

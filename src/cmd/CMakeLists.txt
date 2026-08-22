@@ -9,7 +9,7 @@ add_subdirectory(sh)
 
 set(BRAAM_BIN_LIST cat chat clear curl date df echo edit env false fexport fimport grep head hog
                    less ln ls mkdir mount mv pbcopy pbpaste pkg ps pwd rm sh sleep spin tail
-                   test timeout touch true uname vmstat watch wc)
+                   test timeout touch true uname unzip vmstat watch wc)
 set(BRAAM_BIN_PROGRAMS ${BRAAM_BIN_LIST} PARENT_SCOPE)
 
 # Every one of them takes a worker of its own, the shell included. There is
@@ -27,6 +27,10 @@ set(BRAAM_BIN_SRC_sh sh/main.cpp)
 # evaluator over a proc_main, and linking braam_sh for it would drag the whole
 # shell in for two files.
 set(BRAAM_BIN_SRC_test test.cpp sh/cond.cpp sh/condrun.cpp)
+
+# /bin/unzip is the package manager's zip reader over an archive that need not
+# be a package. The two files rather than braam_pkg, for the same reason.
+set(BRAAM_BIN_SRC_unzip unzip.cpp pkg/zip.cpp pkg/unzip.cpp)
 
 # An undefined LIBS expands to nothing, which is the recipe's default.
 foreach(prog IN LISTS BRAAM_BIN_LIST)

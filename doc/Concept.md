@@ -1034,6 +1034,15 @@ which is a symbolic link and not a mount. Boot does not create it — a system
 that installs nothing never grows one. What writes the tree is `/bin/pkg`, and
 [Package_Formats.md](Package_Formats.md) §8 is the layout it writes.
 
+Two ways name what `pkg` installs, and only two: a digest in a signed index, or
+a path or URL a person typed. The first is the whole of what a repository can
+reach and is checked against the index every time; the second is the operator
+installing software of their own, recorded as such and announced when it
+happens (Package_Management.md §7.1). Nothing here is a privilege boundary —
+there are no privileges (§5.2), `/bin` is writable, and `/bin/unzip` opens any
+archive — so what the checking buys is that **a repository never chooses the
+bytes**, not that only checked code runs.
+
 `/bin`, `/etc` and `/README` are put there at boot by unpacking `rootfs.zip`, a
 deflated zip beside `kernel.wasm` that `tools/pack.py` builds and `web/fs.js`
 reads; the kernel never sees its bytes. They are therefore **writable**, which

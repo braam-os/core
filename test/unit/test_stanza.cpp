@@ -272,4 +272,69 @@ void test_stanza()
         for (const StanzaField &x : h)
             CHECK(x.letter != 'b');
     }
+
+    // §3.2: P and V build /pkg/store/<P>-<V>/, so neither may hold a separator
+    // or name the directory above. A colon may: `cmd:awk` is an ordinary §6
+    // name and nothing in a path.
+    {
+        CHECK(stanza_component("awk"));
+        CHECK(stanza_component("1.2-r0"));
+        CHECK(stanza_component("cmd:awk"));
+        CHECK(stanza_component("...a"));
+        CHECK(!stanza_component(""));
+        CHECK(!stanza_component("."));
+        CHECK(!stanza_component(".."));
+        CHECK(!stanza_component("a/b"));
+        CHECK(!stanza_component("../escape"));
+        CHECK(!stanza_component("a\\b"));
+        CHECK(!stanza_component(Str("a\nb", 3)));
+        CHECK(!stanza_component(Str("a\0b", 3)));
+    }
+
+    // A stanza whose P or V is not one is unusable — the file still reads, and
+    // that record is dropped. It is the reader for the index and for .PKGINFO
+    // alike, so neither can name a path.
+    {
+        String bad;
+        CHECK(bad.append("C:") && bad.append(DIGEST) && bad.append("\nP:../escape\nV:1\nS:1\n"));
+        Vec<StanzaField> f;
+        PackageStanza p;
+        CHECK(one(bad.str(), STANZA_PACKAGE, f) == StanzaRead::Ok);
+        CHECK(package_read(f, p) == StanzaRead::Unusable);
+
+        String worse;
+        CHECK(worse.append("C:") && worse.append(DIGEST) && worse.append("\nP:a\nV:..\nS:1\n"));
+        CHECK(one(worse.str(), STANZA_PACKAGE, f) == StanzaRead::Ok);
+        CHECK(package_read(f, p) == StanzaRead::Unusable);
+    }
+
+    // §5.1's .PKGINFO: §3.2's letters less C and S, which name the archive and
+    // cannot be inside it. Carrying either is a claim about bytes the reader
+    // is holding, and is refused.
+    {
+        Vec<StanzaField> f;
+        PackageStanza p;
+        CHECK(one("P:awk\nV:1.2-r0\nI:41984\nD:cmd:sh\np:x\n", STANZA_PACKAGE, f) ==
+              StanzaRead::Ok);
+        CHECK(package_read_info(f, p) == StanzaRead::Ok);
+        CHECK(p.name == "awk" && p.version == "1.2-r0");
+        CHECK_EQ(u32(p.installed_size), 41984);
+        CHECK(p.depends == "cmd:sh" && p.provides == "x");
+        CHECK_EQ(u32(p.size), 0); // the caller's to fill, from the archive
+
+        // The same text is not a whole §3.2 stanza, and package_read says so.
+        CHECK(package_read(f, p) == StanzaRead::Unusable);
+
+        CHECK(one("P:a\nV:1\nS:9\n", STANZA_PACKAGE, f) == StanzaRead::Ok);
+        CHECK(package_read_info(f, p) == StanzaRead::Unusable);
+
+        String withc;
+        CHECK(withc.append("C:") && withc.append(DIGEST) && withc.append("\nP:a\nV:1\n"));
+        CHECK(one(withc.str(), STANZA_PACKAGE, f) == StanzaRead::Ok);
+        CHECK(package_read_info(f, p) == StanzaRead::Unusable);
+
+        // And P and V are held to a path component here too.
+        CHECK(one("P:../escape\nV:1\n", STANZA_PACKAGE, f) == StanzaRead::Ok);
+        CHECK(package_read_info(f, p) == StanzaRead::Unusable);
+    }
 }

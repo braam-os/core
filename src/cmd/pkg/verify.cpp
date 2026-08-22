@@ -17,11 +17,12 @@ constexpr Str USAGE_VERIFY  = "Usage: pkg verify [<package>]\n";
 constexpr Str NOT_INSTALLED = "not installed";
 
 // The report's first column.
-constexpr Str MISSING  = "missing";
-constexpr Str MODIFIED = "modified";
-constexpr Str EXTRA    = "extra";
-constexpr Str BROKEN   = "broken";
-constexpr usize W_WORD = 10;
+constexpr Str MISSING   = "missing";
+constexpr Str MODIFIED  = "modified";
+constexpr Str EXTRA     = "extra";
+constexpr Str BROKEN    = "broken";
+constexpr Str UNVOUCHED = "unvouched";
+constexpr usize W_WORD  = 10;
 
 // Sha256 is 112 bytes, and a frame past 512 costs a whole span.
 struct Job {
@@ -228,6 +229,14 @@ Task<i32> verify_one(Job &in, Str name, Str version)
 
     in.recorded.clear();
     i32 bad = 0;
+
+    // §8.1's G of 0 is a sideload (§7.1): reported, but the status is left
+    // alone — it is how the package arrived, not a fault.
+    if (rec.index_version == 0) {
+        String path;
+        if (!pkg_db_file(name, version, path) || !report(in.out, UNVOUCHED, path.str()))
+            co_return 1;
+    }
 
     // §11: a script that failed is recorded, not fatal, and this is what finds
     // it. The path is the record that says so.

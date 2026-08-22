@@ -63,6 +63,11 @@ private:
 // Decimal, unsigned, unpadded: 007, +1, 1a and an overflow are all None.
 Option<u64> stanza_number(Str s);
 
+// Whether a value may be part of a path (Package_Formats.md §3.2). P and V
+// build /pkg/store/<P>-<V>/ and /pkg/db/<P>-<V>. A colon passes: `cmd:awk` is
+// an ordinary §6 name and nothing in a path.
+bool stanza_component(Str s);
+
 // Q2 and nothing else: base64 of 32 bytes, canonical.
 bool digest_parse(Str s, u8 out[SHA256_SIZE]);
 
@@ -142,6 +147,11 @@ struct DbRecord {
 
 // Ok or Unusable: a missing required field or one that does not parse is the
 // record's problem, not the file's.
+// A .PKGINFO (§5.1): §3.2's letters less C and S, which name the archive and
+// cannot be inside it. Carrying either is Unusable. The caller fills the digest
+// and the size in.
+StanzaRead package_read_info(const Vec<StanzaField> &f, PackageStanza &out);
+
 StanzaRead signature_read(const Vec<StanzaField> &f, Vec<Signature> &out);
 StanzaRead header_read(const Vec<StanzaField> &f, IndexHeader &out);
 StanzaRead package_read(const Vec<StanzaField> &f, PackageStanza &out);

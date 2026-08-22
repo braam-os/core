@@ -72,29 +72,40 @@ const imports = {
     },
 };
 
-// One stored (uncompressed) entry, by hand: pack.py always deflates, so this
-// is the only exercise method 0 gets, and it is what lets a hostile name be
-// put in front of the parser without a packer that would refuse to write one.
-function zipOf(entry, body) {
-    const n = new TextEncoder().encode(entry);
-    const data = new TextEncoder().encode(body);
+// Stored (uncompressed) entries, by hand: pack.py always deflates, so this is
+// the only exercise method 0 gets, and it is what lets a hostile name be put in
+// front of the parser without a packer that would refuse to write one. It is
+// also how a package no index lists is built, since mkpkg.py runs at build time
+// and a sideload's whole point is an archive that arrived some other way.
+//
+// `pairs` is [name, body]; a body may be a string or a Uint8Array.
+export function zipOf(pairs) {
+    const enc = new TextEncoder();
     const out = [];
     const put = (...b) => out.push(...b);
     const u16 = (v) => put(v & 0xff, (v >> 8) & 0xff);
     const w32 = (v) => { u16(v & 0xffff); u16((v >>> 16) & 0xffff); };
 
-    w32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(0);
-    w32(0); w32(data.length); w32(data.length); u16(n.length); u16(0);
-    put(...n, ...data);
+    const at = [];
+    for (const [entry, body] of pairs) {
+        const n = enc.encode(entry);
+        const data = typeof body === "string" ? enc.encode(body) : body;
+        at.push([n, data, out.length]);
+        w32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(0);
+        w32(0); w32(data.length); w32(data.length); u16(n.length); u16(0);
+        put(...n, ...data);
+    }
 
     const cd = out.length;
-    w32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(0);
-    w32(0); w32(data.length); w32(data.length);
-    u16(n.length); u16(0); u16(0); u16(0); u16(0); w32(0); w32(0);
-    put(...n);
+    for (const [n, data, where] of at) {
+        w32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(0);
+        w32(0); w32(data.length); w32(data.length);
+        u16(n.length); u16(0); u16(0); u16(0); u16(0); w32(0); w32(where);
+        put(...n);
+    }
 
     const end = out.length;
-    w32(0x06054b50); u16(0); u16(0); u16(1); u16(1);
+    w32(0x06054b50); u16(0); u16(0); u16(at.length); u16(at.length);
     w32(end - cd); w32(cd); u16(0);
     return new Uint8Array(out);
 }
@@ -124,15 +135,16 @@ export async function init(wasm, rootfs, mode) {
         }
     }
 
-    const stored = await parseZip(zipOf("share/hello", "hi"));
-    if (stored.length !== 1 || new TextDecoder().decode(stored[0].bytes) !== "hi")
-        throw new Error(`a stored entry did not read back: ${JSON.stringify(stored)}`);
+    const stored = await parseZip(zipOf([["share/hello", "hi"], ["share/two", "20"]]));
+    if (stored.length !== 2 || new TextDecoder().decode(stored[0].bytes) !== "hi" ||
+        new TextDecoder().decode(stored[1].bytes) !== "20")
+        throw new Error(`stored entries did not read back: ${JSON.stringify(stored)}`);
 
     // Concept.md §5.2's store is the whole namespace now, so a name that escapes
     // the root is the one zip bug worth checking by hand.
     for (const escape of ["../escape", "/etc/passwd", "bin/../../out", "C:\\out"]) {
         let refused = false;
-        await parseZip(zipOf(escape, "x")).catch(() => { refused = true; });
+        await parseZip(zipOf([[escape, "x"]])).catch(() => { refused = true; });
         if (!refused)
             throw new Error(`the unpacker accepted ${JSON.stringify(escape)}`);
     }

@@ -7,6 +7,117 @@ spec disagree about intent, the spec wins and one of the two needs amending.
 
 ---
 
+## Two ways to name a package, and `/bin/unzip`
+
+`pkg install` took package names, and every name had to be in a signed index.
+Nothing in the system could open a zip at all: `curl` could fetch one and there
+it stopped. So a person who had an archive — built themselves, handed to them,
+sitting on a mirror — had no way in, in a system whose whole point is that the
+person at the keyboard owns the machine.
+
+The obvious objection is that Package_Management.md §7 said *"nothing is
+unzipped, written to the store, or run before its digest matches a digest from a
+signed index"*, and closed with *"there is no `--force`, `--insecure` or
+`--no-verify` in any form"*. Taking a path as an operand is that flag, spelled
+worse — silently, with nothing on the command line saying so.
+
+What resolves it is noticing what §7 actually protects against. §3's attacker is
+**the repository and the network in front of it** — never the operator. And §11
+already said `pkg` has no privileges to have: OPFS keeps no mode, `/bin` is
+writable, *"anything may overwrite `/bin/pkg` itself"*. So the guarantee was
+never "only checked code runs"; it was **"a repository never chooses the
+bytes"**, and a sideload does not touch that. §11's headline is reworded to say
+so, because the old phrasing — "`pkg` installs only what it checked" — invited
+exactly the confusion that made this look like a weakening.
+
+So there are now two ways to name bytes and only two: a digest in a signed
+index, or a path or URL a person typed. §7's rule is restated over both, and the
+first is untouched — there is still no way to make a package the index named
+skip a step.
+
+### What keeps the first way intact
+
+Two rules, and they are the whole of why this is safe to add.
+
+**The index owns every name-version it lists.** An archive whose `.PKGINFO`
+calls itself `hello-1.0-r0` at bytes the index did not give is refused at step
+`index`. Without this a path could quietly stand in for a repository's package,
+which is §3's *wrong package* attack wearing a local disguise. It is the one
+refusal in the smoke case with a comment saying it is the one that matters.
+
+**Identity is the digest, not the operand.** `solve()` already keyed packages by
+digest, so the sideload's stanza is simply appended to the solver's universe and
+an archive the index *does* list collapses into the index's entry with no code
+at all. That gives the offline case for free: a package carried in on a file or
+fetched from a mirror is checked exactly as §7 checks one, keeps its `G`, and
+skips only the download. `acquire()` looks up the held archive by digest for the
+same reason, so the two cases are one branch.
+
+### The bug this found
+
+`package_read` checked only that `P` and `V` were non-empty, and §6 said in so
+many words that *"a name is any token"* — while `pkg_stem` built
+`/pkg/store/<P>-<V>/` and `/pkg/db/<P>-<V>` out of them. A `.PKGINFO` saying
+`P: ../../bin` would have written outside the store. Nobody had to care before:
+`P` arrived from a signed index, and a publisher who corrupts their own store is
+their own problem. Making `.PKGINFO` the stanza turns it into untrusted input to
+a path, so `stanza_component` now holds `P` and `V` to a path component — no
+`/`, no `\`, no `..`, no control byte.
+
+It is applied in `package_read` rather than at the sideload's call site, so the
+index's own stanzas meet it too. That is stricter than §3.2 was, and §3.2 and §6
+are amended to say so. No legitimate name is affected, and a publisher whose
+tooling emits a `P` with a slash in it now finds out at the client instead of
+after it has scattered files across `/pkg`.
+
+### The smaller decisions
+
+**`G: 0`** is §8.1's record of "nothing vouched". It is chosen on the *digest*,
+not on how the archive arrived, which is what makes the offline case above
+record a real `G`. `pkg verify` reports such a record as `unvouched` and
+deliberately does **not** fail over it — it is how the package arrived, not
+something that went wrong, and a deliberate sideload must not leave `pkg verify`
+permanently red. `pkg info` gained a `vouched` row and a fallback to the `/pkg/db` record,
+without which a sideloaded package would have been invisible to it: `info` asks
+the index, and the index has never heard of one.
+
+**§6.1's `cmd:` names are derived from the archive's flat `bin/`.** The index
+gets them from `mkindex.py`, and §6.1 says outright that `.PKGINFO` need carry
+none — so a sideload with no derivation would silently lose every `cmd:` name,
+and §6.1's invariant that a solve against the installed set sees what a solve
+against the index saw would quietly stop holding. `pkg` computes them itself
+from the same rule.
+
+**Scripts run.** §11 used to say a signature authorises execution. Refusing to
+run a sideload's `.post-install` would be theatre: the payload lands in
+`/pkg/bin` and on `PATH` regardless, so the archive runs code the moment
+anything invokes it. What authorises execution is now whatever named the bytes —
+a signature for a repository's package, a typed path for a sideload.
+
+**The operand syntax is `://` for a URL and a trailing `.zip` for a file.** Both
+were usage errors before, so nothing changes meaning. The alternative — treating
+anything `dep_parse` calls malformed as a path — would turn a mistyped package
+name into a silent file lookup instead of a clear usage error. The subcommand
+table still reads `install <package>...`: a file and a URL are ways of *naming*
+a package, and spelling all three there widened the aligned description column
+past sixty and wrapped every row on the terminal.
+
+### `/bin/unzip`
+
+The other half, and the one that needs no policy argument at all. The zip reader
+already existed as `src/cmd/pkg/zip.cpp` and `unzip.cpp`, already checked
+against `web/fs.js` over the same bytes by the unit suite. `/bin/unzip` names
+those two sources outright rather than linking `braam_pkg`, exactly as
+`/bin/test` names the shell's `cond.cpp` instead of dragging in the whole shell.
+
+It exists **separately** on purpose. Arbitrary archives belong to a tool that
+makes no claims, so that `pkg` keeps a narrow guarantee it can actually make. It
+also inherits §5.2's path rules — an absolute, backslashed or climbing name is
+refused by the parser before extraction sees it — so it has no path check of its
+own, which is the good kind of not-writing-code.
+
+---
+
 ## 0.4 — A system that can install software it was not built with
 
 `BRAAM_VERSION_BASE` moves to 0.4; the commit count and the hash behind it carry

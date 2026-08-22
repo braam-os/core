@@ -120,20 +120,21 @@ bool built(String &out, u64 ms)
     return field(out, "built", b.str());
 }
 
-// §3.3's order, with C last.
-bool describe(String &out, const PackageStanza &p, Str installed)
+// §3.3's order, with C last. `vouched` is what named the bytes: an index and
+// its G, or nothing (Package_Management.md §7.1).
+bool describe(String &out, const PackageStanza &p, Str installed, Str vouched)
 {
     char digest[DIGEST_TEXT];
     if (!digest_write(p.digest, Span<char>(digest)))
         return false;
 
     return field(out, "name", p.name) && field(out, "version", p.version) &&
-           field(out, "installed", installed) && number(out, "size", p.size, true) &&
-           number(out, "unpacked", p.installed_size) && field(out, "description", p.description) &&
-           field(out, "origin", p.origin) && built(out, p.build_time) &&
-           number(out, "priority", p.priority) && field(out, "triggers", p.globs) &&
-           field(out, "depends", p.depends) && field(out, "provides", p.provides) &&
-           field(out, "install-if", p.install_if) &&
+           field(out, "installed", installed) && field(out, "vouched", vouched) &&
+           number(out, "size", p.size, true) && number(out, "unpacked", p.installed_size) &&
+           field(out, "description", p.description) && field(out, "origin", p.origin) &&
+           built(out, p.build_time) && number(out, "priority", p.priority) &&
+           field(out, "triggers", p.globs) && field(out, "depends", p.depends) &&
+           field(out, "provides", p.provides) && field(out, "install-if", p.install_if) &&
            field(out, "digest", Str(digest, sizeof(digest)));
 }
 
@@ -143,6 +144,18 @@ bool describe(String &out, const PackageStanza &p, Str installed)
 struct Held {
     ~Held() { heap_delete(p); }
     CheckedIndex *p;
+};
+
+// A §8.1 record and the text it views, for `info` falling back to one. On the
+// heap for the reason the index is, and built only when needed.
+struct Record {
+    String text;
+    DbRecord rec;
+};
+
+struct HeldRecord {
+    ~HeldRecord() { heap_delete(p); }
+    Record *p = nullptr;
 };
 
 Task<Result<void>> emit(Str text)
@@ -230,16 +243,6 @@ Task<i32> pkg_info(Args args)
     if (bad != 0)
         co_return bad;
 
-    // §7 step 7: a name the index does not list does not exist.
-    const PackageStanza *p = index_find(*held.p, args[1]);
-    if (!p) {
-        String line;
-        if (line.append("pkg: ") && line.append(args[1]) && line.append(": not in the index\n"))
-            if (Task<Result<void>> t = put(SYS_STDERR, line.str()))
-                co_await t;
-        co_return 1;
-    }
-
     String path, text;
     Result<void> g = Err(Error::NoMemory);
     if (Task<Result<void>> t = pkg_generation(path, text))
@@ -252,8 +255,61 @@ Task<i32> pkg_info(Args args)
         co_return 1;
     }
 
+    // §7 step 7: a name the index does not list does not exist — but one that
+    // is installed does, and its §8.1 record is the stanza (§7.1).
+    Str here               = installed_version(text.str(), args[1]);
+    const PackageStanza *p = index_find(*held.p, args[1]);
+    u64 vouched            = p ? held.p->head.version : 0;
+
+    HeldRecord kept;
+    if (!p && !here.empty()) {
+        kept.p = heap_new<Record>();
+        if (!kept.p) {
+            if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
+                co_await t;
+            co_return 1;
+        }
+
+        Result<String> got = Err(Error::NoMemory);
+        if (Task<Result<String>> t = store_db_get(args[1], here))
+            got = co_await t;
+        if (got.is_err()) {
+            if (got.error() == Error::Cancelled)
+                co_return 130;
+            if (Task<void> e = errln("pkg", args[1], got.error()))
+                co_await e;
+            co_return 1;
+        }
+        kept.p->text = move(got.value());
+
+        Vec<StanzaField> f;
+        if (!StanzaReader::one(kept.p->text.str(), STANZA_DB, f) ||
+            db_read(f, kept.p->rec) != StanzaRead::Ok) {
+            if (Task<void> e = errln("pkg", args[1], Error::Invalid))
+                co_await e;
+            co_return 1;
+        }
+        p       = &kept.p->rec.pkg;
+        vouched = kept.p->rec.index_version;
+    }
+
+    if (!p) {
+        String line;
+        if (line.append("pkg: ") && line.append(args[1]) && line.append(": not in the index\n"))
+            if (Task<Result<void>> t = put(SYS_STDERR, line.str()))
+                co_await t;
+        co_return 1;
+    }
+
+    // §8.1: 0 is "nothing vouched".
+    Buf<32> vouch;
+    if (vouched == 0)
+        vouch.put("no");
+    else
+        vouch.put("index ").put(vouched);
+
     String out;
-    if (!describe(out, *p, installed_version(text.str(), p->name))) {
+    if (!describe(out, *p, here, vouch.str())) {
         if (Task<Result<void>> t = put(SYS_STDERR, NO_MEMORY))
             co_await t;
         co_return 1;

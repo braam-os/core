@@ -151,6 +151,16 @@ Option<u64> stanza_number(Str s)
     return v;
 }
 
+bool stanza_component(Str s)
+{
+    if (s.empty() || s == "." || s == "..")
+        return false;
+    for (usize i = 0; i < s.size(); i++)
+        if (s[i] == '/' || s[i] == '\\' || u8(s[i]) < 0x20)
+            return false;
+    return true;
+}
+
 bool digest_parse(Str s, u8 out[SHA256_SIZE])
 {
     if (!s.starts_with("Q2"))
@@ -220,15 +230,13 @@ StanzaRead header_read(const Vec<StanzaField> &f, IndexHeader &out)
     return StanzaRead::Ok;
 }
 
-StanzaRead package_read(const Vec<StanzaField> &f, PackageStanza &out)
+// §3.2 less C and S, which the two readers below come by differently.
+static StanzaRead package_rest(const Vec<StanzaField> &f, PackageStanza &p)
 {
-    PackageStanza p;
     u64 priority = 0;
-    if (!has(f, 'C') || !has(f, 'P') || !has(f, 'V') || !has(f, 'S'))
+    if (!has(f, 'P') || !has(f, 'V'))
         return StanzaRead::Unusable;
-    if (!digest_parse(field(f, 'C'), p.digest))
-        return StanzaRead::Unusable;
-    if (!take_number(f, 'S', p.size, true) || !take_number(f, 'I', p.installed_size, false) ||
+    if (!take_number(f, 'I', p.installed_size, false) ||
         !take_number(f, 't', p.build_time, false) || !take_number(f, 'k', priority, false) ||
         priority > ~u32(0))
         return StanzaRead::Unusable;
@@ -242,8 +250,34 @@ StanzaRead package_read(const Vec<StanzaField> &f, PackageStanza &out)
     p.origin      = field(f, 'o');
     p.globs       = field(f, 'g');
     p.priority    = u32(priority);
-    if (p.name.empty() || p.version.empty())
+
+    // §3.2: the store path is built out of these two.
+    if (!stanza_component(p.name) || !stanza_component(p.version))
         return StanzaRead::Unusable;
+    return StanzaRead::Ok;
+}
+
+StanzaRead package_read(const Vec<StanzaField> &f, PackageStanza &out)
+{
+    PackageStanza p;
+    if (!has(f, 'C') || !has(f, 'S'))
+        return StanzaRead::Unusable;
+    if (!digest_parse(field(f, 'C'), p.digest) || !take_number(f, 'S', p.size, true))
+        return StanzaRead::Unusable;
+    if (StanzaRead s = package_rest(f, p); s != StanzaRead::Ok)
+        return s;
+
+    out = p;
+    return StanzaRead::Ok;
+}
+
+StanzaRead package_read_info(const Vec<StanzaField> &f, PackageStanza &out)
+{
+    PackageStanza p;
+    if (has(f, 'C') || has(f, 'S'))
+        return StanzaRead::Unusable;
+    if (StanzaRead s = package_rest(f, p); s != StanzaRead::Ok)
+        return s;
 
     out = p;
     return StanzaRead::Ok;

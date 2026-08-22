@@ -75,8 +75,9 @@ Task<Result<u64>> floor_of(PkgHost &h)
     co_return head.version;
 }
 
-// The body, refused past the cap rather than truncated (§3's endless data).
-Task<Result<String>> fetch_capped(PkgHost &h, Str url, u64 cap)
+} // namespace
+
+Task<Result<String>> index_fetch_capped(PkgHost &h, Str url, u64 cap)
 {
     u32 status     = 0;
     Result<i32> fd = Err(Error::NoMemory);
@@ -113,8 +114,6 @@ Task<Result<String>> fetch_capped(PkgHost &h, Str url, u64 cap)
         co_return Err(failure);
     co_return move(sink.text());
 }
-
-} // namespace
 
 Str repo_trim(Str url)
 {
@@ -180,7 +179,7 @@ Task<Result<void>> index_check(PkgHost &h, Str repo, CheckedIndex &out, IndexSte
     if (!url.append(repo) || !url.append(INDEX_LEAF))
         co_return Err(Error::NoMemory);
     Result<String> text = Err(Error::NoMemory);
-    if (Task<Result<String>> t = fetch_capped(h, url.str(), INDEX_MAX))
+    if (Task<Result<String>> t = index_fetch_capped(h, url.str(), INDEX_MAX))
         text = co_await t;
     if (text.is_err())
         co_return Err(text.error());
@@ -272,6 +271,18 @@ const PackageStanza *index_provides(const CheckedIndex &c, Str name)
     return nullptr;
 }
 
+bool index_vouches(const CheckedIndex &c, const u8 digest[SHA256_SIZE])
+{
+    for (const PackageStanza &p : c.packages) {
+        bool same = true;
+        for (usize i = 0; i < SHA256_SIZE; i++)
+            same = same && p.digest[i] == digest[i];
+        if (same)
+            return true;
+    }
+    return false;
+}
+
 bool package_check(const PackageStanza &p, Str bytes)
 {
     if (bytes.size() != p.size)
@@ -303,7 +314,7 @@ Task<Result<void>> index_fetch(PkgHost &h, const CheckedIndex &c, const PackageS
         co_return Err(Error::NoMemory);
 
     Result<String> text = Err(Error::NoMemory);
-    if (Task<Result<String>> t = fetch_capped(h, url.str(), p.size))
+    if (Task<Result<String>> t = index_fetch_capped(h, url.str(), p.size))
         text = co_await t;
     if (text.is_err())
         co_return Err(text.error());

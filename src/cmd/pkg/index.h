@@ -69,6 +69,14 @@ const PackageStanza *index_find(const CheckedIndex &c, Str name);
 // The same under P or under p: a name the index offers. `cmd:awk` is one.
 const PackageStanza *index_provides(const CheckedIndex &c, Str name);
 
+// Whether the index vouches for these exact bytes, whichever way they arrived.
+// §8.1's G is the index version when it does and 0 when nothing did.
+bool index_vouches(const CheckedIndex &c, const u8 digest[SHA256_SIZE]);
+
+// A body, refused past `cap` rather than truncated (§3's endless data). A
+// sideloaded URL has no S to cap at and uses PACKAGE_MAX.
+Task<Result<String>> index_fetch_capped(PkgHost &h, Str url, u64 cap);
+
 // §7 step 9: the size and the digest the index gave, against what arrived.
 bool package_check(const PackageStanza &p, Str bytes);
 

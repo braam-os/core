@@ -32,11 +32,11 @@ export function check() {
     t.is("echo $(nosuchcmd) after", "nosuchcmd: not found|after");
     t.is("for f in $(echo p q); do echo $f; done", "p|q");
     t.is("case $(echo hi) in h*) echo yes;; esac", "yes");
-    // The many-writes case: 25,884 bytes is fifty chunks against eight
+    // The many-writes case: 28,080 bytes is fifty chunks against eight
     // slots, so without drain-before-wait this one hangs rather than fails.
     // The counts are three copies of /etc/help, so a line added there moves
     // them.
-    t.is("x=$(cat /home/c/big); echo \"$x\" | wc", "483 4125 25884");
+    t.is("x=$(cat /home/c/big); echo \"$x\" | wc", "516 4500 28080");
     submit("rm -r /home/c", t.at(0.01));
 
     // Functions, `.`, `eval` and `return`. The unit suite has the grammar;

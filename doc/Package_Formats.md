@@ -167,6 +167,14 @@ P:less
 
 `C` and `S` are what Package_Management.md §7's steps 8 and 9 check against.
 
+**`P` and `V` are path components.** `/pkg/store/<P>-<V>/` and `/pkg/db/<P>-<V>`
+are built out of them (§8), so neither may be empty, be `.` or `..`, hold a `/`
+or a `\`, or hold a byte below `0x20`; a stanza whose `P` or `V` is not one is
+unusable. A colon may appear in either — `cmd:awk` is an ordinary §6 name and
+nothing in a path. The rule is the reader's, so it holds for the index, for
+`.PKGINFO` (§5.1) and for §8.1's record alike, which is what stops a sideloaded
+`.PKGINFO` naming a directory of its own choosing (Package_Management.md §7.1).
+
 apk's `A` (arch) is dropped — there is one architecture. Its `U`, `L`, `m` and
 `c` are undefined here: the two lowercase ones are ignored, the two uppercase
 ones make a package unusable.
@@ -251,11 +259,17 @@ can be metadata, so `bin/.keep` is an ordinary file.
 
 - **An unknown top-level dot-entry makes the package uninstallable** — §1's
   uppercase rule applied to an entry name.
-- **`.PKGINFO` is required and authorises nothing**; the index does. It carries
-  §3.2's letters **less `C` and `S`**, which name the archive and cannot be
-  inside it, so a reader takes it field by field rather than as a whole §3.2
-  stanza. **`P` and `V` must agree with the index stanza** that vouched for the
-  package, and nothing else is compared.
+- **`.PKGINFO` is required.** It carries §3.2's letters **less `C` and `S`**,
+  which name the archive and cannot be inside it, so a reader takes it field by
+  field rather than as a whole §3.2 stanza — and **carrying either is a
+  refusal**, since it would be a claim about bytes the reader is holding.
+- **What `.PKGINFO` authorises depends on what named the archive.** For a
+  package from a repository it authorises nothing and the index does: **`P` and
+  `V` must agree with the index stanza** that vouched for it, and nothing else
+  is compared. For one named outright (Package_Management.md §7.1) there is no
+  index stanza and **`.PKGINFO` is the stanza**: `C` and `S` are computed from
+  the archive, §6.1's `cmd:` names are derived from its flat `bin/`, and §3.2's
+  path-component rule on `P` and `V` is what bounds where it can write.
 - **A dot-entry other than `.PKGINFO` is kept**, written into
   `/pkg/store/<name>-<version>/` under its own name and recorded in §8.1's file
   list like any payload file — `.pre-deinstall` runs at a removal, when the
@@ -367,7 +381,9 @@ when that bit is in the mask, inverted by `!`. So no operator is any version,
 A list is **space- or newline-separated**, runs of separators collapsing.
 
 **A name is any token**, and need not be a package: `cmd:awk` is an ordinary
-name whose providers ship an `awk` (§6.1). apk's `so:` is dropped.
+name whose providers ship an `awk` (§6.1). apk's `so:` is dropped. A *package's
+own* name is narrower — §3.2's `P` is a path component — but a dependency may
+name anything, since nothing builds a path out of one.
 
 **An unparseable version marks the dependency broken, not the file** — the
 stanza becomes an uninstallable package and every other stanza still reads. A
@@ -396,7 +412,9 @@ shipping `bin/hi` provides `cmd:hi=1.0-r0`.
   declare them; `.PKGINFO` need carry none. A `p:` line written by hand is an
   ordinary provide and merges with them. `/pkg/db` is written from the index
   stanza (§8.1), so a solve against the installed set sees what a solve against
-  the index saw.
+  the index saw. **An archive named outright has no index stanza, so `pkg`
+  derives them itself** from the same flat `bin/` (Package_Management.md §7.1)
+  — the invariant is the point, not who computed it.
 - **Two packages shipping one command both provide one name, and that is not a
   conflict.** Both may be installed, and §8.3's "whichever the farm wrote last"
   decides which runs. A dependency on `cmd:x` is satisfied by either, with `k`
@@ -462,7 +480,7 @@ time it is used** and never believed for being on disk.
 
 | Letter | Value | |
 | --- | --- | --- |
-| `G` | the index version that vouched for this package | required |
+| `G` | the index version that vouched, or `0` for none | required |
 | `b` | the install script that failed (§5.1), without its dot | optional |
 | `F` | a directory, relative to the store directory, repeats | |
 | `R` | a filename under the last `F`, repeats | |
@@ -478,8 +496,15 @@ at the top of the package is an `F` of `""` and an `R` of `.post-install`.
 loses a warning rather than the record (§1).
 
 `G` is what makes a reinstall re-check rather than believe the disk
-(Package_Management.md §7). apk's `M:` and `a:` are dropped: they carry uid, gid
-and mode, and there are none here.
+(Package_Management.md §7). **`G: 0` is a package no index vouched for** — one
+named outright (§7.1), whose stanza came out of its own `.PKGINFO`. It is `0`
+for the *bytes* and not for the operand, so an archive carried in by hand whose
+digest the index does list records that index's `G` like any other. `pkg verify`
+reports a `G: 0` record as `unvouched` without failing over it, and `pkg info`
+reads `vouched no`.
+
+apk's `M:` and `a:` are dropped: they carry uid, gid and mode, and there are
+none here.
 
 `pkg verify` re-reads each `R` and compares against its `Z`. What that does not
 mean is Package_Management.md §11.
@@ -634,6 +659,19 @@ Three conventions do work for you:
   directory your `g:` globs name changes (§5.1).
 - **The zip is reproducible.** Same inputs, same bytes.
 
+**Try it before you sign anything.** Get the zip into the store — `fimport`, or
+`curl` from wherever you built it — and install it by name:
+
+```
+pkg install /import/hello-1.0-r0.zip
+```
+
+`pkg` says `unverified: no index vouches for it`, which is the truth: nothing
+has been signed yet. Everything else runs as it will after publishing — the
+`.PKGINFO` is read, the scripts fire, `bin/` reaches `PATH`, the triggers wake —
+so a broken `D:` or a `.post-install` that exits non-zero is found here rather
+than by whoever installs it first. `pkg remove hello` puts it back.
+
 ### Step 4 — sign an index
 
 One index over every package the repository offers:
@@ -650,8 +688,11 @@ It reads each zip: `C` and `S` from the bytes, the rest from `.PKGINFO`, and
 publication — a client refuses an index older than the one it holds (§3.1) — and
 `--expiry` is a promise to re-sign before that moment. A month is normal.
 
-Every package listed must sit in the same directory as `index` on the server,
-and a package the index does not list cannot be installed however it got there.
+Every package listed must sit in the same directory as `index` on the server.
+**A package the index does not list is never fetched from the repository** — a
+name it does not carry does not exist (Package_Management.md §7 step 7) — though
+somebody at a keyboard may still install the archive by naming it outright, and
+is told that nothing vouched for it when they do (§7.1).
 
 ### Step 5 — copy it up, and try it
 

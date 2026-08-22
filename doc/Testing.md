@@ -76,9 +76,15 @@ running one case means building `tests` and reading the harness output.
 case is one file in [test/smoke/](../test/smoke/) exporting a single
 `check()`, and takes its kernel, screen and shell from
 [test/smoke/harness.mjs](../test/smoke/harness.mjs) — the one owner of the
-instance, the grid address, the tracked cwd and the two fakes. The eight `pkg`
+instance, the grid address, the tracked cwd and the two fakes. The nine `pkg`
 cases share [test/smoke/pkgfix.mjs](../test/smoke/pkgfix.mjs) as well: the
 fixtures, the two repositories, one clock and the four shapes they assert in.
+
+The harness also exports `zipOf(pairs)`, which writes stored (method 0) entries
+by hand. `pack.py` always deflates, so it is the only exercise method 0 gets and
+the only way to put a hostile name in front of the parser; `pkg-local` and
+`unzip` build their archives with it, since `mkpkg.py` runs at build time and an
+archive no index lists is the point of both.
 
 The harness gives a case `submit(text, now)` to type a line and press Enter,
 `run(now)` to tick, `screen()`, `rows`, `row`, `cell`, `words` and `output` to
@@ -112,7 +118,10 @@ keystrokes is the thing under test — and it is what the rules are about.
    in the gap after the one before it and steps by 0.005 or 0.01.
 5. **Store contents cross cases.** `/home/notes` is written long before
    `persist` reads it; `cwd` leaves the shell in `/home`; `pkg-install` leaves
-   `/pkg` broken on purpose because `pkg-remove` starts from that.
+   `/pkg` broken on purpose because `pkg-remove` starts from that. The way out
+   of that coupling, where a case wants numbering of its own, is to take a
+   `/pkg` of its own — `rm -r /pkg`, plant the anchor and the repositories line,
+   and update; `pkg-install`, `pkg-local` and `pkg-crash` each do.
 6. **Counters are absolute running totals.** `store.unpacks`, `logged.length`
    and `ticks()` are asserted as exact numbers, so `logged` and `presented` are
    single instances in the harness rather than per-case.

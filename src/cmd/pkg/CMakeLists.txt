@@ -7,6 +7,7 @@ add_library(braam_pkg STATIC
     host.cpp
     index.cpp
     install.cpp
+    local.cpp
     pkg.cpp
     plan.cpp
     query.cpp

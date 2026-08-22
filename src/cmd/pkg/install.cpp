@@ -3,6 +3,7 @@
 #include "kernel/alloc.h"
 #include "kernel/fmt.h"
 #include "kernel/traits.h"
+#include "local.h"
 #include "pkg.h"
 #include "plan.h"
 #include "proc/io.h"
@@ -22,7 +23,7 @@
 
 namespace {
 
-constexpr Str USAGE          = "Usage: pkg install <package>...\n";
+constexpr Str USAGE          = "Usage: pkg install <package|file.zip|url>...\n";
 constexpr Str USAGE_REMOVE   = "Usage: pkg remove <package>...\n";
 constexpr Str USAGE_AUTO     = "Usage: pkg autoremove\n";
 constexpr Str USAGE_UPGRADE  = "Usage: pkg upgrade\n";
@@ -41,6 +42,11 @@ struct Broken {
 // Everything one run holds: a frame past 512 bytes costs a 64 KiB span.
 struct Txn {
     CheckedIndex index;
+
+    // What arrived by hand (§7.1), and the solver's universe: the index's
+    // stanzas and then these.
+    Vec<LocalPackage> locals;
+    Vec<PackageStanza> repo;
 
     String world_text; // /pkg/world as it was
     Vec<Str> specs;    // its lines, the operands merged in
@@ -217,10 +223,113 @@ bool cache_path(Str stem, String &out)
     return out.assign(PKG_CACHE) && out.push('/') && out.append(stem) && out.append(CACHE_EXT);
 }
 
+// ------------------------------------------------------------ a sideload
+
+// The archive an operand carried in, by digest rather than by which operand it
+// was. Emptied once taken, so a block is never handed out twice.
+String *local_archive(Txn &in, const PackageStanza &p)
+{
+    for (LocalPackage &l : in.locals) {
+        if (l.zip.empty())
+            continue;
+        bool same = true;
+        for (usize i = 0; i < SHA256_SIZE; i++)
+            same = same && l.stanza.digest[i] == p.digest[i];
+        if (same)
+            return &l.zip;
+    }
+    return nullptr;
+}
+
+// The bytes, then §5.1's .PKGINFO out of them. Writes nothing and runs
+// nothing: it only turns an archive into a stanza.
+Task<Result<void>> local_load(Txn &in, Str word, Operand kind, LocalStep &step)
+{
+    LocalPackage got;
+    step = LocalStep::Read;
+
+    if (kind == Operand::Url) {
+        // No S to cap at, so PACKAGE_MAX — still capped before it starts.
+        Result<String> body = Err(Error::NoMemory);
+        if (Task<Result<String>> t = index_fetch_capped(pkg_host(), word, PACKAGE_MAX))
+            body = co_await t;
+        if (body.is_err())
+            co_return Err(body.error());
+        got.zip = move(body.value());
+    } else {
+        // Measured before it is read, likewise.
+        Result<FileInfo> st = Err(Error::NoMemory);
+        if (Task<Result<FileInfo>> t = stat_of(word))
+            st = co_await t;
+        if (st.is_err())
+            co_return Err(st.error());
+        if (st.value().kind != SYS_KIND_FILE)
+            co_return Err(Error::Invalid);
+        if (st.value().size > PACKAGE_MAX)
+            co_return Err(Error::Unsupported);
+
+        Result<String> body = Err(Error::NoMemory);
+        if (Task<Result<String>> t = read_file(word))
+            body = co_await t;
+        if (body.is_err())
+            co_return Err(body.error());
+        got.zip = move(body.value());
+    }
+
+    step = LocalStep::Archive;
+    Vec<ZipEntry> entries;
+    if (zip_entries(got.zip.str(), entries) != ZipRead::Ok)
+        co_return Err(Error::Invalid);
+
+    step                 = LocalStep::Metadata;
+    const ZipEntry *info = nullptr;
+    for (const ZipEntry &e : entries)
+        if (zip_meta(e.name) == ZipMeta::PkgInfo)
+            info = &e;
+    if (!info)
+        co_return Err(Error::NotFound);
+
+    Result<String> text = Err(Error::NoMemory);
+    if (Task<Result<String>> t = zip_read(*info))
+        text = co_await t;
+    if (text.is_err())
+        co_return Err(text.error());
+    got.info = move(text.value());
+
+    CO_TRY_VOID(local_stanza(got, entries, step));
+
+    step = LocalStep::Index;
+    if (local_conflicts(in.index, got.stanza))
+        co_return Err(Error::Perm);
+
+    if (!in.locals.push(move(got)))
+        co_return Err(Error::NoMemory);
+    co_return Result<void>();
+}
+
+// §7.1's line. Silent for an archive the index turns out to list.
+Task<void> announce(Txn &in, const PackageStanza &p)
+{
+    if (index_vouches(in.index, p.digest))
+        co_return;
+    String stem;
+    if (!pkg_stem(p.name, p.version, stem))
+        co_return;
+    if (Task<void> e = refuse_line(stem.str(), "unverified: no index vouches for it"))
+        co_await e;
+}
+
 // The archive, from the cache when it hashes to what the index says and off
 // the network otherwise. Either way §7 step 9 has passed when this is Ok.
 Task<Result<void>> acquire(Txn &in, const PackageStanza &p, Str stem, IndexStep &step)
 {
+    // Bytes carried in already hash to what the stanza says: nothing to fetch
+    // and nothing left to check.
+    if (String *had = local_archive(in, p)) {
+        in.archive = move(*had);
+        co_return Result<void>();
+    }
+
     String cache;
     if (!cache_path(stem, cache))
         co_return Err(Error::NoMemory);
@@ -390,9 +499,11 @@ Task<Result<void>> unpack(Txn &in, const PackageStanza &p, Str &step)
     if (!in.fresh.push(Installed{ p.name, p.version }))
         co_return Err(Error::NoMemory);
 
+    // §8.1's G: the index version that vouched, 0 when none did. Asked of the
+    // digest, not of how the archive arrived.
     DbRecord rec;
     rec.pkg           = p;
-    rec.index_version = in.index.head.version;
+    rec.index_version = index_vouches(in.index, p.digest) ? in.index.head.version : 0;
 
     for (Str dir : dirs) {
         for (const ZipEntry &e : entries) {
@@ -789,8 +900,18 @@ Task<i32> decide(Txn &in, Str lead)
     if (!world_deps(in.specs, in.world))
         co_return 1;
 
+    // solve() dedupes by digest, so a sideload the index also lists collapses
+    // into the index's entry.
+    in.repo.clear();
+    for (const PackageStanza &st : in.index.packages)
+        if (!in.repo.push(st))
+            co_return 1;
+    for (const LocalPackage &l : in.locals)
+        if (!in.repo.push(l.stanza))
+            co_return 1;
+
     SolveInput si;
-    si.repo      = in.index.packages;
+    si.repo      = in.repo;
     si.installed = in.installed;
     si.world     = in.world;
     si.named     = in.named;
@@ -954,10 +1075,13 @@ Task<i32> settle(Txn &in)
     co_return stopped;
 }
 
-// Every operand must be a §6 token; the command's own usage says so.
-Task<i32> operands_ok(Args args, Str usage)
+// Every operand must be a §6 token; the command's own usage says so. `local`
+// is `install`, where a path or a URL is an operand too (§7.1).
+Task<i32> operands_ok(Args args, Str usage, bool local = false)
 {
     for (usize i = 1; i < args.size(); i++) {
+        if (local && operand_kind(args[i]) != Operand::Name)
+            continue;
         Dep d;
         if (dep_parse(args[i], d) != DepParse::Malformed)
             continue;
@@ -1015,7 +1139,7 @@ Task<i32> pkg_install(Args args)
         co_return 2;
     }
     i32 bad = 1;
-    if (Task<i32> t = operands_ok(args, USAGE))
+    if (Task<i32> t = operands_ok(args, USAGE, true))
         bad = co_await t;
     if (bad != 0)
         co_return bad;
@@ -1033,8 +1157,38 @@ Task<i32> pkg_install(Args args)
     if (bad != 0)
         co_return bad;
 
-    // §7 step 7: a name the index does not offer does not exist.
+    // The archives first: each becomes a stanza the solver sees beside the
+    // index's, and says so before any of it is acted on.
     for (usize i = 1; i < args.size(); i++) {
+        Operand kind = operand_kind(args[i]);
+        if (kind == Operand::Name)
+            continue;
+
+        LocalStep step   = LocalStep::Read;
+        Result<void> got = Err(Error::NoMemory);
+        if (Task<Result<void>> t = local_load(in, args[i], kind, step))
+            got = co_await t;
+        if (got.is_err()) {
+            if (got.error() == Error::Cancelled)
+                co_return 130;
+            if (Task<void> e = refuse(args[i], local_step_name(step), got.error()))
+                co_await e;
+            // Only the fetch: a later Perm is the index refusing these bytes,
+            // not cross-origin access.
+            if (kind == Operand::Url && step == LocalStep::Read)
+                if (Task<void> h = pkg_net_hint(IndexStep::Package, got.error()))
+                    co_await h;
+            co_return 1;
+        }
+        if (Task<void> a = announce(in, in.locals.back().stanza))
+            co_await a;
+    }
+
+    // §7 step 7: a name the index does not offer does not exist. An archive
+    // named itself and is not looked for there.
+    for (usize i = 1; i < args.size(); i++) {
+        if (operand_kind(args[i]) != Operand::Name)
+            continue;
         Dep d;
         dep_parse(args[i], d);
         if (!index_provides(in.index, d.name)) {
@@ -1045,12 +1199,16 @@ Task<i32> pkg_install(Args args)
     }
 
     // apk's `add`: the operand joins world and names itself, and the run
-    // carries no flag of its own.
-    for (usize i = 1; i < args.size(); i++) {
+    // carries no flag of its own. An archive joins under the name its .PKGINFO
+    // gave, not the path, which may be gone by the next solve.
+    for (usize i = 1, at = 0; i < args.size(); i++) {
+        Str spec     = args[i];
         bool changed = false;
+        if (operand_kind(spec) != Operand::Name)
+            spec = in.locals[at++].stanza.name;
         Dep d;
-        dep_parse(args[i], d);
-        if (!world_push(in.specs, args[i], changed) || !in.named.push(SolveRequest{ d.name, 0, 0 }))
+        dep_parse(spec, d);
+        if (!world_push(in.specs, spec, changed) || !in.named.push(SolveRequest{ d.name, 0, 0 }))
             co_return 1;
         in.world_changed = in.world_changed || changed;
     }

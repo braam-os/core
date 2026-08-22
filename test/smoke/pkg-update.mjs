@@ -125,9 +125,11 @@ export function check() {
     prints("pkg search nonesuch", "");
 
     // §3.3's order with C last, and no row for a field the stanza has not
-    // got: the fixture's `less` carries no description.
+    // got: the fixture's `less` carries no description. `vouched` is what
+    // named the bytes — the index it was read out of, and its G.
     prints("pkg info less",
-           ["name          less", "version       1.6-r1", "size          9000",
+           ["name          less", "version       1.6-r1", "vouched       index 41",
+            "size          9000",
             "digest        Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI="].join("|"));
     // §7 step 7: a name the index does not list does not exist.
     prints("pkg info nonesuch", "pkg: nonesuch: not in the index", 1);
@@ -144,7 +146,7 @@ export function check() {
     prints("pkg list", "awk   1.2-r0|less  1.6-r1");
     prints("pkg info awk",
            ["name          awk", "version       1.2-r0", "installed     1.2-r0",
-            "size          18244", "unpacked      41984",
+            "vouched       index 41", "size          18244", "unpacked      41984",
             "description   pattern-directed scanning and processing language",
             "depends       cmd:sh", "provides      cmd:awk",
             "digest        Q2IgfM18bBUW8blv5C1wE491Z5bfWNc+VRhcgcX1hLHUI="].join("|"));

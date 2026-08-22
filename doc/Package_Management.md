@@ -17,6 +17,7 @@ Where each rule lives:
 | §6, §7 steps 2 and 4 | [src/cmd/pkg/trust.cpp](../src/cmd/pkg/trust.cpp) |
 | §7 steps 1–9 | [src/cmd/pkg/index.cpp](../src/cmd/pkg/index.cpp) |
 | §7 step 10, §11's scripts | [src/cmd/pkg/install.cpp](../src/cmd/pkg/install.cpp) |
+| §7.1's sideload | [src/cmd/pkg/local.cpp](../src/cmd/pkg/local.cpp) |
 | §8's two syscalls | [src/kernel/sysabi.h](../src/kernel/sysabi.h), `Sys::Verify`, `Sys::Clock` |
 | §9's tools | `tools/ed25519.py`, `mkanchor.py`, `mkindex.py` |
 
@@ -28,6 +29,10 @@ A package is a zip file and is **not signed**. It is listed in an *index*, and
 the index **is** signed. The index gives each package's digest and exact size.
 `pkg` fetches the index, checks its signatures, then fetches a package and
 checks its digest. A mismatch discards the package.
+
+That is how a package **from a repository** is named. There is a second way,
+and only one: **a person types the archive's path or URL**. §7.1 is what that
+buys and what it costs, and the rest of this document is about the first.
 
 ---
 
@@ -53,6 +58,10 @@ The attacker is **the repository and the network in front of it**: mirrors,
 CDNs, and anyone who can answer a request. Assume the attacker can answer every
 request, answer differently to different clients, replay old answers, withhold
 new ones, and hold the repository's online key.
+
+The attacker is **not** the person at the keyboard. Whoever types a command has
+the whole store already (§11); nothing here is a defence against them, and §7.1
+is the case where they say so out loud.
 
 | Attack | Stopped by |
 | --- | --- |
@@ -153,8 +162,12 @@ index and no key operation. The set is signed, not each entry.
 
 ### The rule
 
-> **Nothing is unzipped, written to the store, or run before its digest matches
-> a digest from a signed index.**
+> **Nothing is unzipped, written to the store, or run before its bytes have
+> been named** — by a digest from a signed index, or by a person who typed the
+> archive's own path or URL (§7.1).
+
+For a package named the first way, which is every package a repository offers,
+that is the whole of the rule: **a repository never chooses the bytes.**
 
 A zip is not self-checking here: both readers step past the CRC-32
 (Package_Formats.md §5.2).
@@ -197,13 +210,76 @@ is used**, so it skips a download and not a check.
 **Any failure abandons the whole operation and names the step it stopped at** —
 `clock`, `anchor`, `fetch`, `signature`, `header`, `version`, `expiry`, `read`,
 `package`, `digest`. Nothing is half-installed. There is **no `--force`,
-`--insecure` or `--no-verify`** in any form. `pkg -v` traces each request and
-reply; a cross-origin refusal (`Err(Perm)`) and a dead network (`Err(Io)`) are
-reported apart.
+`--insecure` or `--no-verify`** in any form, and no way to make a package the
+index named skip a step of this list. `pkg -v` traces each request and reply; a
+cross-origin refusal (`Err(Perm)`) and a dead network (`Err(Io)`) are reported
+apart.
 
 `/pkg/db/<name>-<version>` records the index version `G` that vouched for each
 installed package (Package_Formats.md §8.1), so a reinstall re-checks rather than
 believing the disk.
+
+---
+
+## 7.1 An archive named outright
+
+`pkg install` takes an operand that is **a path ending `.zip`, or anything
+holding `://`**, and installs the archive itself. Anything else is a package
+name and §7 above is unchanged for it.
+
+**What names those bytes is the person who typed them.** No index vouched, so
+none of §3's attacks is defended: there is no rollback check, no expiry, no
+signature, and no claim that this archive belongs with any other. That is not a
+weakening of §7 — it is the operator installing software, which §11 says they
+may do anyway and by other means.
+
+Two rules keep the first way intact:
+
+1. **The index stays authoritative wherever it speaks.** An archive whose `P`
+   and `V` name a version the index lists, at a digest the index did not give,
+   is **`Err(Perm)` at step `index`**. A sideload cannot stand in for a
+   repository's package.
+2. **An archive the index does list is the repository's package.** The digest is
+   what is asked, not how the archive arrived — so a package carried in on a
+   file or fetched from a mirror is checked exactly as §7 checks one, keeps its
+   `G`, and skips only the download. This is the offline case, and it gives up
+   nothing.
+
+### What the archive must still be
+
+A sideload is not "any zip". It must be a package (Package_Formats.md §5.1):
+
+- **`.PKGINFO` is required**, must read as §3.2's grammar less `C` and `S`, and
+  **carrying either of those two is a refusal** — they name the archive, and
+  the archive is in `pkg`'s hands.
+- **`P` and `V` must be path components** — no `/`, no `\`, no `..`, no control
+  byte. `/pkg/store/<P>-<V>/` and `/pkg/db/<P>-<V>` are built out of them, so
+  without this a `.PKGINFO` could write anywhere in the store. The check is in
+  `package_read`, so the index's own stanzas meet it too.
+- **Every top-level dot-entry must be one §5.1 knows.**
+
+`C` is then the SHA-256 of the archive and `S` its length, taken here rather
+than believed, and §6.1's `cmd:` names are **derived from the archive's flat
+`bin/`** — what `mkindex.py` would have written into an index stanza, so a
+solve against the installed set sees what a solve against an index would have.
+
+### What it is recorded as
+
+**`G` is `0`** (Package_Formats.md §8.1): no index vouched. It is `0` for these
+bytes and not for this operand, so rule 2 above records a real `G` when the
+index turns out to list them.
+
+- `pkg install` prints `<stem>: unverified: no index vouches for it` **before it
+  acts**, once per package nothing vouched for.
+- `pkg verify` reports `unvouched` and **does not fail over it**: that is how
+  the package arrived, not something that went wrong.
+- `pkg info` falls back to the `/pkg/db` record for a name no index lists, and
+  its `vouched` row reads `no`.
+
+Everything else is a package like any other: it joins `/pkg/world` under the
+name its `.PKGINFO` gave — not the path, which may be gone by the next solve —
+takes part in dependency resolution, is removed by `pkg remove`, and its
+scripts run (§11).
 
 ---
 
@@ -313,12 +389,24 @@ Each of these follows from a decision made elsewhere in the system.
 **`pkg` has no privileges, and there are none here to have.** OPFS stores no
 per-file mode, `writable()` is per-mount, every mount but `/proc` is the one
 read-write store, and `/bin` is writable. What this document delivers is
-**"`pkg` installs only what it checked"**, not "only checked code runs".
+**"a repository never chooses what `pkg` installs"**, not "only checked code
+runs" — and never did. `/bin/unzip` opens any archive, `curl` fetches any
+bytes, and the operator may overwrite `/bin/pkg` itself. §7.1 is that same
+freedom spelled as a command rather than left to be assembled by hand, which is
+why it is announced, recorded as `G: 0`, and reported by `pkg verify`.
 
 **An installed file carries no lasting guarantee.** Checking happens once, at
 install. `pkg verify` re-reads each recorded file and compares it against the
 digest recorded then; it reports a file that changed and does not prove that
 none did. Anything may overwrite `/bin/pkg` itself.
+
+**A sideload's `.PKGINFO` is unsigned input to the solver.** It is the stanza
+(§7.1), so its `D:`, `p:`, `i:` and `k:` are believed: an archive may declare
+itself the provider of any name, `cmd:` names included, and `k:` a priority that
+outranks a repository's package for one. §8.3's "whichever the farm wrote last"
+then decides which file a command name runs. That is the operator's choice
+arriving in full, and the two bounds on it are §7.1's — the index still owns
+every name-version it lists, and `P` and `V` cannot leave the store.
 
 **A release erases installed programs from `/bin`, not `/pkg`.** The unpack
 replaces each top-level directory the archive carries — `bin` and `etc` — so a
@@ -340,14 +428,21 @@ request and reply around it.
 **No source provenance and no reproducible builds.** A signature says who
 published the bytes, not what they were built from.
 
-**Install scripts run, and a signature authorises execution.** A package may
-carry `.pre-install`, `.post-install` and their four relatives plus `.trigger`,
-and `pkg` spawns each as `/bin/sh <file>` through `Sys::Spawn`
-(Package_Formats.md §5.1). A script may touch **everything the person who typed
-`pkg install` may touch** — the whole store. §7's rule is unchanged: a script
-runs only after its package's digest matched a digest from a signed index, so
-the code that runs is the publisher's and never the network's. A repository that
-can rewrite a package still cannot make one run.
+**Install scripts run, and what authorises execution is whatever named the
+bytes.** A package may carry `.pre-install`, `.post-install` and their four
+relatives plus `.trigger`, and `pkg` spawns each as `/bin/sh <file>` through
+`Sys::Spawn` (Package_Formats.md §5.1). A script may touch **everything the
+person who typed `pkg install` may touch** — the whole store.
+
+For a package from a repository that is a signature: a script runs only after
+its package's digest matched a digest from a signed index, so the code that runs
+is the publisher's and never the network's. **A repository that can rewrite a
+package still cannot make one run.**
+
+For a sideload (§7.1) it is the person who typed the path. Refusing to run those
+scripts would be theatre — the payload lands in `/pkg/bin` and on `PATH`
+either way, so the archive gets to run code the moment anything invokes it. What
+the operator is trusted with here is what they are trusted with below.
 
 Two rules follow. A failing script marks its package broken (`b` in
 Package_Formats.md §8.1) and the transaction carries on, which is what gives

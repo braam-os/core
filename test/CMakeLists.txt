@@ -15,6 +15,7 @@ add_executable(tests
     unit/test_hostfs.cpp
     unit/test_jsref.cpp
     unit/test_io.cpp
+    unit/test_local.cpp
     unit/test_match.cpp
     unit/test_opt.cpp
     unit/test_pane.cpp
@@ -72,11 +73,14 @@ add_executable(tests
     # trust.cpp and index.cpp take a PkgHost, so the suite hands them the
     # kernel's own services where /bin/pkg hands them syscalls. unzip.cpp is
     # the half that inflates, store.cpp the half that writes and host.cpp the
-    # half that performs; those three and install.cpp stay out.
+    # half that performs; those three and install.cpp stay out. local.cpp is
+    # what a sideload may claim, so it is here rather than in the half that
+    # cannot be tested: the reading of the file and of the URL is install.cpp's.
     ../src/cmd/pkg/db.cpp
     ../src/cmd/pkg/dep.cpp
     ../src/cmd/pkg/encode.cpp
     ../src/cmd/pkg/index.cpp
+    ../src/cmd/pkg/local.cpp
     ../src/cmd/pkg/plan.cpp
     ../src/cmd/pkg/sha256.cpp
     ../src/cmd/pkg/solve.cpp
